@@ -81,6 +81,7 @@ const uint32_t LedgerManager::GENESIS_LEDGER_SEQ = 1;
 const uint32_t LedgerManager::GENESIS_LEDGER_VERSION = 0;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_FEE = 100;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_RESERVE = 100000000;
+const uint32_t LedgerManager::GENESIS_LEDGER_PERCENTAGE_FEE = 45;
 const uint32_t LedgerManager::GENESIS_LEDGER_MAX_TX_SIZE = 100;
 const int64_t LedgerManager::GENESIS_LEDGER_TOTAL_COINS = 1000000000000000000;
 
@@ -199,6 +200,7 @@ LedgerManager::genesisLedger()
     // all fields are initialized by default to 0
     // set the ones that are not 0
     result.ledgerVersion = GENESIS_LEDGER_VERSION;
+    result.basePercentageFee = GENESIS_LEDGER_PERCENTAGE_FEE;
     result.baseFee = GENESIS_LEDGER_BASE_FEE;
     result.baseReserve = GENESIS_LEDGER_BASE_RESERVE;
     result.maxTxSetSize = GENESIS_LEDGER_MAX_TX_SIZE;
