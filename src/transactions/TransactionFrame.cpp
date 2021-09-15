@@ -24,7 +24,7 @@
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionBridge.h"
 #include "transactions/TransactionUtils.h"
-#include "util/Algorithm.h"
+#include "util/Algoritm.h"
 #include "util/Decoder.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
@@ -86,7 +86,7 @@ TransactionFrame::getContentsHash() const
         }
     }
 #ifdef _DEBUG
-    releaseAssert(isZero(oldHash) || (oldHash == mContentsHash));
+    assert(isZero(oldHash) || (oldHash == mContentsHash));
 #endif
     return (mContentsHash);
 }
@@ -154,13 +154,136 @@ TransactionFrame::getFeeBid() const
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
-    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+
+    int64_t accumulatedFeeFromPercentage = 0;
+    double percentageFeeAsDouble =(double)45 / (double)10000;
+
+
+
+// CLOG(DEBUG, "Process") << "Shutting down (nicely): " << impl->mCmdLine;
+
+    CLOG(DEBUG, "History") <<"Transaction Frame getMinFee percentageFeeAsDouble" << percentageFeeAsDouble;
+
+    for (auto& op : mOperations){
+        auto operation = op->getOperation();
+        int fieldNumber = operation.body.type();
+
+        CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber"
+                                       << fieldNumber;
+
+         if (fieldNumber == 0){
+         CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber 0 starting balance "
+                                                            << operation.body.createAccountOp().startingBalance;
+
+            auto percentFeeFloat = (operation.body.createAccountOp().startingBalance)/10000000 * percentageFeeAsDouble;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber 0 percentFeeFloat"
+                                                   << percentFeeFloat;
+
+            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber 0 roundedPercentFee"
+                                                     << roundedPercentFee;
+
+            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + percentFeeFloat;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber 0 accumulatedFeeFromPercentage"
+                                                       << accumulatedFeeFromPercentage;
+         }
+         if (fieldNumber == 1){
+           CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber 1 starting balance "
+                                                                     << operation.body.paymentOp().amount;
+
+
+            auto percentFeeFloat = operation.body.paymentOp().amount * percentageFeeAsDouble;
+            CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber 1 percentFeeFloat"
+                                                               << percentFeeFloat;
+            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber 1 roundedPercentFee"
+                                                            << roundedPercentFee;
+            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber 1 accumulatedFeeFromPercentage"
+                                                             << accumulatedFeeFromPercentage;
+         }
+    }
+    CLOG(DEBUG, "History") << "Transaction Frame getMinFee accumulatedFeeFromPercentage"
+                                       << accumulatedFeeFromPercentage;
+//    return (((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations())+accumulatedFeeFromPercentage);
+
+        CLOG(DEBUG, "History") << "Transaction Frame getMinFee return"
+                                       << (((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations())+accumulatedFeeFromPercentage);
+        return header.baseFee+accumulatedFeeFromPercentage;
 }
 
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
 {
+
+
+//get transaction envelope
+//get transaction based on transactionEnvelopeType
+//get the create operation
+//get the payment operation
+//get the amount from operation
+//calculate 0.45% of transaction amount
+//add the 0.45% into the adjusted fee
+
+    int64_t accumulatedFeeFromPercentage = 0;
+    double percentageFeeAsDouble =(double)45 / (double)10000;
+    CLOG(DEBUG, "History") << "Transaction Frame getFee percentageFeeAsDouble"
+                                           << percentageFeeAsDouble;
+    for (auto& op : mOperations){
+        auto operation = op->getOperation();
+        int fieldNumber = operation.body.type();
+
+        CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber"
+                                                   << fieldNumber;
+
+         if (fieldNumber == 0){
+          CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 0 starting balance "
+                                                                     << operation.body.createAccountOp().startingBalance;
+
+
+            auto percentFeeFloat = (operation.body.createAccountOp().startingBalance)/10000000 * percentageFeeAsDouble;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 0 percentFeeFloat"
+                                                              << percentFeeFloat;
+
+           CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 0 percentFeeFloat"
+                                                              << percentFeeFloat;
+            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
+
+           CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 0 roundedPercentFee"
+                                                           << roundedPercentFee;
+            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + percentFeeFloat;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 0 accumulatedFeeFromPercentage"
+                                                            << accumulatedFeeFromPercentage;
+         }
+         if (fieldNumber == 1){
+          CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 1 amount"
+                                                                              << operation.body.paymentOp().amount;
+
+
+            auto percentFeeFloat = operation.body.paymentOp().amount * percentageFeeAsDouble;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 1 percentFeeFloat"
+                                                              << percentFeeFloat;
+            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 1 roundedPercentFee"
+                                                              << roundedPercentFee;
+            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
+
+            CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 1 accumulatedFeeFromPercentage"
+                                                             << accumulatedFeeFromPercentage;
+
+         }
+    }
+
     if (header.ledgerVersion >= 11 || !applying)
     {
         int64_t adjustedFee =
@@ -168,17 +291,25 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
 
         if (applying)
         {
-            return std::min<int64_t>(getFeeBid(), adjustedFee);
+        CLOG(DEBUG, "History") << "Transaction Frame getFee  if applying"
+                                                         << (std::min<int64_t>(getFeeBid(), adjustedFee)+accumulatedFeeFromPercentage);
+//            return (std::min<int64_t>(getFeeBid(), adjustedFee)+accumulatedFeeFromPercentage);
         }
         else
         {
-            return adjustedFee;
+         CLOG(DEBUG, "History") << "Transaction Frame getFee  ledgerVersion else"
+                                                        <<(adjustedFee+accumulatedFeeFromPercentage);
+//            return (adjustedFee+accumulatedFeeFromPercentage);
         }
     }
     else
     {
-        return getFeeBid();
+     CLOG(DEBUG, "History") << "Transaction Frame getFee !applying else"
+                                                <<(getFeeBid()+accumulatedFeeFromPercentage);
+//        return (getFeeBid()+accumulatedFeeFromPercentage);
     }
+
+  return baseFee+accumulatedFeeFromPercentage;
 }
 
 void
@@ -210,7 +341,8 @@ TransactionFrame::checkSignature(SignatureChecker& signatureChecker,
     }
     signers.insert(signers.end(), acc.signers.begin(), acc.signers.end());
 
-    return signatureChecker.checkSignature(signers, neededWeight);
+    return signatureChecker.checkSignature(acc.accountID, signers,
+                                           neededWeight);
 }
 
 bool
@@ -221,7 +353,7 @@ TransactionFrame::checkSignatureNoAccount(SignatureChecker& signatureChecker,
     std::vector<Signer> signers;
     auto signerKey = KeyUtils::convertKey<SignerKey>(accountID);
     signers.push_back(Signer(signerKey, 1));
-    return signatureChecker.checkSignature(signers, 0);
+    return signatureChecker.checkSignature(accountID, signers, 0);
 }
 
 LedgerTxnEntry
@@ -472,10 +604,9 @@ TransactionFrame::processSignatures(ValidationType cv,
 }
 
 bool
-TransactionFrame::isBadSeq(LedgerTxnHeader const& header, int64_t seqNum) const
+TransactionFrame::isBadSeq(int64_t seqNum) const
 {
-    return seqNum == INT64_MAX || seqNum + 1 != getSeqNum() ||
-           getSeqNum() == getStartingSequenceNumber(header);
+    return seqNum == INT64_MAX || seqNum + 1 != getSeqNum();
 }
 
 TransactionFrame::ValidationType
@@ -514,7 +645,7 @@ TransactionFrame::commonValid(SignatureChecker& signatureChecker,
         {
             current = sourceAccount.current().data.account().seqNum;
         }
-        if (isBadSeq(header, current))
+        if (isBadSeq(current))
         {
             getResult().result.code(txBAD_SEQ);
             return res;
@@ -599,7 +730,7 @@ TransactionFrame::removeOneTimeSignerFromAllSourceAccounts(
         return;
     }
 
-    UnorderedSet<AccountID> accounts{getSourceID()};
+    std::unordered_set<AccountID> accounts{getSourceID()};
     for (auto& op : mOperations)
     {
         accounts.emplace(op->getSourceID());
@@ -692,13 +823,14 @@ TransactionFrame::checkValid(AbstractLedgerTxn& ltxOuter,
 
 void
 TransactionFrame::insertKeysForFeeProcessing(
-    UnorderedSet<LedgerKey>& keys) const
+    std::unordered_set<LedgerKey>& keys) const
 {
     keys.emplace(accountKey(getSourceID()));
 }
 
 void
-TransactionFrame::insertKeysForTxApply(UnorderedSet<LedgerKey>& keys) const
+TransactionFrame::insertKeysForTxApply(
+    std::unordered_set<LedgerKey>& keys) const
 {
     for (auto const& op : mOperations)
     {
@@ -759,14 +891,11 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
             {
                 app.getInvariantManager().checkOnOperationApply(
                     op->getOperation(), op->getResult(), ltxOp.getDelta());
-
-                // The operation meta will be empty if the transaction doesn't
-                // succeed so we may as well not do any work in that case
-                newMeta.v2().operations.emplace_back(ltxOp.getChanges());
             }
 
             if (txRes || ledgerVersion < 14)
             {
+                newMeta.v2().operations.emplace_back(ltxOp.getChanges());
                 ltxOp.commit();
             }
         }
@@ -790,10 +919,22 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                 newMeta.v2().txChangesAfter = ltxAfter.getChanges();
                 ltxAfter.commit();
             }
-            else if (ledgerVersion >= 14 && ltxTx.hasSponsorshipEntry())
+            else if (ledgerVersion >= 14)
             {
-                getResult().result.code(txBAD_SPONSORSHIP);
-                return false;
+                auto delta = ltxTx.getDelta();
+                for (auto const& kv : delta.entry)
+                {
+                    auto glk = kv.first;
+                    switch (glk.type())
+                    {
+                    case InternalLedgerEntryType::SPONSORSHIP:
+                    case InternalLedgerEntryType::SPONSORSHIP_COUNTER:
+                        getResult().result.code(txBAD_SPONSORSHIP);
+                        return false;
+                    default:
+                        break;
+                    }
+                }
             }
 
             ltxTx.commit();
@@ -818,16 +959,16 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
     }
     catch (std::exception& e)
     {
-        CLOG_ERROR(Tx, "Exception while applying operations ({}, {}): {}",
-                   xdr_to_string(getFullHash(), "fullHash"),
-                   xdr_to_string(getContentsHash(), "contentsHash"), e.what());
+        CLOG(ERROR, "Tx") << "Exception while applying operations (txHash= "
+                          << xdr_to_string(getFullHash()) << "): " << e.what();
     }
     catch (...)
     {
-        CLOG_ERROR(Tx, "Unknown exception while applying operations ({}, {})",
-                   xdr_to_string(getFullHash(), "fullHash"),
-                   xdr_to_string(getContentsHash(), "contentsHash"));
+        CLOG(ERROR, "Tx")
+            << "Unknown exception while applying operations (txHash= "
+            << xdr_to_string(getFullHash()) << ")";
     }
+
     // This is only reachable if an exception is thrown
     getResult().result.code(txINTERNAL_ERROR);
 
@@ -912,7 +1053,8 @@ TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
 StellarMessage
 TransactionFrame::toStellarMessage() const
 {
-    StellarMessage msg(TRANSACTION);
+    StellarMessage msg;
+    msg.type(TRANSACTION);
     msg.transaction() = mEnvelope;
     return msg;
 }
