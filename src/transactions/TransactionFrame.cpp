@@ -373,7 +373,7 @@ TransactionFrame::checkSignature(SignatureChecker& signatureChecker,
     }
     signers.insert(signers.end(), acc.signers.begin(), acc.signers.end());
 
-    return signatureChecker.checkSignature(acc.accountID, signers, neededWeight);
+    return signatureChecker.checkSignature(signers, neededWeight);
 }
 
 bool
@@ -383,7 +383,7 @@ TransactionFrame::checkSignatureNoAccount(SignatureChecker& signatureChecker, Ac
     std::vector<Signer> signers;
     auto signerKey = KeyUtils::convertKey<SignerKey>(accountID);
     signers.push_back(Signer(signerKey, 1));
-    return signatureChecker.checkSignature(accountID, signers, 0);
+    return signatureChecker.checkSignature(signers, 0);
 }
 
 LedgerTxnEntry
@@ -634,9 +634,10 @@ TransactionFrame::processSignatures(ValidationType cv,
 }
 
 bool
-TransactionFrame::isBadSeq(int64_t seqNum) const
+TransactionFrame::isBadSeq(LedgerTxnHeader const& header, int64_t seqNum) const
 {
-    return seqNum == INT64_MAX || seqNum + 1 != getSeqNum();
+    return seqNum == INT64_MAX || seqNum + 1 != getSeqNum() ||
+           getSeqNum() == getStartingSequenceNumber(header);
 }
 
 TransactionFrame::ValidationType
@@ -675,7 +676,7 @@ TransactionFrame::commonValid(SignatureChecker& signatureChecker,
         {
             current = sourceAccount.current().data.account().seqNum;
         }
-        if (isBadSeq(current))
+         if (isBadSeq(header, current))
         {
             getResult().result.code(txBAD_SEQ);
             return res;
@@ -760,7 +761,7 @@ TransactionFrame::removeOneTimeSignerFromAllSourceAccounts(
         return;
     }
 
-    std::unordered_set<AccountID> accounts{getSourceID()};
+     UnorderedSet<AccountID> accounts{getSourceID()};
     for (auto& op : mOperations)
     {
         accounts.emplace(op->getSourceID());
@@ -853,14 +854,13 @@ TransactionFrame::checkValid(AbstractLedgerTxn& ltxOuter,
 
 void
 TransactionFrame::insertKeysForFeeProcessing(
-    std::unordered_set<LedgerKey>& keys) const
+    UnorderedSet<LedgerKey>& keys) const
 {
     keys.emplace(accountKey(getSourceID()));
 }
 
 void
-TransactionFrame::insertKeysForTxApply(
-    std::unordered_set<LedgerKey>& keys) const
+TransactionFrame::insertKeysForTxApply(UnorderedSet<LedgerKey>& keys) const
 {
     for (auto const& op : mOperations)
     {
@@ -921,11 +921,11 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
             {
                 app.getInvariantManager().checkOnOperationApply(
                     op->getOperation(), op->getResult(), ltxOp.getDelta());
+                    newMeta.v2().operations.emplace_back(ltxOp.getChanges());
             }
 
             if (txRes || ledgerVersion < 14)
             {
-                newMeta.v2().operations.emplace_back(ltxOp.getChanges());
                 ltxOp.commit();
             }
         }
@@ -949,22 +949,10 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                 newMeta.v2().txChangesAfter = ltxAfter.getChanges();
                 ltxAfter.commit();
             }
-            else if (ledgerVersion >= 14)
+           else if (ledgerVersion >= 14 && ltxTx.hasSponsorshipEntry())
             {
-                auto delta = ltxTx.getDelta();
-                for (auto const& kv : delta.entry)
-                {
-                    auto glk = kv.first;
-                    switch (glk.type())
-                    {
-                    case InternalLedgerEntryType::SPONSORSHIP:
-                    case InternalLedgerEntryType::SPONSORSHIP_COUNTER:
-                        getResult().result.code(txBAD_SPONSORSHIP);
-                        return false;
-                    default:
-                        break;
-                    }
-                }
+               getResult().result.code(txBAD_SPONSORSHIP);
+                return false;
             }
 
             ltxTx.commit();
@@ -987,18 +975,7 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
     {
         printErrorAndAbort("Exception while applying operations: ", e.what());
     }
-    catch (std::exception& e)
-    {
-        CLOG(ERROR, "Tx") << "Exception while applying operations (txHash= "
-                          << xdr_to_string(getFullHash()) << "): " << e.what();
-    }
-    catch (...)
-    {
-        CLOG(ERROR, "Tx")
-            << "Unknown exception while applying operations (txHash= "
-            << xdr_to_string(getFullHash()) << ")";
-    }
-
+   
     // This is only reachable if an exception is thrown
     getResult().result.code(txINTERNAL_ERROR);
 
@@ -1083,8 +1060,7 @@ TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
 StellarMessage
 TransactionFrame::toStellarMessage() const
 {
-    StellarMessage msg;
-    msg.type(TRANSACTION);
+    StellarMessage msg(TRANSACTION);
     msg.transaction() = mEnvelope;
     return msg;
 }
