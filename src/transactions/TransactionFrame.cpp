@@ -198,14 +198,15 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
             // CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
             //                           "0 accumulatedFeeFromPercentage - "
             //                        << accumulatedFeeFromPercentage;
+           
         }
         if (fieldNumber == 1)
         {
             // CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
             //                           "1 starting balance -  "
             //                        << operation.body.paymentOp().amount;
-            auto percentFeeFloat =
-                operation.body.paymentOp().amount * percentageFeeAsDouble;
+            
+           auto percentFeeFloat = (operation.body.paymentOp().amount)/10000000 * percentageFeeAsDouble;  
             // CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
             //                           "1 percentFeeFloat - "
             //                        << percentFeeFloat;
@@ -298,10 +299,7 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
          if (fieldNumber == 1){
         //   CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 1 amount"
         //                                                                       << operation.body.paymentOp().amount;
-
-
-            auto percentFeeFloat = operation.body.paymentOp().amount * percentageFeeAsDouble;
-
+          auto percentFeeFloat = (operation.body.paymentOp().amount)/10000000 * percentageFeeAsDouble;
             // CLOG(DEBUG, "History") << "Transaction Frame getFee fieldNumber 1 percentFeeFloat"
             //                                                   << percentFeeFloat;
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
