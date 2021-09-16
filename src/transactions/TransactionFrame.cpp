@@ -238,14 +238,14 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     //    getNumOperations())+accumulatedFeeFromPercentage);
     // CLOG(DEBUG, "History") << "Transaction Frame getMinFee return - "
     //                        << (((int64_t)header.baseFee) *
-                                   std::max<int64_t>(1, getNumOperations()) +
-                               accumulatedFeeFromPercentage);
-    bool whiteAccountExists = isPresent();
-    if (whiteAccountExists)
-    {
-        // CLOG(DEBUG, "History") << "Transaction getMinFee isPresent if  - ";
-        return header.baseFee;
-    }
+                            //        std::max<int64_t>(1, getNumOperations()) +
+                            //    accumulatedFeeFromPercentage;
+    // bool whiteAccountExists = isPresent();
+    // if (whiteAccountExists)
+    // {
+    //     // CLOG(DEBUG, "History") << "Transaction getMinFee isPresent if  - ";
+    //     return header.baseFee;
+    // }
     return header.baseFee + accumulatedFeeFromPercentage;
 }
 
@@ -373,13 +373,11 @@ TransactionFrame::checkSignature(SignatureChecker& signatureChecker,
     }
     signers.insert(signers.end(), acc.signers.begin(), acc.signers.end());
 
-    return signatureChecker.checkSignature(acc.accountID, signers,
-                                           neededWeight);
+    return signatureChecker.checkSignature(acc.accountID, signers, neededWeight);
 }
 
 bool
-TransactionFrame::checkSignatureNoAccount(SignatureChecker& signatureChecker,
-                                          AccountID const& accountID)
+TransactionFrame::checkSignatureNoAccount(SignatureChecker& signatureChecker, AccountID const& accountID)
 {
     ZoneScoped;
     std::vector<Signer> signers;
