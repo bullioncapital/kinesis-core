@@ -189,16 +189,105 @@ TransactionFrame::getFeeBid() const
 
 
 
-
 int64_t
-
 TransactionFrame::getMinFee(LedgerHeader const& header) const
-
 {
+    int64_t accumulatedFeeFromPercentage = 0;
+    double percentageFeeAsDouble = (double)45 / (double)10000;
+    // CLOG(DEBUG, "Process") << "Shutting down (nicely): " << impl->mCmdLine;
+    // CLOG(DEBUG, "History")
+    //     << "Transaction Frame getMinFee percentageFeeAsDouble"
+    //     << percentageFeeAsDouble;
+    for (auto& op : mOperations)
+    {
+        auto operation = op->getOperation();
+        int fieldNumber = operation.body.type();
+        // CLOG(DEBUG, "History")
+        //     << "Transaction Frame getMinFee fieldNumber" << fieldNumber;
+        if (fieldNumber == 0)
+        {
+            // CLOG(DEBUG, "History")
+            //     << "Transaction Frame getMinFee fieldNumber 0 starting "
+            //        "balance- "
+            //     << operation.body.createAccountOp().startingBalance;
+            auto percentFeeFloat =
+                operation.body.createAccountOp().startingBalance *
+                percentageFeeAsDouble;
+            // CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
+            //                           "0 percentFeeFloat - "
+            //                        << percentFeeFloat;
+          int64_t roundedPercentFee = (int64_t)percentFeeFloat;
+                    //   CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
+                    //                             "1 roundedPercentFee - "
+                    //                          << roundedPercentFee;
 
-    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+                string str= to_string(roundedPercentFee);
+                    int len = str.size();
+            // CLOG(DEBUG, "History") << "Transaction Frame getMinFee str lenght"
+            //                                  <<"string"<<str<<"length"<<str[len-1];
+                    int64_t fee = stoi(str);
+                    char last = str[len-1];
+                    char compare[2] = "9";
+                    if(last == compare[0]){
+                        fee = fee +1;
+                    }
+                      accumulatedFeeFromPercentage =
+                          accumulatedFeeFromPercentage + fee ;
+            // CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
+            //                           "0 accumulatedFeeFromPercentage - "
+            //                        << accumulatedFeeFromPercentage;
+           
+        }
+        if (fieldNumber == 1)
+        {
+            // CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
+            //                           "1 starting balance -  "
+            //                        << operation.body.paymentOp().amount;
+            
+           auto percentFeeFloat = (operation.body.paymentOp().amount)/10000000 * percentageFeeAsDouble;  
+            // CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
+            //                           "1 percentFeeFloat - "
+            //                        << percentFeeFloat;
+            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
+            // CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
+            //                           "1 roundedPercentFee - "
+            //                        << roundedPercentFee;
 
+        string str= to_string(roundedPercentFee);
+            int len = str.size();
+//   CLOG(DEBUG, "History") << "Transaction Frame getMinFee str lenght"
+//                                    <<"string"<<str<<"length"<<str[len-1];
+            int64_t fee = stoi(str);
+            char last = str[len-1];
+            char compare[2] = "9";
+            if(last == compare[0]){
+                fee = fee +1;
+            }
+            accumulatedFeeFromPercentage =
+                accumulatedFeeFromPercentage + fee ;
+            // CLOG(DEBUG, "History") << "Transaction Frame getMinFee fieldNumber "
+            //                           "1 accumulatedFeeFromPercentage - "
+            //                        << accumulatedFeeFromPercentage;
+        }
+    }
+    // CLOG(DEBUG, "History")
+    //     << "Transaction Frame getMinFee accumulatedFeeFromPercentage - "
+    //     << accumulatedFeeFromPercentage;
+    //    return (((int64_t)header.baseFee) * std::max<int64_t>(1,
+    //    getNumOperations())+accumulatedFeeFromPercentage);
+    // CLOG(DEBUG, "History") << "Transaction Frame getMinFee return - "
+    //                        << (((int64_t)header.baseFee) *
+                            //        std::max<int64_t>(1, getNumOperations()) +
+                            //    accumulatedFeeFromPercentage;
+    // bool whiteAccountExists = isPresent();
+    // if (whiteAccountExists)
+    // {
+    //     // CLOG(DEBUG, "History") << "Transaction getMinFee isPresent if  - ";
+    //     return header.baseFee;
+    // }
+    return header.baseFee + accumulatedFeeFromPercentage;
 }
+
 
 
 
