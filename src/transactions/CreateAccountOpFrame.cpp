@@ -16,7 +16,7 @@
 #include "util/XDROperators.h"
 #include <Tracy.hpp>
 #include <algorithm>
-#include "crypto/SHA.h"
+
 #include "main/Application.h"
 
 namespace stellar
@@ -136,33 +136,6 @@ CreateAccountOpFrame::doApplyFromV14(AbstractLedgerTxn& ltxOuter)
 bool
 CreateAccountOpFrame::doApply(AbstractLedgerTxn& ltx)
 {
-       //get fee pool
-    // get inflation account
-    // transfer amount from fee pool to account
-    // mark fee pool 0
-
-        Hash seed = sha256("Kinesis KAG Test Yield feepool");
-        SecretKey feeKey = SecretKey::fromSeed(seed);
-        AccountID feeDestination = feeKey.getPublicKey();
-        auto amountToDole = ltx.loadHeader().current().feePool;
-    if (stellar::loadAccount(ltx, mCreateAccount.destination))
-    {
-        innerResult().code(CREATE_ACCOUNT_ALREADY_EXIST);
-        stellar::loadAccount(ltx,feeDestination);
-        ltx.loadHeader().current().feePool=0;
-    }
-    else{
-            auto header = ltx.loadHeader();
-            LedgerTxnEntry empty;
-            LedgerEntry accountEntry;
-            accountEntry.data.type(ACCOUNT);
-            auto& account = accountEntry.data.account();
-            account.thresholds[0] = 1;
-            account.accountID = feeDestination;
-            account.seqNum = getStartingSequenceNumber(header);
-            account.balance = 1;
-            createEntryWithPossibleSponsorship(ltx, header, accountEntry, empty);
-    }
     ZoneNamedN(applyZone, "CreateAccountOp apply", true);
     if (stellar::loadAccount(ltx, mCreateAccount.destination))
     {
