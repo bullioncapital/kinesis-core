@@ -25,16 +25,6 @@ RUN sh -c 'make -j $(nproc)'
 RUN make install
 
 # Deploy stage, only includes stuff needed to run.
-FROM ubuntu:focal
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && \
-    apt-get -y install libunwind8 postgresql curl sqlite iproute2 libc++abi1-8 libc++1-8
+FROM stellar/stellar-core:17
 
 COPY --from=buildstage /usr/local/bin/stellar-core /usr/bin/stellar-core
-EXPOSE 11625
-EXPOSE 11626
-VOLUME /data
-VOLUME /postgresql-unix-sockets
-
-WORKDIR "/etc/stellar"
-ENTRYPOINT ["/usr/bin/stellar-core"]
