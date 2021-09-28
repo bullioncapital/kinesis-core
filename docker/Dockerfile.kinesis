@@ -1,30 +1,48 @@
 # Build stage, includes everything needed to build.
 FROM ubuntu:focal as buildstage
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && \
-    apt-get -y install iproute2 procps lsb-release \
-                       git build-essential pkg-config autoconf automake libtool \
-                       bison flex libpq-dev parallel libunwind-dev \
-                       clang-10 libc++abi-10-dev libc++-10-dev \
-                       postgresql
 
-COPY . stellar-core/
-WORKDIR stellar-core
+RUN apt-get update
+
+# install core packages
+RUN apt-get -y install --no-install-recommends apt-utils dialog git iproute2 procps lsb-release
+
+# install tool chain
+RUN apt-get -y install --no-install-recommends libstdc++-8-dev clang-format-10 ccache
+
+# clang
+RUN apt-get -y install --no-install-recommends clang-10 llvm-10
+
+# install dependencies
+RUN apt-get -y install postgresql git build-essential pkg-config autoconf automake libtool bison flex libpq-dev parallel libunwind-dev perl
+
+# Set up locale
+RUN sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && locale-gen
+
+ENV LANG en_US.UTF-8
+ENV LANGUAGE en_US:en
+ENV LC_ALL en_US.UTF-8
+
+COPY . /stellar-core
+WORKDIR /stellar-core
+
 RUN git clean -dxf
 RUN git submodule foreach --recursive git clean -dxf
 
 ARG CC=clang-10
 ARG CXX=clang++-10
 ARG CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
-ARG CXXFLAGS='-O3 -g1 -fno-omit-frame-pointer -stdlib=libc++ -D_KINESIS'
-ARG CONFIGURE_FLAGS
+ARG CXXFLAGS='-w -O3 -g1 -D_KINESIS'
+ARG CONFIGURE_FLAGS='--enable-asan --enable-extrachecks --enable-ccache --enable-sdfprefs'
 
 RUN ./autogen.sh
 RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
 RUN sh -c 'make -j $(nproc)'
+# RUN make check
 RUN make install
 
-# Deploy stage, only includes stuff needed to run.
+# Patch stellar-core official docker image
+# Because we need more than just stellar-core
 FROM stellar/stellar-core:17
 
 COPY --from=buildstage /usr/local/bin/stellar-core /usr/bin/stellar-core
