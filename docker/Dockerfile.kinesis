@@ -37,8 +37,8 @@ USER postgres
 COPY . /stellar-core
 WORKDIR /stellar-core
 
-# test buddy work build
-RUN sudo chown -R postgres /stellar-core
+RUN sudo chown -R postgres /stellar-core && git clean -dxf
+RUN git submodule foreach --recursive git clean -dxf
 
 ENV CC=clang-10
 ENV CXX=clang++-10
