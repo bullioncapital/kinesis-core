@@ -2,19 +2,24 @@
 FROM ubuntu:focal as buildstage
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update
+# setup apt / certificates
+RUN apt-get update \
+    && apt-get -y install --no-install-recommends git apt-utils dialog ca-certificates 2>&1
 
-# install core packages
-RUN apt-get -y install --no-install-recommends apt-utils dialog git iproute2 procps lsb-release
+# install base container packages and prep for VSCode
+RUN apt-get -y install iproute2 procps lsb-release
 
 # install tool chain
-RUN apt-get -y install --no-install-recommends libstdc++-8-dev clang-format-10 ccache
+RUN apt-get -y install libstdc++-8-dev clang-format-10 ccache
 
 # clang
-RUN apt-get -y install --no-install-recommends clang-10 llvm-10
+RUN apt-get -y install clang-10 llvm-10
 
 # install dependencies
-RUN apt-get -y install postgresql git build-essential pkg-config autoconf automake libtool bison flex libpq-dev parallel libunwind-dev perl
+RUN apt-get -y install git build-essential pkg-config autoconf automake libtool bison flex libpq-dev parallel libunwind-dev perl
+
+# install postgresql to enable tests under make check
+RUN apt-get -y install postgresql
 
 # Set up locale
 RUN sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && locale-gen
@@ -23,23 +28,28 @@ ENV LANG en_US.UTF-8
 ENV LANGUAGE en_US:en
 ENV LC_ALL en_US.UTF-8
 
+ENV USERNAME=postgres
+RUN apt-get -y install sudo \
+    && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME\
+    && chmod 0440 /etc/sudoers.d/$USERNAME
+
+USER postgres
 COPY . /stellar-core
 WORKDIR /stellar-core
 
-RUN git clean -dxf
+RUN sudo chown -R postgres /stellar-core && git clean -dxf
 RUN git submodule foreach --recursive git clean -dxf
 
-ARG CC=clang-10
-ARG CXX=clang++-10
-ARG CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
-ARG CXXFLAGS='-w -O3 -g1 -D_KINESIS'
-ARG CONFIGURE_FLAGS='--enable-asan --enable-extrachecks --enable-ccache --enable-sdfprefs'
+ENV CC=clang-10
+ENV CXX=clang++-10
+ENV CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
+ENV CXXFLAGS='-w -O3 -g1 -D_KINESIS'
+ENV CONFIGURE_FLAGS='--enable-asan --enable-extrachecks --enable-ccache --enable-sdfprefs'
 
 RUN ./autogen.sh
 RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
-RUN sh -c 'make -j $(nproc)'
-# RUN make check
-RUN make install
+RUN sh -c 'make check -j $(nproc)'
+RUN sudo make install
 
 # Patch stellar-core official docker image
 # Because we need more than just stellar-core
