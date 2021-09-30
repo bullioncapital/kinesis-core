@@ -33,11 +33,12 @@ RUN apt-get update \
 #     && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME\
 #     && chmod 0440 /etc/sudoers.d/$USERNAME
 
-USER postgres
+#USER postgres
 COPY . /stellar-core
 WORKDIR /stellar-core
 
-RUN sudo chown -R postgres /stellar-core && git clean -dxf
+#RUN sudo chown -R postgres /stellar-core && git clean -dxf
+RUN git clean -dxf
 RUN git submodule foreach --recursive git clean -dxf
 # 
 # ENV CC=clang-10
