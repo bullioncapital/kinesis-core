@@ -29,7 +29,7 @@ ENV CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
 ENV CXXFLAGS='-w -O3 -g1 -D_KINESIS'
 ENV CONFIGURE_FLAGS=''
 
-RUN ./autogen.sh
+RUN ./autogen.sh --skip-submodules
 RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
 RUN make check -j $(nproc)
 RUN sudo make install
