@@ -21,7 +21,7 @@ COPY . /stellar-core
 WORKDIR /stellar-core
 
 RUN sudo chown -R $USERNAME /stellar-core
-# RUN git submodule init && git submodule update
+RUN git submodule init && git submodule update
 
 ENV CC=clang-10
 ENV CXX=clang++-10
@@ -29,7 +29,7 @@ ENV CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
 ENV CXXFLAGS='-w -O3 -g1 -D_KINESIS'
 ENV CONFIGURE_FLAGS=''
 
-RUN ./autogen.sh --skip-submodules
+RUN ./autogen.sh
 RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
 RUN make check -j2
 RUN sudo make install
