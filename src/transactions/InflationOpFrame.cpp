@@ -154,11 +154,25 @@ InflationOpFrame::doCheckValid(uint32_t ledgerVersion)
     return true;
 }
 
+#ifdef _KINESIS
+
+// kinesis implementation
+bool
+InflationOpFrame::isVersionSupported(uint32_t protocolVersion) const
+{
+   return true;
+}
+
+#else
+
+// original function implementation
 bool
 InflationOpFrame::isVersionSupported(uint32_t protocolVersion) const
 {
     return protocolVersion < 12;
 }
+
+#endif
 
 ThresholdLevel
 InflationOpFrame::getThresholdLevel() const
