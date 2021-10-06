@@ -637,11 +637,12 @@ TEST_CASE("inflation", "[tx][inflation]")
             });
         }
     }
-
+#ifndef _KINESIS
     SECTION("not supported")
     {
         for_versions_from(12, *app, [&] {
             REQUIRE_THROWS_AS(root.inflation(), ex_opNOT_SUPPORTED);
         });
     }
+#endif
 }
