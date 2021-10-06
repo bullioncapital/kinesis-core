@@ -44,6 +44,7 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 
     /*
     Inflation is calculated using the following
+
     1. calculate tally of votes based on "inflationDest" set on each account
     2. take the top accounts (by vote) that get at least .05% of the vote
     3. If no accounts are over this threshold then the extra goes back to the
