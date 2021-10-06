@@ -105,38 +105,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
             payouts.emplace_back(w.accountID, toDoleThisWinner);
         }
     }
-#ifdef _KINESIS
-
-
-    auto inflationAmount = 0;
-    auto amountToDole =  inflationAmount+ lh.feePool;
-
-    CLOG(DEBUG, "History") << "InflationOpFrame amountToDole "
-                                                   <<amountToDole;
-
-    lh.feePool = 0;
-    lh.inflationSeq++;
-
-    // now credit each account
-    innerResult().code(INFLATION_SUCCESS);
-    auto& payouts = innerResult().payouts();
-
-    Hash seed = sha256("Kinesis KAG Test Yield feepool");
-    SecretKey feeKey = SecretKey::fromSeed(seed);
-    AccountID feeDestination = feeKey.getPublicKey();
-
-    CLOG(DEBUG, "History") << "InflationOpFrame feeKey "
-                                                     <<feeKey.getStrKeySeed().value;
-
-    int64 toDoleThisWinner = amountToDole;
-    int64 leftAfterDole = amountToDole;
-    auto winner = stellar::loadAccount(ltx,feeDestination);
-    leftAfterDole -= toDoleThisWinner;
-    addBalance(header, winner, toDoleThisWinner);
-    payouts.emplace_back(feeDestination, toDoleThisWinner);
-   
-   
-     #else                                            
 
     // put back in fee pool as unclaimed funds
     lh.feePool += leftAfterDole;
@@ -147,7 +115,7 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 
     return true;
 }
-#endif
+
 bool
 InflationOpFrame::doCheckValid(uint32_t ledgerVersion)
 {
