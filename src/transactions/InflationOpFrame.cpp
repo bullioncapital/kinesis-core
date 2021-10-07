@@ -10,6 +10,7 @@
 #include "ledger/LedgerTxnHeader.h"
 #include "main/Application.h"
 #include "overlay/StellarXDR.h"
+#include "crypto/SHA.h"
 #include "transactions/TransactionUtils.h"
 #include "util/ProtocolVersion.h"
 
@@ -28,6 +29,48 @@ InflationOpFrame::InflationOpFrame(Operation const& op, OperationResult& res,
     : OperationFrame(op, res, parentTx)
 {
 }
+#ifdef _KINESIS
+
+bool
+InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
+{
+    auto header = ltx.loadHeader();
+    auto& lh = header.current();
+    time_t closeTime = lh.scpValue.closeTime;
+    uint64_t seq = lh.inflationSeq;
+
+    auto inflationAmount = 0;
+    auto amountToDole = inflationAmount + lh.feePool;
+
+    lh.feePool = 0;
+    lh.inflationSeq++;
+
+    // now credit each account
+    innerResult().code(INFLATION_SUCCESS);
+    auto& payouts = innerResult().payouts();
+
+    Hash seed = sha256("feepool");
+    SecretKey feeKey = SecretKey::fromSeed(seed);
+    AccountID feeDestination = feeKey.getPublicKey();
+
+    int64 toDoleThisWinner = amountToDole;
+    int64 leftAfterDole = amountToDole;
+    auto winner = stellar::loadAccount(ltx, feeDestination);
+    leftAfterDole -= toDoleThisWinner;
+    addBalance(header, winner, toDoleThisWinner);
+    payouts.emplace_back(feeDestination, toDoleThisWinner);
+
+    // put back in fee pool as unclaimed funds
+    lh.feePool += leftAfterDole;
+    if (lh.ledgerVersion > 7)
+    {
+        lh.totalCoins += inflationAmount;
+    }
+
+    return true;
+}
+
+#else
 
 #ifdef _KINESIS
 
@@ -163,6 +206,8 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 
     return true;
 }
+
+#endif
 
 bool
 InflationOpFrame::doCheckValid(uint32_t ledgerVersion)
