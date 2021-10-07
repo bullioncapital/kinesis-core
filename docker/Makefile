@@ -31,3 +31,6 @@ endif
 
 docker-build-testing:
 	cd ../ && $(SUDO) docker build --pull -f docker/Dockerfile.testing -t ${TAG} .
+
+docker-build-kinesis:
+	cd ../ && $(SUDO) docker build --pull -f docker/Dockerfile.kinesis -t ${TAG} .
