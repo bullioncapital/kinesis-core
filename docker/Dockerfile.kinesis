@@ -37,4 +37,6 @@ RUN sudo make install
 # replace stellar-core
 FROM stellar/stellar-core:17
 
+RUN apt-get update && ap-get upgrade -y
+
 COPY --from=buildstage /usr/local/bin/stellar-core /usr/bin/stellar-core
