@@ -332,6 +332,7 @@ class Config : public std::enable_shared_from_this<Config>
     std::string BUCKET_DIR_PATH;
     uint32_t TESTING_UPGRADE_DESIRED_FEE; // in stroops
     uint32_t TESTING_UPGRADE_RESERVE;     // in stroops
+    uint32_t TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE; // in basis points
     uint32_t TESTING_UPGRADE_MAX_TX_SET_SIZE;
     unsigned short HTTP_PORT; // what port to listen for commands
     bool PUBLIC_HTTP_PORT;    // if you accept commands from not localhost

@@ -1,4 +1,3 @@
-
 // Copyright 2014 Stellar Development Foundation and contributors. Licensed
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
@@ -165,6 +164,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
 
     TESTING_UPGRADE_DESIRED_FEE = LedgerManager::GENESIS_LEDGER_BASE_FEE;
     TESTING_UPGRADE_RESERVE = LedgerManager::GENESIS_LEDGER_BASE_RESERVE;
+    TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE =  LedgerManager::GENESIS_LEDGER_PERCENTAGE_FEE;
     TESTING_UPGRADE_MAX_TX_SET_SIZE = 50;
 
     HTTP_PORT = DEFAULT_PEER_PORT + 1;
