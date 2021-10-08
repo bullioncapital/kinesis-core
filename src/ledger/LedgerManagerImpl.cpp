@@ -80,6 +80,7 @@ namespace stellar
 const uint32_t LedgerManager::GENESIS_LEDGER_SEQ = 1;
 const uint32_t LedgerManager::GENESIS_LEDGER_VERSION = 0;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_FEE = 100;
+const uint32_t LedgerManager::GENESIS_LEDGER_PERCENTAGE_FEE = 45;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_RESERVE = 100000000;
 const uint32_t LedgerManager::GENESIS_LEDGER_MAX_TX_SIZE = 100;
 const int64_t LedgerManager::GENESIS_LEDGER_TOTAL_COINS = 1000000000000000000;
@@ -192,6 +193,7 @@ LedgerManagerImpl::getStateHuman() const
     return std::string(stateStrings[getState()]);
 }
 
+
 LedgerHeader
 LedgerManager::genesisLedger()
 {
@@ -200,12 +202,14 @@ LedgerManager::genesisLedger()
     // set the ones that are not 0
     result.ledgerVersion = GENESIS_LEDGER_VERSION;
     result.baseFee = GENESIS_LEDGER_BASE_FEE;
+    result.basePercentageFee = GENESIS_LEDGER_PERCENTAGE_FEE;
     result.baseReserve = GENESIS_LEDGER_BASE_RESERVE;
     result.maxTxSetSize = GENESIS_LEDGER_MAX_TX_SIZE;
     result.totalCoins = GENESIS_LEDGER_TOTAL_COINS;
     result.ledgerSeq = GENESIS_LEDGER_SEQ;
     return result;
 }
+
 
 void
 LedgerManagerImpl::startNewLedger(LedgerHeader const& genesisLedger)
@@ -242,11 +246,13 @@ LedgerManagerImpl::startNewLedger()
         ledger.ledgerVersion = cfg.LEDGER_PROTOCOL_VERSION;
         ledger.baseFee = cfg.TESTING_UPGRADE_DESIRED_FEE;
         ledger.baseReserve = cfg.TESTING_UPGRADE_RESERVE;
+        ledger.basePercentageFee = cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE;
         ledger.maxTxSetSize = cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE;
     }
 
     startNewLedger(ledger);
 }
+
 
 void
 LedgerManagerImpl::loadLastKnownLedger(
@@ -395,6 +401,11 @@ uint32_t
 LedgerManagerImpl::getLastTxFee() const
 {
     return mLastClosedLedger.header.baseFee;
+}
+uint32_t
+LedgerManagerImpl::getTxPercentageFee() const
+{
+    return mCurrentLedger->mHeader.basePercentageFee;
 }
 
 LedgerHeaderHistoryEntry const&
