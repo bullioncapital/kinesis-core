@@ -368,7 +368,7 @@ runTest(CommandLineArgs const& args)
     auto logFile = fmt::format("stellar{}.log", gBaseInstance);
     Logging::setLoggingToFile(logFile);
     Logging::setLogLevel(logLevel, nullptr);
-    // Logging::setLogLevel(el::Level::Fatal, nullptr);
+
     LOG_INFO(DEFAULT_LOG, "Testing stellar-core {}", STELLAR_CORE_VERSION);
     LOG_INFO(DEFAULT_LOG, "Logging to {}", logFile);
 

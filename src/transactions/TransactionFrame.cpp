@@ -34,9 +34,10 @@
 #include "xdrpp/printer.h"
 #include <Tracy.hpp>
 #include <string>
+
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
-#include <math.h>
+
 #include <algorithm>
 #include <numeric>
 
@@ -149,7 +150,6 @@ TransactionFrame::getFeeBid() const
     return mEnvelope.type() == ENVELOPE_TYPE_TX_V0 ? mEnvelope.v0().tx.fee
                                                    : mEnvelope.v1().tx.fee;
 }
-int64_t getFee() const;
 
 #ifdef _KINESIS
 
@@ -157,51 +157,39 @@ int64_t getFee() const;
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
-    size_t count = mOperations.size();
-
-    if (count == 0)
-    {
-        count = 1;
-    }
-
-    auto baseFee = lm.getTxFee() * count;
-
     int64_t accumulatedFeeFromPercentage = 0;
-    double percentageFeeAsDouble =
-        (double)lm.getTxPercentageFee() / (double)10000;
+    double percentageFeeAsDouble = (double)45 / (double)10000;
+
+    // CLOG(DEBUG, "Process") << "Shutting down (nicely): " << impl->mCmdLine;
 
     for (auto& op : mOperations)
     {
         auto operation = op->getOperation();
-
         int fieldNumber = operation.body.type();
 
         if (fieldNumber == 0)
         {
             auto percentFeeFloat =
-                operation.body.createAccountOp().startingBalance *
+                (operation.body.createAccountOp().startingBalance) / 10000000 *
                 percentageFeeAsDouble;
+            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
+            accumulatedFeeFromPercentage =
+                accumulatedFeeFromPercentage + percentFeeFloat;
+        }
+        if (fieldNumber == 1)
+        {
+            auto percentFeeFloat =
+                operation.body.paymentOp().amount * percentageFeeAsDouble;
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
             accumulatedFeeFromPercentage =
                 accumulatedFeeFromPercentage + roundedPercentFee;
         }
-
-        if (fieldNumber == 1)
-        {
-            int8_t assetType =
-                operation.body.paymentOp().asset.type(); // 0 is native
-            if (assetType == 0)
-            {
-                auto percentFeeFloat =
-                    operation.body.paymentOp().amount * percentageFeeAsDouble;
-                int64_t roundedPercentFee = (int64_t)percentFeeFloat;
-                accumulatedFeeFromPercentage =
-                    accumulatedFeeFromPercentage + roundedPercentFee;
-            }
-        }
     }
 
-    return baseFee + accumulatedFeeFromPercentage;
+    //    return (((int64_t)header.baseFee) * std::max<int64_t>(1,
+    //    getNumOperations())+accumulatedFeeFromPercentage);
+
+    return header.baseFee + accumulatedFeeFromPercentage;
 }
 #else
 // original function implementation
