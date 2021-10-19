@@ -32,7 +32,6 @@ InflationOpFrame::InflationOpFrame(Operation const& op, OperationResult& res,
 bool
 InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 {
-    std::cout<< "Kinesis Inflation started";
     auto header = ltx.loadHeader();
     auto& lh = header.current();
     time_t closeTime = lh.scpValue.closeTime;
@@ -40,10 +39,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 
     auto inflationAmount = 0;
     auto amountToDole = inflationAmount + lh.feePool;
-    std::cout<< "inflationAmount";
-    std::cout<< inflationAmount;
-    std::cout<< "amountToDole";
-    std::cout<< amountToDole;
     lh.feePool = 0;
     lh.inflationSeq++;
 
@@ -54,9 +49,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
     Hash seed = sha256("feepool");
     SecretKey feeKey = SecretKey::fromSeed(seed);
     AccountID feeDestination = feeKey.getPublicKey();
-
-    std::cout<< "feeDestination";
-    std::cout<< feeDestination;
 
     int64 toDoleThisWinner = amountToDole;
     int64 leftAfterDole = amountToDole;
@@ -80,7 +72,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 bool
 InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 {
-    std::cout<< "Inflation started";
     auto header = ltx.loadHeader();
     auto& lh = header.current();
     time_t closeTime = lh.scpValue.closeTime;
@@ -112,10 +103,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
                                      TRILLION, ROUND_DOWN);
     auto amountToDole = inflationAmount + lh.feePool;
 
-    std::cout<< "inflationAmount";
-    std::cout<< inflationAmount;
-    std::cout<< "amountToDole";
-    std::cout<< amountToDole;
 
     lh.feePool = 0;
     lh.inflationSeq++;
