@@ -27,6 +27,7 @@
 #include <fmt/format.h>
 #include <optional>
 #include <xdrpp/marshal.h>
+#include "util/XDRCereal.h"
 
 using namespace stellar;
 using namespace stellar::txtest;
@@ -199,6 +200,14 @@ makeBaseFeeUpgrade(int baseFee)
 }
 
 LedgerUpgrade
+makeBasePercentageFeeUpgrade(int basePercentageFee)
+{
+    auto result = LedgerUpgrade{LEDGER_UPGRADE_BASE_PERCENTAGE_FEE};
+    result.newBasePercentageFee() = basePercentageFee;
+    return result;
+}
+
+LedgerUpgrade
 makeTxCountUpgrade(int txCount)
 {
     auto result = LedgerUpgrade{LEDGER_UPGRADE_MAX_TX_SET_SIZE};
@@ -249,6 +258,7 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
     cfg.TESTING_UPGRADE_DESIRED_FEE = 100;
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 50;
     cfg.TESTING_UPGRADE_RESERVE = 100000000;
+    cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE = 45;
     cfg.TESTING_UPGRADE_DATETIME = preferredUpgradeDatetime;
 
     auto header = LedgerHeader{};
@@ -256,6 +266,7 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
     header.baseFee = cfg.TESTING_UPGRADE_DESIRED_FEE;
     header.baseReserve = cfg.TESTING_UPGRADE_RESERVE;
     header.maxTxSetSize = cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE;
+    header.basePercentageFee = cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE;
     header.scpValue.closeTime = VirtualClock::to_time_t(genesis(0, 0));
 
     auto protocolVersionUpgrade =
@@ -265,7 +276,8 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
         makeTxCountUpgrade(cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE);
     auto baseReserveUpgrade =
         makeBaseReserveUpgrade(cfg.TESTING_UPGRADE_RESERVE);
-
+     auto basePercentageFeeUpgrade =
+            makeBasePercentageFeeUpgrade(cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE);
     SECTION("protocol version upgrade needed")
     {
         header.ledgerVersion--;
@@ -273,6 +285,8 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
         auto expected = shouldListAny
                             ? std::vector<LedgerUpgrade>{protocolVersionUpgrade}
                             : std::vector<LedgerUpgrade>{};
+        std::cout<< xdr_to_string(upgrades, "upgrades.....");
+        std::cout<< xdr_to_string(expected, "expected.....");
         REQUIRE(upgrades == expected);
     }
 

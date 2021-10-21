@@ -39,7 +39,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 
     auto inflationAmount = 0;
     auto amountToDole = inflationAmount + lh.feePool;
-
     lh.feePool = 0;
     lh.inflationSeq++;
 
@@ -103,6 +102,7 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
     auto inflationAmount = bigDivide(lh.totalCoins, INFLATION_RATE_TRILLIONTHS,
                                      TRILLION, ROUND_DOWN);
     auto amountToDole = inflationAmount + lh.feePool;
+
 
     lh.feePool = 0;
     lh.inflationSeq++;

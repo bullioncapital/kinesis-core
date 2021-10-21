@@ -158,7 +158,7 @@ int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
     int64_t accumulatedFeeFromPercentage = 0;
-    double percentageFeeAsDouble = (double)45 / (double)10000;
+    double percentageFeeAsDouble = (double) header.basePercentageFee / (double)10000;
 
     // CLOG(DEBUG, "Process") << "Shutting down (nicely): " << impl->mCmdLine;
 
@@ -217,7 +217,7 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
     // add the 0.45% into the adjusted fee
 
     int64_t accumulatedFeeFromPercentage = 0;
-    double percentageFeeAsDouble = (double)45 / (double)10000;
+    double percentageFeeAsDouble = (double)header.basePercentageFee / (double)10000;
 
     for (auto& op : mOperations)
     {
@@ -241,22 +241,6 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
             accumulatedFeeFromPercentage =
                 accumulatedFeeFromPercentage + roundedPercentFee;
         }
-    }
-
-    if (header.ledgerVersion >= 11 || !applying)
-    {
-        int64_t adjustedFee =
-            baseFee * std::max<int64_t>(1, getNumOperations());
-
-        if (applying)
-        {
-        }
-        else
-        {
-        }
-    }
-    else
-    {
     }
 
     return baseFee + accumulatedFeeFromPercentage;
