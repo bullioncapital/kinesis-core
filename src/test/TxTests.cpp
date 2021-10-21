@@ -244,12 +244,13 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
         {
             if (tx->getResultCode() != txFAILED)
             {
-            try{
-            REQUIRE(checkResult == tx->getResult());
-            }
-              catch (std::exception& e)
+                try
                 {
-                  std::printf("Exception: %s\n", e.what());
+                    REQUIRE(checkResult == tx->getResult());
+                }
+                catch (std::exception& e)
+                {
+                    std::printf("Exception: %s\n", e.what());
                 }
             }
             else

@@ -39,8 +39,8 @@ class Upgrades
                 std::make_optional<uint32>(cfg.LEDGER_PROTOCOL_VERSION);
             mBaseFee =
                 std::make_optional<uint32>(cfg.TESTING_UPGRADE_DESIRED_FEE);
-             mBasePercentageFee =
-                std::make_optional<uint32>(cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE);
+            mBasePercentageFee = std::make_optional<uint32>(
+                cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE);
             mMaxTxSize =
                 std::make_optional<uint32>(cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE);
             mBaseReserve =

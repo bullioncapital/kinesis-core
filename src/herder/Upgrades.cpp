@@ -179,11 +179,11 @@ Upgrades::createUpgradesFor(LedgerHeader const& header) const
     }
 
     if (mParams.mBasePercentageFee &&
-            (header.basePercentageFee != *mParams.mBasePercentageFee))
-        {
-            result.emplace_back(LEDGER_UPGRADE_BASE_PERCENTAGE_FEE);
-            result.back().newBasePercentageFee() = *mParams.mBasePercentageFee;
-        }
+        (header.basePercentageFee != *mParams.mBasePercentageFee))
+    {
+        result.emplace_back(LEDGER_UPGRADE_BASE_PERCENTAGE_FEE);
+        result.back().newBasePercentageFee() = *mParams.mBasePercentageFee;
+    }
 
     return result;
 }
@@ -206,7 +206,8 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, AbstractLedgerTxn& ltx)
         applyReserveUpgrade(ltx, upgrade.newBaseReserve());
         break;
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         ltx.loadHeader().current().basePercentageFee = upgrade.newBasePercentageFee();
+        ltx.loadHeader().current().basePercentageFee =
+            upgrade.newBasePercentageFee();
         break;
     default:
     {
@@ -230,7 +231,8 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
     case LEDGER_UPGRADE_BASE_RESERVE:
         return fmt::format("basereserve={0}", upgrade.newBaseReserve());
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         return fmt::format("basepercentagefee={0}", upgrade.newBasePercentageFee());
+        return fmt::format("basepercentagefee={0}",
+                           upgrade.newBasePercentageFee());
     default:
         return "<unsupported>";
     }

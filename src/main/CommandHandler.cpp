@@ -477,7 +477,7 @@ CommandHandler::upgrades(std::string const& params, std::string& retStr)
             return;
         }
         p.mUpgradeTime = VirtualClock::tmToSystemPoint(tm);
-//        uint32 basePercentageFee;
+        //        uint32 basePercentageFee;
 
         p.mBaseFee = parseOptionalParam<uint32>(retMap, "basefee");
         p.mBaseReserve = parseOptionalParam<uint32>(retMap, "basereserve");

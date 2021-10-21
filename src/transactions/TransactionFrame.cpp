@@ -151,14 +151,15 @@ TransactionFrame::getFeeBid() const
                                                    : mEnvelope.v1().tx.fee;
 }
 
-#ifdef _KINESIS
+#ifndef _KINESIS
 
 // kinesis implementation
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
     int64_t accumulatedFeeFromPercentage = 0;
-    double percentageFeeAsDouble = (double) header.basePercentageFee / (double)10000;
+    double percentageFeeAsDouble =
+        (double)header.basePercentageFee / (double)10000;
 
     // CLOG(DEBUG, "Process") << "Shutting down (nicely): " << impl->mCmdLine;
 
@@ -217,7 +218,8 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
     // add the 0.45% into the adjusted fee
 
     int64_t accumulatedFeeFromPercentage = 0;
-    double percentageFeeAsDouble = (double)header.basePercentageFee / (double)10000;
+    double percentageFeeAsDouble =
+        (double)header.basePercentageFee / (double)10000;
 
     for (auto& op : mOperations)
     {

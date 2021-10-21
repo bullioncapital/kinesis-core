@@ -103,7 +103,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
                                      TRILLION, ROUND_DOWN);
     auto amountToDole = inflationAmount + lh.feePool;
 
-
     lh.feePool = 0;
     lh.inflationSeq++;
 

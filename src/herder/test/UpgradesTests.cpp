@@ -24,10 +24,10 @@
 #include "transactions/TransactionUtils.h"
 #include "util/StatusManager.h"
 #include "util/Timer.h"
+#include "util/XDRCereal.h"
 #include <fmt/format.h>
 #include <optional>
 #include <xdrpp/marshal.h>
-#include "util/XDRCereal.h"
 
 using namespace stellar;
 using namespace stellar::txtest;
@@ -276,8 +276,8 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
         makeTxCountUpgrade(cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE);
     auto baseReserveUpgrade =
         makeBaseReserveUpgrade(cfg.TESTING_UPGRADE_RESERVE);
-     auto basePercentageFeeUpgrade =
-            makeBasePercentageFeeUpgrade(cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE);
+    auto basePercentageFeeUpgrade = makeBasePercentageFeeUpgrade(
+        cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE);
     SECTION("protocol version upgrade needed")
     {
         header.ledgerVersion--;
@@ -285,8 +285,8 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
         auto expected = shouldListAny
                             ? std::vector<LedgerUpgrade>{protocolVersionUpgrade}
                             : std::vector<LedgerUpgrade>{};
-        std::cout<< xdr_to_string(upgrades, "upgrades.....");
-        std::cout<< xdr_to_string(expected, "expected.....");
+        std::cout << xdr_to_string(upgrades, "upgrades.....");
+        std::cout << xdr_to_string(expected, "expected.....");
         REQUIRE(upgrades == expected);
     }
 
