@@ -247,10 +247,9 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
             try{
             REQUIRE(checkResult == tx->getResult());
             }
-              catch (std::exception&)
+              catch (std::exception& e)
                 {
-                  std::cout<<"std::exception";
-                  std::cout<< std::exception;
+                  std::printf("Exception: %s\n", e.what());
                 }
             }
             else
