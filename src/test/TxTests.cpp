@@ -26,6 +26,7 @@
 #include "util/types.h"
 
 #include <lib/catch.hpp>
+#include "util/XDRCereal.h"
 
 using namespace stellar;
 using namespace stellar::txtest;
@@ -242,15 +243,15 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
         // checks that the failure is the same if pre checks failed
         if (!check)
         {
-            if (tx->getResultCode() != txFAILED)
+            std::cout<< "txtests.cpp getResult";
+            std::cout<< xdr_to_string(checkResult, "checkResult.....");
+            std::cout<< xdr_to_string(tx->getResult(), "tx->getResult()");
+
+            if (tx->getResultCode() != txFAILED)        
             {
-            try{
-            REQUIRE(checkResult == tx->getResult());
-            }
-              catch (std::exception& e)
-                {
-                  std::printf("Exception: %s\n", e.what());
-                }
+                std::cout<< "txtests.cpp getResult tx->getResultCode() != txFAILED";
+                 
+                 REQUIRE(checkResult == tx->getResult());
             }
             else
             {

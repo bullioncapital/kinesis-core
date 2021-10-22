@@ -160,12 +160,21 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     int64_t accumulatedFeeFromPercentage = 0;
     double percentageFeeAsDouble = (double) header.basePercentageFee / (double)10000;
 
+   // get transaction envelope
+    // get transaction based on transactionEnvelopeType
+    // get the create operation
+    // get the payment operation
+    // get the amount from operation
+    // calculate 0.45% of transaction amount
+    // add the 0.45% into the adjusted fee
+
     // CLOG(DEBUG, "Process") << "Shutting down (nicely): " << impl->mCmdLine;
 
     for (auto& op : mOperations)
     {
         auto operation = op->getOperation();
         int fieldNumber = operation.body.type();
+    //FieldNumber 0 = CreateAccount Operation
 
         if (fieldNumber == 0)
         {
@@ -176,6 +185,8 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
             accumulatedFeeFromPercentage =
                 accumulatedFeeFromPercentage + percentFeeFloat;
         }
+
+        //FieldNumber 1 = Payment Operation
         if (fieldNumber == 1)
         {
             auto percentFeeFloat =
@@ -198,55 +209,9 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
     return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
 }
+
 #endif
 
-#ifdef _KINESIS
-
-// kinesis implementation
-int64_t
-TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
-                         bool applying) const
-{
-
-    // get transaction envelope
-    // get transaction based on transactionEnvelopeType
-    // get the create operation
-    // get the payment operation
-    // get the amount from operation
-    // calculate 0.45% of transaction amount
-    // add the 0.45% into the adjusted fee
-
-    int64_t accumulatedFeeFromPercentage = 0;
-    double percentageFeeAsDouble = (double)header.basePercentageFee / (double)10000;
-
-    for (auto& op : mOperations)
-    {
-        auto operation = op->getOperation();
-        int fieldNumber = operation.body.type();
-
-        if (fieldNumber == 0)
-        {
-            auto percentFeeFloat =
-                (operation.body.createAccountOp().startingBalance) / 10000000 *
-                percentageFeeAsDouble;
-            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
-            accumulatedFeeFromPercentage =
-                accumulatedFeeFromPercentage + percentFeeFloat;
-        }
-        if (fieldNumber == 1)
-        {
-            auto percentFeeFloat =
-                operation.body.paymentOp().amount * percentageFeeAsDouble;
-            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
-            accumulatedFeeFromPercentage =
-                accumulatedFeeFromPercentage + roundedPercentFee;
-        }
-    }
-
-    return baseFee + accumulatedFeeFromPercentage;
-}
-
-#else
 // Original Function Implemetation
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
@@ -271,7 +236,6 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
         return getFeeBid();
     }
 }
-#endif
 
 void
 TransactionFrame::addSignature(SecretKey const& secretKey)
