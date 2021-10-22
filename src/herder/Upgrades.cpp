@@ -42,6 +42,7 @@ save(Archive& ar, stellar::Upgrades::UpgradeParameters const& p)
     ar(make_nvp("fee", p.mBaseFee));
     ar(make_nvp("maxtxsize", p.mMaxTxSize));
     ar(make_nvp("reserve", p.mBaseReserve));
+    ar(make_nvp("percentagefee", p.mBasePercentageFee));
 }
 
 template <class Archive>
@@ -55,6 +56,7 @@ load(Archive& ar, stellar::Upgrades::UpgradeParameters& o)
     ar(make_nvp("fee", o.mBaseFee));
     ar(make_nvp("maxtxsize", o.mMaxTxSize));
     ar(make_nvp("reserve", o.mBaseReserve));
+    ar(make_nvp("percentagefee", o.mBasePercentageFee));
 }
 } // namespace cereal
 
@@ -181,6 +183,8 @@ Upgrades::createUpgradesFor(LedgerHeader const& header) const
     if (mParams.mBasePercentageFee &&
             (header.basePercentageFee != *mParams.mBasePercentageFee))
         {
+        std::cout<< "createUpgradesFor mBasePercentageFee";
+         std::cout<< *mParams.mBasePercentageFee;
             result.emplace_back(LEDGER_UPGRADE_BASE_PERCENTAGE_FEE);
             result.back().newBasePercentageFee() = *mParams.mBasePercentageFee;
         }
@@ -191,6 +195,8 @@ Upgrades::createUpgradesFor(LedgerHeader const& header) const
 void
 Upgrades::applyTo(LedgerUpgrade const& upgrade, AbstractLedgerTxn& ltx)
 {
+        std::cout<< "Upgrades::applyTo";
+         std::cout<< upgrade.type();
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
@@ -206,6 +212,7 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, AbstractLedgerTxn& ltx)
         applyReserveUpgrade(ltx, upgrade.newBaseReserve());
         break;
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+         std::cout<< "Upgrades::applyTo:LEDGER_UPGRADE_BASE_PERCENTAGE_FEE";
          ltx.loadHeader().current().basePercentageFee = upgrade.newBasePercentageFee();
         break;
     default:
@@ -219,6 +226,8 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, AbstractLedgerTxn& ltx)
 std::string
 Upgrades::toString(LedgerUpgrade const& upgrade)
 {
+    std::cout<< "Upgrades::toString";
+     std::cout<< upgrade.type();
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
@@ -230,6 +239,8 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
     case LEDGER_UPGRADE_BASE_RESERVE:
         return fmt::format("basereserve={0}", upgrade.newBaseReserve());
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+         std::cout<< "Upgrades::toString:LEDGER_UPGRADE_BASE_PERCENTAGE_FEE";
+         std::cout<< upgrade.newBasePercentageFee();
          return fmt::format("basepercentagefee={0}", upgrade.newBasePercentageFee());
     default:
         return "<unsupported>";
@@ -291,7 +302,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         resetParamIfSet(res.mBaseFee);
         resetParamIfSet(res.mMaxTxSize);
         resetParamIfSet(res.mBaseReserve);
-
+        resetParamIfSet(res.mBasePercentageFee);
         return res;
     }
 
@@ -315,6 +326,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         {
             continue;
         }
+
         switch (lu.type())
         {
         case LEDGER_UPGRADE_VERSION:
@@ -355,6 +367,8 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
     }
 
     bool res = true;
+    std::cout<< "Upgrades::isValidForApply";
+    std::cout<< upgrade.type();
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
@@ -376,10 +390,9 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
         res = res && (upgrade.newBaseReserve() != 0);
         break;
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-    {
-        uint32 newPercentageFee = upgrade.newBasePercentageFee();
-        res = res && (newPercentageFee != 0);
-    }
+         std::cout<< "Upgrades::isValidForApply:LEDGER_UPGRADE_BASE_PERCENTAGE_FEE";
+         std::cout<< upgrade.newBasePercentageFee();
+         res = res && (upgrade.newBasePercentageFee() != 0);
     break;
     default:
         res = false;
@@ -396,7 +409,8 @@ Upgrades::isValidForNomination(LedgerUpgrade const& upgrade,
     {
         return false;
     }
-
+    std::cout<< "Upgrades::isValidForNomination";
+    std::cout<< upgrade.type();
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
@@ -410,6 +424,11 @@ Upgrades::isValidForNomination(LedgerUpgrade const& upgrade,
     case LEDGER_UPGRADE_BASE_RESERVE:
         return mParams.mBaseReserve &&
                (upgrade.newBaseReserve() == *mParams.mBaseReserve);
+     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+        std::cout<< "Upgrades::isValidForNomination:LEDGER_UPGRADE_BASE_PERCENTAGE_FEE";
+         return mParams.mBasePercentageFee &&
+                 (upgrade.newBasePercentageFee() == *mParams.mBasePercentageFee);
+        break;
     default:
         return false;
     }
