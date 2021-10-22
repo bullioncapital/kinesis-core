@@ -154,17 +154,16 @@ TransactionFrame::getFeeBid() const
 
 
 // kinesis implementation
+#ifdef _KINESIS
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
     int64_t accumulatedFeeFromPercentage = 0;
-    double percentageFeeAsDouble = (double) header.basePercentageFee / (double)10000;
+    double percentageFeeAsDouble = (double)header.basePercentageFee / (double)10000;
 
     for (auto& op : mOperations)
     {
         auto operation = op->getOperation();
-        std::cout << "Operation Type ===== ";
-        std::cout << operation.body.type();
         int fieldNumber = operation.body.type();
         // FieldNumber 0 = CreateAccount Operation
 
@@ -183,11 +182,19 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
             accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
         }
     }
-    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
-    // return header.baseFee + accumulatedFeeFromPercentage;
-
+    // return ((int64_t)header.baseFee) * std::max<int64_t>(1,
+    // getNumOperations());
+    return ((int64_t)header.baseFee) + accumulatedFeeFromPercentage;
 }
 
+#else
+// kinesis implementation
+int64_t
+TransactionFrame::getMinFee(LedgerHeader const& header) const
+{
+    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+}
+#endif
 // Original Function Implemetation
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
