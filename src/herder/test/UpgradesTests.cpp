@@ -2345,6 +2345,10 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     },
     "reserve": {
         "has": false
+    },
+    "percentagefee": {
+        "has": false,
+        "value": 45
     }
 })";
     Upgrades::UpgradeParameters up;
@@ -2356,4 +2360,5 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     REQUIRE(up.mMaxTxSize.has_value());
     REQUIRE(up.mMaxTxSize.value() == 10000);
     REQUIRE(!up.mBaseReserve.has_value());
+    REQUIRE(!up.mBasePercentageFee.has_value());
 }
