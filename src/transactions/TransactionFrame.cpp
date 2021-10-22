@@ -170,37 +170,38 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
 
         if (fieldNumber == 0)
         {
-            std::cout << "Operation Type 0 ===== ";
+            std::cout << "Operation Type 0 ===== \n";
             std::cout << operation.body.createAccountOp().startingBalance;
 
             std::cout << percentageFeeAsDouble;
             auto percentFeeFloat = (operation.body.createAccountOp().startingBalance) / 10000000 * percentageFeeAsDouble;
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
             accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
+             std::cout << "accumulatedFeeFromPercentage ===== \n";
             std::cout << accumulatedFeeFromPercentage;
         }
 
         // FieldNumber 1 = Payment Operation
         if (fieldNumber == 1)
         {
-            std::cout << "Operation Type 1 ===== ";
+            std::cout << "Operation Type 1 ===== \n";
             std::cout << operation.body.paymentOp().amount;
 
             std::cout << percentageFeeAsDouble;
-            auto percentFeeFloat = operation.body.paymentOp().amount * percentageFeeAsDouble;
+            auto percentFeeFloat = operation.body.paymentOp().amount / 10000000 * percentageFeeAsDouble;
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
             accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
             std::cout << accumulatedFeeFromPercentage;
         }
     }
-    std::cout << "Return Old ==================== ";
+    std::cout << "Return Old ==================== \n";
     std::cout << ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
-    std::cout << "getNumOperations ==================== ";
-    std::cout << getNumOperations();
-    std::cout << "Return New ==================== ";
+    std::cout << "Return New ==================== \n";
     std::cout << ((int64_t)header.baseFee) + ((int64_t)accumulatedFeeFromPercentage);
     int64_t baseFeeReturnValue = ((int64_t)header.baseFee) + (int64_t)accumulatedFeeFromPercentage;
-    return baseFeeReturnValue * std::max<int64_t>(1, getNumOperations());
+    return baseFeeReturnValue;
+    // return baseFeeReturnValue * std::max<int64_t>(1, getNumOperations());
+
 }
 
 // #else
