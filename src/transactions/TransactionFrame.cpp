@@ -159,18 +159,32 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
     int64_t accumulatedFeeFromPercentage = 0;
     double percentageFeeAsDouble = (double) header.basePercentageFee / (double)10000;
-    std::cout<< "TransactionFrame::getMinFee";
-    std::cout<< accumulatedFeeFromPercentage;
-    std::cout<< (double) header.basePercentageFee;
-    std::cout<< percentageFeeAsDouble;
+
     for (auto& op : mOperations)
+    {
+        auto operation = op->getOperation();
+        std::cout << "Operation Type ===== ";
+        std::cout << operation.body.type();
+        int fieldNumber = operation.body.type();
+        // FieldNumber 0 = CreateAccount Operation
+
+        if (fieldNumber == 0)
         {
-            auto operation = op->getOperation();
-            std::cout<< "for (auto& op : mOperations)";
-            std::cout<< operation.body.type();
+            auto percentFeeFloat = (operation.body.createAccountOp().startingBalance) / 10000000 * percentageFeeAsDouble;
+            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
+            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + percentFeeFloat;
         }
-    
-    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+
+        // FieldNumber 1 = Payment Operation
+        if (fieldNumber == 1)
+        {
+            auto percentFeeFloat = operation.body.paymentOp().amount * percentageFeeAsDouble;
+            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
+            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
+        }
+    }
+
+    return header.baseFee + accumulatedFeeFromPercentage;
 
 }
 
