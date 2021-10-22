@@ -166,14 +166,15 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     double basePercentageFeeRate =
         (double)header.basePercentageFee / (double)10000;
 
+    int64_t totalAmount = 0;
     for (auto& op : mOperations)
     {
         auto operation = op->getOperation();
-        int operationType = operation.body.type();
-        int64_t amount = 0;
+        // std::cout << xdr::xdr_to_string(operation, "OPERATION");
+        auto operationType = operation.body.type();
         if (operationType == CREATE_ACCOUNT)
         {
-            amount = operation.body.createAccountOp().startingBalance;
+            totalAmount += operation.body.createAccountOp().startingBalance;
         }
         else if (operationType == PAYMENT)
         {
@@ -181,17 +182,16 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
                 operation.body.paymentOp().asset.type(); // 0 is native
             if (assetType == 0)
             {
-                amount = operation.body.paymentOp().amount;
+                totalAmount += operation.body.paymentOp().amount;
             }
         }
-
-        if (amount > 0)
-        {
-            accumulatedBasePercentageFee +=
-                (int64_t)(amount * basePercentageFeeRate);
-        }
     }
-    return baseFee + accumulatedBasePercentageFee;
+
+    accumulatedBasePercentageFee +=(int64_t)(totalAmount * basePercentageFeeRate);
+    int64_t totalFee = baseFee + accumulatedBasePercentageFee;
+    std::cout << "Amount: " << totalAmount << ", baseFee: " << baseFee
+              << ", totalFee: " << totalFee << std::endl;
+    return totalFee;
 }
 #else
 // original function implementation
@@ -202,6 +202,15 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
 }
 #endif
 
+#ifdef _KINESIS
+int64_t
+TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
+                         bool applying) const
+{
+    std::cout << "getFee(., baseFee=" << baseFee << ", applying: " << applying << ")" << std::endl;
+    return getMinFee(header);
+}
+#else
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
@@ -225,6 +234,7 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
         return getFeeBid();
     }
 }
+#endif
 
 void
 TransactionFrame::addSignature(SecretKey const& secretKey)
