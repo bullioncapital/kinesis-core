@@ -183,8 +183,8 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
             accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
         }
     }
-
-    return header.baseFee + accumulatedFeeFromPercentage;
+    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+    // return header.baseFee + accumulatedFeeFromPercentage;
 
 }
 
