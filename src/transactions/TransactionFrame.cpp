@@ -154,7 +154,7 @@ TransactionFrame::getFeeBid() const
 
 
 // kinesis implementation
-#ifdef _KINESIS
+// #ifdef _KINESIS
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
@@ -187,14 +187,14 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     return ((int64_t)header.baseFee) + accumulatedFeeFromPercentage;
 }
 
-#else
-// kinesis implementation
-int64_t
-TransactionFrame::getMinFee(LedgerHeader const& header) const
-{
-    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
-}
-#endif
+// #else
+// // kinesis implementation
+// int64_t
+// TransactionFrame::getMinFee(LedgerHeader const& header) const
+// {
+//     return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+// }
+// #endif
 // Original Function Implemetation
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
