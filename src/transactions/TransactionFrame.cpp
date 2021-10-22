@@ -171,7 +171,7 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
         {
             auto percentFeeFloat = (operation.body.createAccountOp().startingBalance) / 10000000 * percentageFeeAsDouble;
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
-            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + percentFeeFloat;
+            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
         }
 
         // FieldNumber 1 = Payment Operation
@@ -184,7 +184,7 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     }
     // return ((int64_t)header.baseFee) * std::max<int64_t>(1,
     // getNumOperations());
-    return ((int64_t)header.baseFee) + accumulatedFeeFromPercentage;
+    return (int64_t(((int64_t)header.baseFee) + (int64_t)accumulatedFeeFromPercentage));
 }
 
 // #else
