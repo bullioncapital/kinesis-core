@@ -157,6 +157,19 @@ TransactionFrame::getFeeBid() const
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
+    int64_t accumulatedFeeFromPercentage = 0;
+    double percentageFeeAsDouble = (double) header.basePercentageFee / (double)10000;
+    std::cout<< "TransactionFrame::getMinFee";
+    std::cout<< accumulatedFeeFromPercentage;
+    std::cout<< (double) header.basePercentageFee;
+    std::cout<< percentageFeeAsDouble;
+    for (auto& op : mOperations)
+        {
+            auto operation = op->getOperation();
+            std::cout<< "for (auto& op : mOperations)";
+            std::cout<< operation.body.type();
+        }
+    
     return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
 
 }
