@@ -251,7 +251,7 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
             {
                 std::cout<< "txtests.cpp getResult tx->getResultCode() != txFAILED";
                  
-                 REQUIRE(checkResult == tx->getResult());
+                 REQUIRE(checkResult.result.code == tx->getResultCode() );
             }
             else
             {
