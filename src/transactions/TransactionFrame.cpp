@@ -165,6 +165,8 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     {
         auto operation = op->getOperation();
         int fieldNumber = operation.body.type();
+        std::cout << "Operation Type ===== ";
+        std::cout << fieldNumber;
         // FieldNumber 0 = CreateAccount Operation
 
         if (fieldNumber == 0)
