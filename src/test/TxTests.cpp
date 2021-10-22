@@ -244,14 +244,7 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
         {
             if (tx->getResultCode() != txFAILED)
             {
-                try
-                {
-                    REQUIRE(checkResult == tx->getResult());
-                }
-                catch (std::exception& e)
-                {
-                    std::printf("Exception: %s\n", e.what());
-                }
+                REQUIRE(checkResult == tx->getResult());
             }
             else
             {
@@ -311,7 +304,6 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
                             REQUIRE(previous);
                             REQUIRE(previous->type() ==
                                     InternalLedgerEntryType::LEDGER_ENTRY);
-
                             // From V13, it's possible to remove one-time
                             // signers on early failures
                             if (ledgerVersion >= 13 && earlyFailure)
