@@ -173,33 +173,33 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
             std::cout << "  Operation Type 0 ===== " << operation.body.createAccountOp().startingBalance;
             // std::cout << operation.body.createAccountOp().startingBalance;
 
-            std::cout << "  PercentageFeeAsDouble ===== " << percentageFeeAsDouble;
+            std::cout << "\n  PercentageFeeAsDouble ===== " << percentageFeeAsDouble;
             auto percentFeeFloat = (operation.body.createAccountOp().startingBalance) / 10000000 * percentageFeeAsDouble;
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
             accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
-            std::cout << "  AcumulatedFeeFromPercentage ===== " << accumulatedFeeFromPercentage;
+            std::cout << "\n  AcumulatedFeeFromPercentage ===== " << accumulatedFeeFromPercentage;
             // std::cout << accumulatedFeeFromPercentage;
         }
 
         // FieldNumber 1 = Payment Operation
         if (fieldNumber == 1)
         {
-            std::cout << "  Operation Type 1 ====== " << operation.body.paymentOp().amount;
+            std::cout << "\n  Operation Type 1 ====== " << operation.body.paymentOp().amount;
             // std::cout << operation.body.paymentOp().amount;
 
-            std::cout << "  PercentageFeeAsDouble ======  " << percentageFeeAsDouble;
+            std::cout << "\n  PercentageFeeAsDouble ======  " << percentageFeeAsDouble;
             auto percentFeeFloat = operation.body.paymentOp().amount / 10000000 * percentageFeeAsDouble;
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
             accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
-            std::cout << "  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
+            std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
         }
     }
-    std::cout << "  Return Old ======== " << ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+    std::cout << "\n  Return Old ======== " << ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
     // std::cout << ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
-    std::cout << "  Return New ======== " << ((int64_t)header.baseFee) + ((int64_t)accumulatedFeeFromPercentage);
+    std::cout << "\n  Return New ======== " << ((int64_t)header.baseFee) + ((int64_t)accumulatedFeeFromPercentage);
     // std::cout << ((int64_t)header.baseFee) + ((int64_t)accumulatedFeeFromPercentage);
     // int64_t baseFeeReturnValue = ((int64_t)header.baseFee) + (int64_t)accumulatedFeeFromPercentage;
-    return ((int64_t)header.baseFee) + (int64_t)accumulatedFeeFromPercentage;
+    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
     // return baseFeeReturnValue * std::max<int64_t>(1, getNumOperations());
 
 }
