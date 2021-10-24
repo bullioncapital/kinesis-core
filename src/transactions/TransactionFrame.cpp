@@ -191,16 +191,11 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
             accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
             std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
-            if(accumulatedFeeFromPercentage>=1000000000){
-                std::cout << "\n  inside AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
-                accumulatedFeeFromPercentage=accumulatedFeeFromPercentage/10000000;
-                }
-            accumulatedFeeFromPercentage=0;
         }
     }
      std::cout << "\n  base percentage fee " << header.baseFee;
       std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
-     return ((int64_t)header.baseFee)+accumulatedFeeFromPercentage;
+     return ((int64_t)header.baseFee);
     // return baseFeeReturnValue * std::max<int64_t>(1, getNumOperations());
 
 }
