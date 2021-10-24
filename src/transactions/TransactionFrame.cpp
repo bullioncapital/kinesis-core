@@ -191,7 +191,7 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
             accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
             std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
-            if(accumulatedFeeFromPercentage<=1000000000)
+            if(accumulatedFeeFromPercentage>=1000000000)
                 accumulatedFeeFromPercentage=accumulatedFeeFromPercentage/10000000;
             std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
         }
