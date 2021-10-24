@@ -154,7 +154,7 @@ TransactionFrame::getFeeBid() const
 
 
 // kinesis implementation
-// #ifdef _KINESIS
+ #ifdef _KINESIS
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
@@ -167,7 +167,6 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
         int fieldNumber = operation.body.type();
        
         // FieldNumber 0 = CreateAccount Operation
-
         if (fieldNumber == 0)
         {
             std::cout << "  Operation Type 0 ===== " << operation.body.createAccountOp().startingBalance;
@@ -192,27 +191,27 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
             int64_t roundedPercentFee = (int64_t)percentFeeFloat;
             accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
             std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
+            if(accumulatedFeeFromPercentage<=1000000000)
+                accumulatedFeeFromPercentage=accumulatedFeeFromPercentage/10000000;
+            std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
         }
     }
-//    std::cout << "\n  Return Old ======== " << ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
-    // std::cout << ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
      std::cout << "\n  base percentage fee " << header.baseFee;
       std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
-    // int64_t baseFeeReturnValue = ((int64_t)header.baseFee) + (int64_t)accumulatedFeeFromPercentage;
      return ((int64_t)header.baseFee)+accumulatedFeeFromPercentage;
     // return baseFeeReturnValue * std::max<int64_t>(1, getNumOperations());
 
 }
 
-// #else
-// // kinesis implementation
-// int64_t
-// TransactionFrame::getMinFee(LedgerHeader const& header) const
-// {
-//     return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
-// }
-// #endif
 // Original Function Implemetation
+ #else
+ int64_t
+ TransactionFrame::getMinFee(LedgerHeader const& header) const
+ {
+     return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+ }
+ #endif
+
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
