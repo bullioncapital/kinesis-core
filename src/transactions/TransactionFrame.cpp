@@ -152,63 +152,68 @@ TransactionFrame::getFeeBid() const
 }
 
 
+#ifdef _KINESIS
 
 // kinesis implementation
- #ifdef _KINESIS
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
-    int64_t accumulatedFeeFromPercentage = 0;
-    double percentageFeeAsDouble = (double)header.basePercentageFee / (double)10000;
+    auto baseFee =
+        ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
 
+    // apply base percentage fee
+    // affect: create_account and payment ops
+    int64_t accumulatedBasePercentageFee = 0;
+    double basePercentageFeeRate =
+        (double)header.basePercentageFee / (double)10000;
+
+    int64_t totalAmount = 0;
     for (auto& op : mOperations)
     {
         auto operation = op->getOperation();
-        int fieldNumber = operation.body.type();
-       
-        // FieldNumber 0 = CreateAccount Operation
-        if (fieldNumber == 0)
+        auto operationType = operation.body.type();
+        if (operationType == CREATE_ACCOUNT)
         {
-            std::cout << "  Operation Type 0 ===== " << operation.body.createAccountOp().startingBalance;
-            // std::cout << operation.body.createAccountOp().startingBalance;
-
-            std::cout << "\n  PercentageFeeAsDouble ===== " << percentageFeeAsDouble;
-            auto percentFeeFloat = (operation.body.createAccountOp().startingBalance) / 10000000 * percentageFeeAsDouble;
-            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
-            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
-            std::cout << "\n  AcumulatedFeeFromPercentage ===== " << accumulatedFeeFromPercentage;
-            // std::cout << accumulatedFeeFromPercentage;
+            totalAmount += operation.body.createAccountOp().startingBalance;
         }
-
-        // FieldNumber 1 = Payment Operation
-        if (fieldNumber == 1)
+        else if (operationType == PAYMENT)
         {
-            std::cout << "\n  Operation Type 1 ====== " << operation.body.paymentOp().amount;
-            // std::cout << operation.body.paymentOp().amount;
-
-            std::cout << "\n  PercentageFeeAsDouble ======  " << percentageFeeAsDouble;
-            auto percentFeeFloat = operation.body.paymentOp().amount / 10000000 * percentageFeeAsDouble;
-            int64_t roundedPercentFee = (int64_t)percentFeeFloat;
-            accumulatedFeeFromPercentage = accumulatedFeeFromPercentage + roundedPercentFee;
-            std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
+            int8_t assetType =
+                operation.body.paymentOp().asset.type(); // 0 is native
+            if (assetType == 0)
+            {
+                totalAmount += operation.body.paymentOp().amount;
+            }
         }
     }
-     std::cout << "\n  base percentage fee " << header.baseFee;
-      std::cout << "\n  AccumulatedFeeFromPercentage ====== " << accumulatedFeeFromPercentage;
-     return ((int64_t)header.baseFee);
-    // return baseFeeReturnValue * std::max<int64_t>(1, getNumOperations());
 
+    accumulatedBasePercentageFee +=
+        (int64_t)(totalAmount * basePercentageFeeRate);
+    int64_t totalFee = baseFee + accumulatedBasePercentageFee;
+//    LOG_DEBUG(DEFAULT_LOG, "* Kinesis * getMinFee() baseFee: {}, amount: {}, totalFee: {}",
+//        baseFee, totalAmount, totalFee
+//    );
+    return totalFee;
 }
+#else
+// original function implementation
+int64_t
+TransactionFrame::getMinFee(LedgerHeader const& header) const
+{
+    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+}
+#endif
 
-// Original Function Implemetation
- #else
- int64_t
- TransactionFrame::getMinFee(LedgerHeader const& header) const
- {
-     return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
- }
- #endif
-
+#ifdef _KINESIS
+int64_t
+TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
+                         bool applying) const
+{
+    // std::cout << "getFee(., baseFee=" << baseFee << ", applying: " << applying
+    //           << ")" << std::endl;
+    return getMinFee(header);
+}
+#else
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
@@ -232,6 +237,8 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
         return getFeeBid();
     }
 }
+#endif
+
 
 void
 TransactionFrame::addSignature(SecretKey const& secretKey)
