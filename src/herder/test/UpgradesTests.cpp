@@ -1154,9 +1154,10 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
                         offers.push_back({offer.key, afterUpgrade});
                     }
                 };
-
+            auto startingBalance =lm.getLastMinBalance(10) + 2000 + 12 * txFee;
+            auto additionalFund = txFee + (startingBalance * 0.0045) +startingBalance;
             auto a1 =
-                root.create("A", lm.getLastMinBalance(10) + 2000 + 12 * txFee);
+                root.create("A", additionalFund);
             a1.changeTrust(cur1, 5125);
             a1.changeTrust(cur2, 5125);
             issuer.pay(a1, cur1, 2050);
