@@ -1292,8 +1292,9 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
 
         SECTION("unauthorized offers still contribute liabilities")
         {
-            auto a1 =
-                root.create("A", lm.getLastMinBalance(10) + 2000 + 10 * txFee);
+            auto startingBalance =lm.getLastMinBalance(10) + 2000 + 10 * txFee;
+            auto additionalFund = txFee + (startingBalance * 0.0045) +startingBalance;
+            auto a1 = root.create("A", startingBalance);
             a1.changeTrust(cur1, 6000);
             a1.changeTrust(cur2, 6000);
             issuer.allowTrust(cur1, a1);
