@@ -13,7 +13,7 @@
 #include "test/TestExceptions.h"
 #include "test/TxTests.h"
 #include "transactions/TransactionUtils.h"
-
+#include "util/Logging.h"
 #include <lib/catch.hpp>
 
 namespace stellar
@@ -102,7 +102,6 @@ TestAccount::tx(std::vector<Operation> const& ops, SequenceNumber sn)
     {
         sn = nextSequenceNumber();
     }
-
     return transactionFromOperations(mApp, getSecretKey(), sn, ops);
 }
 
@@ -137,6 +136,8 @@ TestAccount::create(SecretKey const& secretKey, uint64_t initialBalance)
 
     try
     {
+        LOG_DEBUG(DEFAULT_LOG, "* Kinesis * TestAccount.create() source account balance: {}, initialBalance: {}",
+                 getAvailableBalance(), initialBalance);
         applyTx(tx({createAccount(publicKey, initialBalance)}), mApp);
     }
     catch (...)

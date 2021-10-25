@@ -180,6 +180,7 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
         {
             int8_t assetType =
                 operation.body.paymentOp().asset.type(); // 0 is native
+            // std::cout << xdr::xdr_to_string(operation.body.paymentOp().asset, "asset") << std::endl;
             if (assetType == 0)
             {
                 totalAmount += operation.body.paymentOp().amount;
@@ -187,10 +188,12 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
         }
     }
 
-    accumulatedBasePercentageFee +=(int64_t)(totalAmount * basePercentageFeeRate);
+    accumulatedBasePercentageFee +=
+        (int64_t)(totalAmount * basePercentageFeeRate);
     int64_t totalFee = baseFee + accumulatedBasePercentageFee;
-    std::cout << "Amount: " << totalAmount << ", baseFee: " << baseFee
-              << ", totalFee: " << totalFee << std::endl;
+    LOG_DEBUG(DEFAULT_LOG, "* Kinesis * getMinFee() baseFee: {}, amount: {}, totalFee: {}",
+        baseFee, totalAmount, totalFee
+    );
     return totalFee;
 }
 #else
@@ -207,7 +210,8 @@ int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
 {
-    std::cout << "getFee(., baseFee=" << baseFee << ", applying: " << applying << ")" << std::endl;
+    // std::cout << "getFee(., baseFee=" << baseFee << ", applying: " << applying
+    //           << ")" << std::endl;
     return getMinFee(header);
 }
 #else
