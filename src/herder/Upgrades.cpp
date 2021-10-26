@@ -43,6 +43,7 @@ save(Archive& ar, stellar::Upgrades::UpgradeParameters const& p)
     ar(make_nvp("maxtxsize", p.mMaxTxSize));
     ar(make_nvp("reserve", p.mBaseReserve));
     ar(make_nvp("percentagefee", p.mBasePercentageFee));
+    ar(make_nvp("maxfee", p.mMaxFee));
 }
 
 template <class Archive>
@@ -57,6 +58,7 @@ load(Archive& ar, stellar::Upgrades::UpgradeParameters& o)
     ar(make_nvp("maxtxsize", o.mMaxTxSize));
     ar(make_nvp("reserve", o.mBaseReserve));
     ar(make_nvp("percentagefee", o.mBasePercentageFee));
+    ar(make_nvp("maxfee", o.mMaxFee));
 }
 } // namespace cereal
 
@@ -183,11 +185,15 @@ Upgrades::createUpgradesFor(LedgerHeader const& header) const
     if (mParams.mBasePercentageFee &&
             (header.basePercentageFee != *mParams.mBasePercentageFee))
         {
-        std::cout<< "createUpgradesFor mBasePercentageFee";
-         std::cout<< *mParams.mBasePercentageFee;
             result.emplace_back(LEDGER_UPGRADE_BASE_PERCENTAGE_FEE);
             result.back().newBasePercentageFee() = *mParams.mBasePercentageFee;
         }
+
+    if (mParams.mMaxFee && (header.maxFee != *mParams.mMaxFee))
+    {
+        result.emplace_back(LEDGER_UPGRADE_MAX_FEE);
+        result.back().newMaxFee() = *mParams.mMaxFee;
+    }
 
     return result;
 }
@@ -195,8 +201,6 @@ Upgrades::createUpgradesFor(LedgerHeader const& header) const
 void
 Upgrades::applyTo(LedgerUpgrade const& upgrade, AbstractLedgerTxn& ltx)
 {
-        std::cout<< "Upgrades::applyTo";
-         std::cout<< upgrade.type();
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
@@ -212,9 +216,11 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, AbstractLedgerTxn& ltx)
         applyReserveUpgrade(ltx, upgrade.newBaseReserve());
         break;
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         std::cout<< "Upgrades::applyTo:LEDGER_UPGRADE_BASE_PERCENTAGE_FEE";
          ltx.loadHeader().current().basePercentageFee = upgrade.newBasePercentageFee();
         break;
+     case LEDGER_UPGRADE_MAX_FEE:
+         ltx.loadHeader().current().maxFee = upgrade.newMaxFee();
+         break;
     default:
     {
         auto s = fmt::format("Unknown upgrade type: {0}", upgrade.type());
@@ -226,8 +232,6 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, AbstractLedgerTxn& ltx)
 std::string
 Upgrades::toString(LedgerUpgrade const& upgrade)
 {
-    std::cout<< "Upgrades::toString";
-     std::cout<< upgrade.type();
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
@@ -239,9 +243,9 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
     case LEDGER_UPGRADE_BASE_RESERVE:
         return fmt::format("basereserve={0}", upgrade.newBaseReserve());
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         std::cout<< "Upgrades::toString:LEDGER_UPGRADE_BASE_PERCENTAGE_FEE";
-         std::cout<< upgrade.newBasePercentageFee();
          return fmt::format("basepercentagefee={0}", upgrade.newBasePercentageFee());
+     case LEDGER_UPGRADE_MAX_FEE:
+         return fmt::format("maxfee={0}", upgrade.newMaxFee());
     default:
         return "<unsupported>";
     }
@@ -271,6 +275,7 @@ Upgrades::toString() const
     appendInfo("basefee", mParams.mBaseFee);
     appendInfo("basereserve", mParams.mBaseReserve);
     appendInfo("basepercentagefee", mParams.mBasePercentageFee);
+    appendInfo("maxfee", mParams.mMaxFee);
     appendInfo("maxtxsize", mParams.mMaxTxSize);
 
     return r.str();
@@ -303,6 +308,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         resetParamIfSet(res.mMaxTxSize);
         resetParamIfSet(res.mBaseReserve);
         resetParamIfSet(res.mBasePercentageFee);
+        resetParamIfSet(res.mMaxFee);
         return res;
     }
 
@@ -344,6 +350,9 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
             resetParam(res.mBasePercentageFee, lu.newBasePercentageFee());
             break;
+        case LEDGER_UPGRADE_MAX_FEE:
+             resetParam(res.mMaxFee, lu.newMaxFee());
+             break;
         default:
             // skip unknown
             break;
@@ -367,8 +376,6 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
     }
 
     bool res = true;
-    std::cout<< "Upgrades::isValidForApply";
-    std::cout<< upgrade.type();
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
@@ -390,10 +397,11 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
         res = res && (upgrade.newBaseReserve() != 0);
         break;
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         std::cout<< "Upgrades::isValidForApply:LEDGER_UPGRADE_BASE_PERCENTAGE_FEE";
-         std::cout<< upgrade.newBasePercentageFee();
          res = res && (upgrade.newBasePercentageFee() != 0);
-    break;
+         break;
+    case LEDGER_UPGRADE_MAX_FEE:
+         res = res && (upgrade.newMaxFee() != 0);
+         break;
     default:
         res = false;
     }
@@ -425,10 +433,11 @@ Upgrades::isValidForNomination(LedgerUpgrade const& upgrade,
         return mParams.mBaseReserve &&
                (upgrade.newBaseReserve() == *mParams.mBaseReserve);
      case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-        std::cout<< "Upgrades::isValidForNomination:LEDGER_UPGRADE_BASE_PERCENTAGE_FEE";
          return mParams.mBasePercentageFee &&
                  (upgrade.newBasePercentageFee() == *mParams.mBasePercentageFee);
-        break;
+     case LEDGER_UPGRADE_MAX_FEE:
+         return mParams.mMaxFee &&
+                 (upgrade.newMaxFee() == *mParams.mMaxFee);
     default:
         return false;
     }

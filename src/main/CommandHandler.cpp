@@ -483,6 +483,8 @@ CommandHandler::upgrades(std::string const& params, std::string& retStr)
         p.mBaseReserve = parseOptionalParam<uint32>(retMap, "basereserve");
         p.mBasePercentageFee =
             parseOptionalParam<uint32>(retMap, "basepercentagefee");
+        p.mMaxFee =
+            parseOptionalParam<uint32>(retMap, "maxfee");
         p.mMaxTxSize = parseOptionalParam<uint32>(retMap, "maxtxsize");
         p.mProtocolVersion =
             parseOptionalParam<uint32>(retMap, "protocolversion");
