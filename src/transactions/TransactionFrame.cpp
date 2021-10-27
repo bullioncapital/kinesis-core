@@ -205,16 +205,6 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
 }
 #endif
 
-#ifdef _KINESIS
-int64_t
-TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
-                         bool applying) const
-{
-    // std::cout << "getFee(., baseFee=" << baseFee << ", applying: " << applying
-    //           << ")" << std::endl;
-    return getMinFee(header);
-}
-#else
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
@@ -238,7 +228,7 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
         return getFeeBid();
     }
 }
-#endif
+
 
 
 void
