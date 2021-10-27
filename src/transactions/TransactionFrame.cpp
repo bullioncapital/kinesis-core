@@ -193,6 +193,7 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
 //    LOG_DEBUG(DEFAULT_LOG, "* Kinesis * getMinFee() baseFee: {}, amount: {}, totalFee: {}",
 //        baseFee, totalAmount, totalFee
 //    );
+    totalFee=totalFee>header.maxFee?header.maxFee:totalFee;
     return totalFee;
 }
 #else
