@@ -45,7 +45,7 @@ class LedgerManager
     static const uint32_t GENESIS_LEDGER_MAX_TX_SIZE;
     static const uint32_t GENESIS_LEDGER_PERCENTAGE_FEE;
     static const int64_t GENESIS_LEDGER_TOTAL_COINS;
-    static const uint32_t GENESIS_LEDGER_MAX_FEE;
+    static const uint64_t GENESIS_LEDGER_MAX_FEE;
     enum State
     {
         // Loading state from database, not yet active
@@ -112,7 +112,7 @@ class LedgerManager
     // Return the fee required to apply a transaction to the current ledger.
     virtual uint32_t getLastTxFee() const = 0;
     virtual uint32_t getTxPercentageFee() const = 0;
-    virtual uint32_t getTxMaxFee() const = 0;
+    virtual uint64_t getMaxTxFee() const = 0;
     // return the maximum size of a transaction set to apply to the current
     // ledger
     virtual uint32_t getLastMaxTxSetSize() const = 0;

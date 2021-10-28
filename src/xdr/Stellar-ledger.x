@@ -70,7 +70,7 @@ struct LedgerHeader
 
     uint32 baseFee;     // base fee per operation in stroops
     uint32 basePercentageFee;     // base percentage fee per create account and payment operation, in basis points
-    uint32 maxFee;     // max fee  transactions like per create account and payment operation
+    uint64 maxFee;     // max fee  transactions like per create account and payment operation
     uint32 baseReserve; // account base reserve in stroops
 
     uint32 maxTxSetSize; // maximum size a transaction set can be
@@ -118,7 +118,7 @@ case LEDGER_UPGRADE_BASE_RESERVE:
 case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
     uint32 newBasePercentageFee; // update basePercentageFee
 case LEDGER_UPGRADE_MAX_FEE:
-    uint32 newMaxFee; // update maxFee
+    uint64 newMaxFee; // update maxFee
 };
 
 /* Entries used to define the bucket list */

@@ -81,7 +81,7 @@ const uint32_t LedgerManager::GENESIS_LEDGER_SEQ = 1;
 const uint32_t LedgerManager::GENESIS_LEDGER_VERSION = 0;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_FEE = 100;
 const uint32_t LedgerManager::GENESIS_LEDGER_PERCENTAGE_FEE = 45;
-const uint32_t LedgerManager::GENESIS_LEDGER_MAX_FEE = 250000000000;
+const uint64_t LedgerManager::GENESIS_LEDGER_MAX_FEE = 250000000000;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_RESERVE = 100000000;
 const uint32_t LedgerManager::GENESIS_LEDGER_MAX_TX_SIZE = 100;
 const int64_t LedgerManager::GENESIS_LEDGER_TOTAL_COINS = 1000000000000000000;
@@ -409,6 +409,12 @@ LedgerManagerImpl::getTxPercentageFee() const
     return mLastClosedLedger.header.basePercentageFee;
 }
 
+uint64_t
+LedgerManagerImpl::getMaxTxFee() const
+{
+    return mLastClosedLedger.header.maxFee;
+}
+
 LedgerHeaderHistoryEntry const&
 LedgerManagerImpl::getLastClosedLedgerHeader() const
 {
@@ -431,11 +437,6 @@ LedgerManagerImpl::getLastClosedLedgerNum() const
     return mLastClosedLedger.header.ledgerSeq;
 }
 
-uint32_t
-LedgerManagerImpl::getTxMaxFee() const
-{
-    return mLastClosedLedger.header.maxFee;
-}
 
 // called by txherder
 void

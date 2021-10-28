@@ -42,7 +42,7 @@ class Upgrades
              mBasePercentageFee =
                 std::make_optional<uint32>(cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE);
              mMaxFee =
-                std::make_optional<uint32>(cfg.TESTING_UPGRADE_DESIRED_MAX_FEE);
+                std::make_optional<uint64>(cfg.TESTING_UPGRADE_DESIRED_MAX_FEE);
             mMaxTxSize =
                 std::make_optional<uint32>(cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE);
             mBaseReserve =
