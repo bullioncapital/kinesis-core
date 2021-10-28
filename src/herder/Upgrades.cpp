@@ -272,21 +272,20 @@ Upgrades::toString() const
         }
     };
 
-     auto appendInfoUInt64 = [&](std::string const& s,
-                                    optional<uint64> const& o) {
+    auto appendInfoUInt64 = [&](std::string const& s,
+                              std::optional<uint64> const& o) {
             if (o)
-                   {
-                       if (first)
-                       {
-                           r << fmt::format(
-                               "upgradetime={}",
-                               VirtualClock::systemPointToISOString(mParams.mUpgradeTime));
-                           first = false;
-                       }
-                       r << fmt::format(", {}={}", s, *o);
-                   }
+            {
+                if (first)
+                {
+                    r << fmt::format(
+                        "upgradetime={}",
+                        VirtualClock::systemPointToISOString(mParams.mUpgradeTime));
+                    first = false;
+                }
+                r << fmt::format(", {}={}", s, *o);
+            }
         };
-
 
     appendInfo("protocolversion", mParams.mProtocolVersion);
     appendInfo("basefee", mParams.mBaseFee);
@@ -336,13 +335,14 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         }
     };
 
-    auto resetParamUInt64 = [&](optional<uint64>& o, uint64 v) {
-        if (o && *o == v)
-        {
-            o.reset();
-            updated = true;
-        }
-    };
+    auto resetParamUInt64 = [&](std::optional<uint64>& o, uint64 v) {
+            if (o && *o == v)
+            {
+                o.reset();
+                updated = true;
+            }
+        };
+
 
     for (auto it = beginUpdates; it != endUpdates; it++)
     {
