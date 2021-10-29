@@ -335,14 +335,6 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         }
     };
 
-    auto resetParamUInt64 = [&](std::optional<uint64>& o, uint64 v) {
-            if (o && *o == v)
-            {
-                o.reset();
-                updated = true;
-            }
-        };
-
 
     for (auto it = beginUpdates; it != endUpdates; it++)
     {
@@ -374,9 +366,6 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
             resetParam(res.mBasePercentageFee, lu.newBasePercentageFee());
             break;
-        case LEDGER_UPGRADE_MAX_FEE:
-             resetParamUInt64(res.mMaxFee, lu.newMaxFee());
-             break;
         default:
             // skip unknown
             break;
