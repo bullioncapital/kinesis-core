@@ -151,6 +151,7 @@ TransactionFrame::getFeeBid() const
                                                    : mEnvelope.v1().tx.fee;
 }
 
+
 #ifdef _KINESIS
 
 // kinesis implementation
@@ -170,7 +171,6 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     for (auto& op : mOperations)
     {
         auto operation = op->getOperation();
-        // std::cout << xdr::xdr_to_string(operation, "OPERATION");
         auto operationType = operation.body.type();
         if (operationType == CREATE_ACCOUNT)
         {
@@ -187,10 +187,13 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
         }
     }
 
-    accumulatedBasePercentageFee +=(int64_t)(totalAmount * basePercentageFeeRate);
+    accumulatedBasePercentageFee +=
+        (int64_t)(totalAmount * basePercentageFeeRate);
     int64_t totalFee = baseFee + accumulatedBasePercentageFee;
-    std::cout << "Amount: " << totalAmount << ", baseFee: " << baseFee
-              << ", totalFee: " << totalFee << std::endl;
+//    LOG_DEBUG(DEFAULT_LOG, "* Kinesis * getMinFee() baseFee: {}, amount: {}, totalFee: {}",
+//        baseFee, totalAmount, totalFee
+//    );
+    totalFee=totalFee>header.maxFee?header.maxFee:totalFee;
     return totalFee;
 }
 #else
@@ -202,15 +205,6 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
 }
 #endif
 
-#ifdef _KINESIS
-int64_t
-TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
-                         bool applying) const
-{
-    std::cout << "getFee(., baseFee=" << baseFee << ", applying: " << applying << ")" << std::endl;
-    return getMinFee(header);
-}
-#else
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
@@ -234,7 +228,8 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
         return getFeeBid();
     }
 }
-#endif
+
+
 
 void
 TransactionFrame::addSignature(SecretKey const& secretKey)

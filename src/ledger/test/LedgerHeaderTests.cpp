@@ -54,14 +54,12 @@ TEST_CASE("genesisledger", "[ledger]")
     REQUIRE(header.skipList[1] == Hash{});
     REQUIRE(header.skipList[2] == Hash{});
     REQUIRE(header.skipList[3] == Hash{});
-#ifdef _KINESIS
-    REQUIRE(header.basePercentageFee == 45);
-    REQUIRE(binToHex(lcl.hash) ==
-            "89dd86047fd5c18ce27ac31dbb53b1838ac2ce22d604bf39397431b1336c141d");
-#else
-    REQUIRE(binToHex(lcl.hash) ==
-            "caf73c70dde8134f792535756cc3212f65007883e8959adf92e48062f401e543");
-#endif
+   #ifdef _KINESIS
+       REQUIRE(header.basePercentageFee == 45);
+       REQUIRE(binToHex(lcl.hash) =="89dd86047fd5c18ce27ac31dbb53b1838ac2ce22d604bf39397431b1336c141d");
+   #else
+       REQUIRE(binToHex(lcl.hash) =="caf73c70dde8134f792535756cc3212f65007883e8959adf92e48062f401e543");
+    #endif
 }
 
 TEST_CASE("ledgerheader", "[ledger]")

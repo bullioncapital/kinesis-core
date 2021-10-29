@@ -26,6 +26,7 @@
 #include "util/types.h"
 
 #include <lib/catch.hpp>
+#include "util/XDRCereal.h"
 
 using namespace stellar;
 using namespace stellar::txtest;
@@ -242,9 +243,9 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
         // checks that the failure is the same if pre checks failed
         if (!check)
         {
-            if (tx->getResultCode() != txFAILED)
+            if (tx->getResultCode() != txFAILED)        
             {
-                REQUIRE(checkResult == tx->getResult());
+                 REQUIRE(checkResult == tx->getResult());
             }
             else
             {
@@ -530,8 +531,8 @@ getKinesisTrxFee(Application& app, const std::vector<Operation>& ops)
 {
     // int64_t bidFee = fee;
 
-    auto baseFee =
-        ((int64_t)app.getLedgerManager().getLastTxFee()) * std::max<int64_t>(1, ops.size());
+    auto baseFee = ((int64_t)app.getLedgerManager().getLastTxFee()) *
+                   std::max<int64_t>(1, ops.size());
 
     // apply base percentage fee
     // affect: create_account and payment ops
@@ -558,7 +559,8 @@ getKinesisTrxFee(Application& app, const std::vector<Operation>& ops)
         }
     }
 
-    accumulatedBasePercentageFee +=(int64_t)(totalAmount * basePercentageFeeRate);
+    accumulatedBasePercentageFee +=
+        (int64_t)(totalAmount * basePercentageFeeRate);
     int64_t totalFee = baseFee + accumulatedBasePercentageFee;
     return totalFee;
 }
@@ -570,16 +572,15 @@ transactionFromOperationsV0(Application& app, SecretKey const& from,
 {
     TransactionEnvelope e(ENVELOPE_TYPE_TX_V0);
     e.v0().tx.sourceAccountEd25519 = from.getPublicKey().ed25519();
-#ifdef _KINESIS
-    e.v1().tx.fee = getKinesisTrxFee(app, ops);
-#else
-    e.v0().tx.fee =
-        fee != 0 ? fee
-                 : static_cast<uint32_t>(
-                       (ops.size() * app.getLedgerManager().getLastTxFee()) &
-                       UINT32_MAX);
-#endif
-    std::cout << "bidFee: " << e.v1().tx.fee << std::endl;
+    #ifdef _KINESIS
+        e.v0().tx.fee = getKinesisTrxFee(app, ops);
+    #else
+        e.v0().tx.fee =
+            fee != 0 ? fee
+                     : static_cast<uint32_t>(
+                           (ops.size() * app.getLedgerManager().getLastTxFee()) &
+                           UINT32_MAX);
+    #endif
     e.v0().tx.seqNum = seq;
     std::copy(std::begin(ops), std::end(ops),
               std::back_inserter(e.v0().tx.operations));
@@ -597,16 +598,15 @@ transactionFromOperationsV1(Application& app, SecretKey const& from,
 {
     TransactionEnvelope e(ENVELOPE_TYPE_TX);
     e.v1().tx.sourceAccount = toMuxedAccount(from.getPublicKey());
-#ifdef _KINESIS
-    e.v1().tx.fee = getKinesisTrxFee(app, ops);
-#else
-    e.v1().tx.fee =
-        fee != 0 ? fee
-                 : static_cast<uint32_t>(
-                       (ops.size() * app.getLedgerManager().getLastTxFee()) &
-                       UINT32_MAX);
-#endif
-    std::cout << "bidFee: " << e.v1().tx.fee << std::endl;
+   #ifdef _KINESIS
+       e.v1().tx.fee = getKinesisTrxFee(app, ops);
+   #else
+       e.v1().tx.fee =
+           fee != 0 ? fee
+                    : static_cast<uint32_t>(
+                          (ops.size() * app.getLedgerManager().getLastTxFee()) &
+                          UINT32_MAX);
+   #endif
     e.v1().tx.seqNum = seq;
     std::copy(std::begin(ops), std::end(ops),
               std::back_inserter(e.v1().tx.operations));

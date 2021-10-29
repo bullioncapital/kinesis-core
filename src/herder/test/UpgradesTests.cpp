@@ -1154,9 +1154,10 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
                         offers.push_back({offer.key, afterUpgrade});
                     }
                 };
-
+            auto startingBalance =lm.getLastMinBalance(10) + 2000 + 12 * txFee;
+            auto additionalFund = txFee + (startingBalance * 0.0045) +startingBalance;
             auto a1 =
-                root.create("A", lm.getLastMinBalance(10) + 2000 + 12 * txFee);
+                root.create("A", additionalFund);
             a1.changeTrust(cur1, 5125);
             a1.changeTrust(cur2, 5125);
             issuer.pay(a1, cur1, 2050);
@@ -1291,8 +1292,9 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
 
         SECTION("unauthorized offers still contribute liabilities")
         {
-            auto a1 =
-                root.create("A", lm.getLastMinBalance(10) + 2000 + 10 * txFee);
+            auto startingBalance =lm.getLastMinBalance(10) + 2000 + 10 * txFee;
+            auto additionalFund = txFee + (startingBalance * 0.0045) +startingBalance;
+            auto a1 = root.create("A", startingBalance);
             a1.changeTrust(cur1, 6000);
             a1.changeTrust(cur2, 6000);
             issuer.allowTrust(cur1, a1);
@@ -2345,6 +2347,10 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     },
     "reserve": {
         "has": false
+    },
+    "percentagefee": {
+        "has": false,
+        "value": 45
     }
 })";
     Upgrades::UpgradeParameters up;
@@ -2356,4 +2362,5 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     REQUIRE(up.mMaxTxSize.has_value());
     REQUIRE(up.mMaxTxSize.value() == 10000);
     REQUIRE(!up.mBaseReserve.has_value());
+    REQUIRE(!up.mBasePercentageFee.has_value());
 }

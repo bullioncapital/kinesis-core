@@ -432,6 +432,7 @@ ApplicationImpl::getJsonInfo()
     info["ledger"]["version"] = lcl.header.ledgerVersion;
     info["ledger"]["baseFee"] = lcl.header.baseFee;
     info["ledger"]["basePercentageFee"] = lcl.header.basePercentageFee;
+    info["ledger"]["maxFee"] = (Json::UInt64)lcl.header.maxFee;
     info["ledger"]["baseReserve"] = lcl.header.baseReserve;
     info["ledger"]["maxTxSetSize"] = lcl.header.maxTxSetSize;
     info["ledger"]["age"] = (int)lm.secondsSinceLastLedgerClose();

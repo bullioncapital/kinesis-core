@@ -144,8 +144,12 @@ TEST_CASE("create account", "[tx][createaccount]")
 
             REQUIRE_THROWS_AS(acc1.create("acc2", minBal0 + 1),
                               ex_CREATE_ACCOUNT_UNDERFUNDED);
-            root.pay(acc1, txfee);
-            acc1.create("acc2", minBal0);
+            #ifdef _KINESIS
+                root.pay(acc1, txfee + (minBal0 * 0.0045) + (minBal0 - acc1.getAvailableBalance()));
+            #else
+                root.pay(acc1, txfee);
+            #endif
+                acc1.create("acc2", minBal0);
         });
     }
 
@@ -164,7 +168,14 @@ TEST_CASE("create account", "[tx][createaccount]")
                 return market.addOffer(acc1, {cur1, native, Price{1, 1}, 500});
             });
 
-            acc1.create("acc2", minBal0 + 500);
+            #ifdef _KINESIS
+                auto startingBalance = minBal0 + 500;
+                auto additionalFund = txfee + (startingBalance * 0.0045) + (startingBalance - acc1.getAvailableBalance());
+                root.pay(acc1, additionalFund);
+                acc1.create("acc2", startingBalance);
+            #else
+                acc1.create("acc2", minBal0 + 500);
+                #endif
         });
     }
 
