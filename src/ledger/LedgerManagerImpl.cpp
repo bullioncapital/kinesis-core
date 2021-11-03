@@ -80,6 +80,8 @@ namespace stellar
 const uint32_t LedgerManager::GENESIS_LEDGER_SEQ = 1;
 const uint32_t LedgerManager::GENESIS_LEDGER_VERSION = 0;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_FEE = 100;
+const uint32_t LedgerManager::GENESIS_LEDGER_PERCENTAGE_FEE = 45;
+const uint64_t LedgerManager::GENESIS_LEDGER_MAX_FEE = 250000000000;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_RESERVE = 100000000;
 const uint32_t LedgerManager::GENESIS_LEDGER_MAX_TX_SIZE = 100;
 const int64_t LedgerManager::GENESIS_LEDGER_TOTAL_COINS = 1000000000000000000;
@@ -200,6 +202,8 @@ LedgerManager::genesisLedger()
     // set the ones that are not 0
     result.ledgerVersion = GENESIS_LEDGER_VERSION;
     result.baseFee = GENESIS_LEDGER_BASE_FEE;
+    result.basePercentageFee = GENESIS_LEDGER_PERCENTAGE_FEE;
+    result.maxFee = GENESIS_LEDGER_MAX_FEE;
     result.baseReserve = GENESIS_LEDGER_BASE_RESERVE;
     result.maxTxSetSize = GENESIS_LEDGER_MAX_TX_SIZE;
     result.totalCoins = GENESIS_LEDGER_TOTAL_COINS;
@@ -241,8 +245,10 @@ LedgerManagerImpl::startNewLedger()
     {
         ledger.ledgerVersion = cfg.LEDGER_PROTOCOL_VERSION;
         ledger.baseFee = cfg.TESTING_UPGRADE_DESIRED_FEE;
+        ledger.basePercentageFee = cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE;
         ledger.baseReserve = cfg.TESTING_UPGRADE_RESERVE;
         ledger.maxTxSetSize = cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE;
+        ledger.maxFee = cfg.TESTING_UPGRADE_DESIRED_MAX_FEE;
     }
 
     startNewLedger(ledger);
@@ -397,6 +403,18 @@ LedgerManagerImpl::getLastTxFee() const
     return mLastClosedLedger.header.baseFee;
 }
 
+uint32_t
+LedgerManagerImpl::getTxPercentageFee() const
+{
+    return mLastClosedLedger.header.basePercentageFee;
+}
+
+uint64_t
+LedgerManagerImpl::getMaxTxFee() const
+{
+    return mLastClosedLedger.header.maxFee;
+}
+
 LedgerHeaderHistoryEntry const&
 LedgerManagerImpl::getLastClosedLedgerHeader() const
 {
@@ -418,6 +436,7 @@ LedgerManagerImpl::getLastClosedLedgerNum() const
 {
     return mLastClosedLedger.header.ledgerSeq;
 }
+
 
 // called by txherder
 void

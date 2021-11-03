@@ -3,13 +3,13 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "transactions/InflationOpFrame.h"
+#include "crypto/SHA.h"
 #include "ledger/LedgerManager.h"
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/LedgerTxnHeader.h"
 #include "main/Application.h"
 #include "overlay/StellarXDR.h"
-#include "crypto/SHA.h"
 #include "transactions/TransactionUtils.h"
 
 const uint32_t INFLATION_FREQUENCY = (60 * 60 * 24 * 7); // every 7 days
@@ -39,7 +39,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 
     auto inflationAmount = 0;
     auto amountToDole = inflationAmount + lh.feePool;
-
     lh.feePool = 0;
     lh.inflationSeq++;
 
