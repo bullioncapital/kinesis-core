@@ -31,7 +31,7 @@ ENV CONFIGURE_FLAGS=''
 
 RUN ./autogen.sh
 RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
-#RUN make check -j2
+RUN make -j2
 RUN sudo make install
 
 # replace stellar-core
