@@ -52,7 +52,7 @@ class Upgrades
         std::optional<uint32> mProtocolVersion;
         std::optional<uint32> mBaseFee;
         std::optional<uint32> mBasePercentageFee;
-        std::optional<uint32> mMaxFee;
+        std::optional<uint64> mMaxFee;
         std::optional<uint32> mMaxTxSize;
         std::optional<uint32> mBaseReserve;
 

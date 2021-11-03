@@ -258,8 +258,7 @@ Upgrades::toString() const
     std::stringstream r;
     bool first = true;
 
-    auto appendInfo = [&](std::string const& s,
-                          std::optional<uint32> const& o) {
+    auto appendInfo = [&](std::string const& s, auto const& o) {
         if (o)
         {
             if (first)
@@ -273,26 +272,11 @@ Upgrades::toString() const
         }
     };
 
-    auto appendInfoUInt64 = [&](std::string const& s,
-                              std::optional<uint64> const& o) {
-            if (o)
-            {
-                if (first)
-                {
-                    r << fmt::format(
-                        "upgradetime={}",
-                        VirtualClock::systemPointToISOString(mParams.mUpgradeTime));
-                    first = false;
-                }
-                r << fmt::format(", {}={}", s, *o);
-            }
-        };
-
     appendInfo("protocolversion", mParams.mProtocolVersion);
     appendInfo("basefee", mParams.mBaseFee);
     appendInfo("basereserve", mParams.mBaseReserve);
     appendInfo("basepercentagefee", mParams.mBasePercentageFee);
-    appendInfoUInt64("maxfee", mParams.mMaxFee);
+    appendInfo("maxfee", mParams.mMaxFee);
     appendInfo("maxtxsize", mParams.mMaxTxSize);
 
     return r.str();
@@ -312,7 +296,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
     if (res.mUpgradeTime + Upgrades::UPDGRADE_EXPIRATION_HOURS <=
         VirtualClock::from_time_t(closeTime))
     {
-        auto resetParamIfSet = [&](std::optional<uint32>& o) {
+        auto resetParamIfSet = [&](auto& o) {
             if (o)
             {
                 o.reset();
@@ -325,25 +309,17 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         resetParamIfSet(res.mMaxTxSize);
         resetParamIfSet(res.mBaseReserve);
         resetParamIfSet(res.mBasePercentageFee);
+        resetParamIfSet(res.mMaxFee);
         return res;
     }
 
-    auto resetParam = [&](std::optional<uint32>& o, uint32 v) {
+    auto resetParam = [&](auto& o, auto v) {
         if (o && *o == v)
         {
             o.reset();
             updated = true;
         }
     };
-
-    auto resetParamUInt64 = [&](std::optional<uint64>& o, uint64 v) {
-            if (o && *o == v)
-            {
-                o.reset();
-                updated = true;
-            }
-        };
-
 
     for (auto it = beginUpdates; it != endUpdates; it++)
     {
@@ -376,7 +352,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
             resetParam(res.mBasePercentageFee, lu.newBasePercentageFee());
             break;
         case LEDGER_UPGRADE_MAX_FEE:
-             resetParamUInt64(res.mMaxFee, lu.newMaxFee());
+             resetParam(res.mMaxFee, lu.newMaxFee());
              break;
         default:
             // skip unknown

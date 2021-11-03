@@ -259,6 +259,7 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 50;
     cfg.TESTING_UPGRADE_RESERVE = 100000000;
     cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE = 45;
+    cfg.TESTING_UPGRADE_DESIRED_MAX_FEE = 250000000000;
     cfg.TESTING_UPGRADE_DATETIME = preferredUpgradeDatetime;
 
     auto header = LedgerHeader{};
@@ -267,6 +268,7 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
     header.baseReserve = cfg.TESTING_UPGRADE_RESERVE;
     header.maxTxSetSize = cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE;
     header.basePercentageFee = cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE;
+    header.maxFee = cfg.TESTING_UPGRADE_DESIRED_MAX_FEE;
     header.scpValue.closeTime = VirtualClock::to_time_t(genesis(0, 0));
 
     auto protocolVersionUpgrade =
@@ -2351,6 +2353,9 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     "percentagefee": {
         "has": false,
         "value": 45
+    },
+    "maxfee": {
+        "has": false
     }
 })";
     Upgrades::UpgradeParameters up;
@@ -2363,4 +2368,5 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     REQUIRE(up.mMaxTxSize.value() == 10000);
     REQUIRE(!up.mBaseReserve.has_value());
     REQUIRE(!up.mBasePercentageFee.has_value());
+    REQUIRE(!up.mMaxFee.has_value());
 }
