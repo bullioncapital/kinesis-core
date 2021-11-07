@@ -184,7 +184,7 @@ FeeBumpTransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx)
         getResult().result.code(txNOT_SUPPORTED);
         return false;
     }
-    std::cout << "\n  FeeBumpTransactionFrame::commonValidPreSeqNum ====== " << getFeeBid();
+    // std::cout << "\n  FeeBumpTransactionFrame::commonValidPreSeqNum ====== " << getFeeBid();
     if (getFeeBid() < getMinFee(header.current()))
     {
         getResult().result.code(txINSUFFICIENT_FEE);
