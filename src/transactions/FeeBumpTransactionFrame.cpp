@@ -265,11 +265,21 @@ FeeBumpTransactionFrame::getFeeBid() const
     return mEnvelope.feeBump().tx.fee;
 }
 
+#ifndef _KINESIS
+int64_t
+FeeBumpTransactionFrame::getMinFee(LedgerHeader const& header) const
+{
+    auto innerTxMinFee = mInnerTx->getMinFee(header);
+    auto feeBumpMinFee = ((int64_t)header.baseFee) + innerTxMinFee;
+    return feeBumpMinFee;
+}
+#else
 int64_t
 FeeBumpTransactionFrame::getMinFee(LedgerHeader const& header) const
 {
     return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
 }
+#endif
 
 int64_t
 FeeBumpTransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
