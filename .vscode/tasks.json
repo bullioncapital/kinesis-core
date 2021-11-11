@@ -1,0 +1,11 @@
+{
+    "tasks": [
+        {
+            "label": "Clang++-10 build",
+            "type": "shell",
+            "command": "",
+            "args": ["make", "-j6"]
+        }
+    ],
+    "version": "2.0.0"
+}
