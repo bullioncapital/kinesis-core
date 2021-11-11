@@ -65,7 +65,7 @@ RUN apt-get -y install libstdc++-8-dev clang-format-10 ccache
 # gcc
 RUN apt-get -y install cpp-8 gcc-8 g++-8
 # clang
-RUN apt-get -y install clang-10 llvm-10
+RUN apt-get -y install clang-10 llvm-10 lldb-10
 
 # clang by default
 ENV CC=clang-10
