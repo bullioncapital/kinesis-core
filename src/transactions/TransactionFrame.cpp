@@ -363,7 +363,7 @@ TransactionFrame::resetResults(LedgerHeader const& header, int64_t baseFee,
         xdr_to_string(getFullHash(), "fullHash"),
         feeCharged, ops.size(), baseFee, applying
     );
-    getResult().feeCharged = feeCharged
+    getResult().feeCharged = feeCharged;
 }
 
 bool

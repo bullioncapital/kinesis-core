@@ -16,6 +16,8 @@
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
+#include "util/Logging.h"
+#include "util/XDRCereal.h"
 #include "xdrpp/marshal.h"
 
 #include <numeric>
