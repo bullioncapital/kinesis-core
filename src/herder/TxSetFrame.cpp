@@ -517,6 +517,7 @@ TxSetFrame::getBaseFee(LedgerHeader const& lh) const
             baseFee = lowBaseFee;
         }
     }
+    CLOG_DEBUG(Tx, "TxSetFrame::getBaseFee() - baseFee: {}", baseFee);
     return baseFee;
 }
 
@@ -525,11 +526,13 @@ TxSetFrame::getTotalFees(LedgerHeader const& lh) const
 {
     ZoneScoped;
     auto baseFee = getBaseFee(lh);
-    return std::accumulate(mTransactions.begin(), mTransactions.end(),
+    auto totalFee = std::accumulate(mTransactions.begin(), mTransactions.end(),
                            int64_t(0),
                            [&](int64_t t, TransactionFrameBasePtr const& tx) {
                                return t + tx->getFee(lh, baseFee, true);
                            });
+    CLOG_DEBUG(Tx, "TxSetFrame::getTotalFees() - totalFee: {}", totalFee);
+    return totalFee;
 }
 
 void

@@ -287,8 +287,8 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
         auto expected = shouldListAny
                             ? std::vector<LedgerUpgrade>{protocolVersionUpgrade}
                             : std::vector<LedgerUpgrade>{};
-        std::cout << xdr_to_string(upgrades, "upgrades.....");
-        std::cout << xdr_to_string(expected, "expected.....");
+        // std::cout << xdr_to_string(upgrades, "upgrades.....");
+        // std::cout << xdr_to_string(expected, "expected.....");
         REQUIRE(upgrades == expected);
     }
 

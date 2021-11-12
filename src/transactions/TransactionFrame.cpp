@@ -358,7 +358,12 @@ TransactionFrame::resetResults(LedgerHeader const& header, int64_t baseFee,
 
     // feeCharged is updated accordingly to represent the cost of the
     // transaction regardless of the failure modes.
-    getResult().feeCharged = getFee(header, baseFee, applying);
+    auto feeCharged = getFee(header, baseFee, applying);
+    CLOG_DEBUG(Tx, "{} Fee charged: {}, ops: {}, baseFee: {}, applying: {}",
+        xdr_to_string(getFullHash(), "fullHash"),
+        feeCharged, ops.size(), baseFee, applying
+    );
+    getResult().feeCharged = feeCharged
 }
 
 bool
