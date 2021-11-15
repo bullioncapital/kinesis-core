@@ -290,6 +290,7 @@ int64_t
 FeeBumpTransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                                 bool applying) const
 {
+    CLOG_DEBUG(Tx, "**Kinesis** FeeBumpTransactionFrame::getFee() - called, baseFee: {}", baseFee);
     int64_t adjustedFee = baseFee * std::max<int64_t>(1, getNumOperations());
     if (applying)
     {

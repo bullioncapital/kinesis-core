@@ -147,8 +147,10 @@ TransactionFrame::getNumOperations() const
 int64_t
 TransactionFrame::getFeeBid() const
 {
-    return mEnvelope.type() == ENVELOPE_TYPE_TX_V0 ? mEnvelope.v0().tx.fee
+    auto feeBid = mEnvelope.type() == ENVELOPE_TYPE_TX_V0 ? mEnvelope.v0().tx.fee
                                                    : mEnvelope.v1().tx.fee;
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getFeeBid() - feeBid: {}", feeBid);
+    return feeBid;
 }
 
 
@@ -206,13 +208,23 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
 }
 #endif
 
+#ifdef _KINESIS
+int64_t
+TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
+                         bool applying) const
+{
+    auto feeBid = getFeeBid();
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getFee() - feeBid: {}, baseFee: {}", feeBid, baseFee);
+    return baseFee;
+}
+#else
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
 {
     if (header.ledgerVersion >= 11 || !applying)
     {
-        int64_t adjustedFee =
+       int64_t adjustedFee =
             baseFee * std::max<int64_t>(1, getNumOperations());
 
         if (applying)
@@ -229,7 +241,7 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
         return getFeeBid();
     }
 }
-
+#endif
 
 
 void
@@ -359,8 +371,7 @@ TransactionFrame::resetResults(LedgerHeader const& header, int64_t baseFee,
     // feeCharged is updated accordingly to represent the cost of the
     // transaction regardless of the failure modes.
     auto feeCharged = getFee(header, baseFee, applying);
-    CLOG_DEBUG(Tx, "{} Fee charged: {}, ops: {}, baseFee: {}, applying: {}",
-        xdr_to_string(getFullHash(), "fullHash"),
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::resetResults() Fee charged: {}, ops: {}, baseFee: {}, applying: {}",
         feeCharged, ops.size(), baseFee, applying
     );
     getResult().feeCharged = feeCharged;
@@ -611,6 +622,8 @@ TransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx, int64_t baseFee)
 {
     ZoneScoped;
     mCachedAccount.reset();
+
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::processFeeSeqNum() - baseFee: {}", baseFee);
 
     auto header = ltx.loadHeader();
     resetResults(header.current(), baseFee, true);
