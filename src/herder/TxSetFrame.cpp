@@ -519,7 +519,8 @@ TxSetFrame::getBaseFee(LedgerHeader const& lh) const
             baseFee = lowBaseFee;
         }
     }
-    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - LH.baseFee: {}, baseFee: {}", lh.baseFee, baseFee);
+    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - LH.baseFee: {}, baseFee: {}",
+        lh.baseFee, baseFee);
     return baseFee;
 }
 
@@ -533,7 +534,8 @@ TxSetFrame::getTotalFees(LedgerHeader const& lh) const
                            [&](int64_t t, TransactionFrameBasePtr const& tx) {
                                return t + tx->getFee(lh, baseFee, true);
                            });
-    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getTotalFees() - totalFee: {}", totalFee);
+    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getTotalFees() - baseFee: {}, totalFee: {}",
+        baseFee, totalFee);
     return totalFee;
 }
 

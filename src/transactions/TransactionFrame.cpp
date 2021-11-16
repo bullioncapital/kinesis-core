@@ -30,6 +30,7 @@
 #include "util/Logging.h"
 #include "util/XDROperators.h"
 #include "util/XDRStream.h"
+#include "util/XDRCereal.h"
 #include "xdrpp/marshal.h"
 #include "xdrpp/printer.h"
 #include <Tracy.hpp>
@@ -192,9 +193,9 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     accumulatedBasePercentageFee +=
         (int64_t)(totalAmount * basePercentageFeeRate);
     int64_t totalFee = baseFee + accumulatedBasePercentageFee;
-//    LOG_DEBUG(DEFAULT_LOG, "* Kinesis * getMinFee() baseFee: {}, amount: {}, totalFee: {}",
-//        baseFee, totalAmount, totalFee
-//    );
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getMinFee() - header.baseFee: {}, baseFee: {}, amount: {}, totalFee: {}",
+       header.baseFee, baseFee, totalAmount, totalFee
+    );
     int64_t headerMaxFee=(int64_t)header.maxFee;
     totalFee=totalFee>headerMaxFee?headerMaxFee:totalFee;
     return totalFee;
@@ -208,16 +209,6 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
 }
 #endif
 
-#ifdef _KINESIS
-int64_t
-TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
-                         bool applying) const
-{
-    auto feeBid = getFeeBid();
-    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getFee() - feeBid: {}, baseFee: {}", feeBid, baseFee);
-    return baseFee;
-}
-#else
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
@@ -241,7 +232,6 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
         return getFeeBid();
     }
 }
-#endif
 
 
 void
