@@ -37,6 +37,8 @@ RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}
 RUN make -j2
 RUN sudo make install
 
+WORKDIR /stellar-core/src
+
 # replace stellar-core
 FROM ${STELLAR_CORE_IMAGE}
 
