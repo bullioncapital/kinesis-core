@@ -1,8 +1,8 @@
 #!/bin/bash
 export CC=clang-10
 export CXX=clang++-10
-export CFLAGS='-O3 -g -fno-omit-frame-pointer'
-export CXXFLAGS='-w -O3 -g -D_KINESIS'
+export CFLAGS='-O3 -glldb -fno-omit-frame-pointer'
+export CXXFLAGS='-w -O3 -glldb -D_KINESIS'
 export CONFIGURE_FLAGS=''
 
 ./autogen.sh
