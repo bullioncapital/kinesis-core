@@ -27,15 +27,26 @@ InflationOpFrame::InflationOpFrame(Operation const& op, OperationResult& res,
     : OperationFrame(op, res, parentTx)
 {
 }
+
 #ifdef _KINESIS
 
 bool
-InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
+InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
 {
     auto header = ltx.loadHeader();
     auto& lh = header.current();
     time_t closeTime = lh.scpValue.closeTime;
     uint64_t seq = lh.inflationSeq;
+
+    time_t inflationTime = (INFLATION_START_TIME + seq * INFLATION_FREQUENCY);
+    if (closeTime < inflationTime)
+    {
+        app.getMetrics()
+            .NewMeter({"op-inflation", "failure", "not-time"}, "operation")
+            .Mark();
+        innerResult().code(INFLATION_NOT_TIME);
+        return false;
+    }
 
     auto inflationAmount = 0;
     auto amountToDole = inflationAmount + lh.feePool;
@@ -46,7 +57,7 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
     innerResult().code(INFLATION_SUCCESS);
     auto& payouts = innerResult().payouts();
 
-    Hash seed = sha256("feepool");
+    Hash seed = sha256(app.getConfig().NETWORK_PASSPHRASE + "feepool");
     SecretKey feeKey = SecretKey::fromSeed(seed);
     AccountID feeDestination = feeKey.getPublicKey();
 
@@ -67,7 +78,7 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
     return true;
 }
 
-#else
+#endif
 
 bool
 InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
@@ -157,8 +168,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 
     return true;
 }
-
-#endif
 
 bool
 InflationOpFrame::doCheckValid(uint32_t ledgerVersion)
