@@ -41,9 +41,6 @@ InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
     time_t inflationTime = (INFLATION_START_TIME + seq * INFLATION_FREQUENCY);
     if (closeTime < inflationTime)
     {
-        app.getMetrics()
-            .NewMeter({"op-inflation", "failure", "not-time"}, "operation")
-            .Mark();
         innerResult().code(INFLATION_NOT_TIME);
         return false;
     }
