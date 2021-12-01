@@ -808,7 +808,7 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
         {
             auto time = opTimer.TimeScope();
             LedgerTxn ltxOp(ltxTx);
-            bool txRes = op->apply(signatureChecker, ltxOp);
+            bool txRes = op->apply(app, signatureChecker, ltxOp);
 
             if (!txRes)
             {
