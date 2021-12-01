@@ -342,11 +342,8 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
 void
 checkTransaction(TransactionFrame& txFrame, Application& app)
 {
-#ifndef _KINESIS
-    // KINESIS apply base percentage fee on top of baseFee
     REQUIRE(txFrame.getResult().feeCharged ==
             app.getLedgerManager().getLastTxFee());
-#endif
     REQUIRE((txFrame.getResultCode() == txSUCCESS ||
              txFrame.getResultCode() == txFAILED));
 }
@@ -526,45 +523,6 @@ getAccountSigners(PublicKey const& k, Application& app)
     return account.current().data.account().signers;
 }
 
-int64_t
-getKinesisTrxFee(Application& app, const std::vector<Operation>& ops)
-{
-    // int64_t bidFee = fee;
-
-    auto baseFee = ((int64_t)app.getLedgerManager().getLastTxFee()) *
-                   std::max<int64_t>(1, ops.size());
-
-    // apply base percentage fee
-    // affect: create_account and payment ops
-    int64_t accumulatedBasePercentageFee = 0;
-    double basePercentageFeeRate =
-        (double)app.getLedgerManager().getTxPercentageFee() / (double)10000;
-
-    int64_t totalAmount = 0;
-    for (auto& operation : ops)
-    {
-        auto operationType = operation.body.type();
-        if (operationType == CREATE_ACCOUNT)
-        {
-            totalAmount += operation.body.createAccountOp().startingBalance;
-        }
-        else if (operationType == PAYMENT)
-        {
-            int8_t assetType =
-                operation.body.paymentOp().asset.type(); // 0 is native
-            if (assetType == 0)
-            {
-                totalAmount += operation.body.paymentOp().amount;
-            }
-        }
-    }
-
-    accumulatedBasePercentageFee +=
-        (int64_t)(totalAmount * basePercentageFeeRate);
-    int64_t totalFee = baseFee + accumulatedBasePercentageFee;
-    return totalFee;
-}
-
 TransactionFramePtr
 transactionFromOperationsV0(Application& app, SecretKey const& from,
                             SequenceNumber seq,
@@ -572,15 +530,12 @@ transactionFromOperationsV0(Application& app, SecretKey const& from,
 {
     TransactionEnvelope e(ENVELOPE_TYPE_TX_V0);
     e.v0().tx.sourceAccountEd25519 = from.getPublicKey().ed25519();
-    #ifdef _KINESIS
-        e.v0().tx.fee = getKinesisTrxFee(app, ops);
-    #else
-        e.v0().tx.fee =
-            fee != 0 ? fee
-                     : static_cast<uint32_t>(
-                           (ops.size() * app.getLedgerManager().getLastTxFee()) &
-                           UINT32_MAX);
-    #endif
+    e.v0().tx.fee =
+        fee != 0 ? fee
+                    : static_cast<uint32_t>(
+                        (ops.size() * app.getLedgerManager().getLastTxFee()) &
+                        UINT32_MAX);
+
     e.v0().tx.seqNum = seq;
     std::copy(std::begin(ops), std::end(ops),
               std::back_inserter(e.v0().tx.operations));
@@ -598,15 +553,11 @@ transactionFromOperationsV1(Application& app, SecretKey const& from,
 {
     TransactionEnvelope e(ENVELOPE_TYPE_TX);
     e.v1().tx.sourceAccount = toMuxedAccount(from.getPublicKey());
-   #ifdef _KINESIS
-       e.v1().tx.fee = getKinesisTrxFee(app, ops);
-   #else
-       e.v1().tx.fee =
-           fee != 0 ? fee
-                    : static_cast<uint32_t>(
-                          (ops.size() * app.getLedgerManager().getLastTxFee()) &
-                          UINT32_MAX);
-   #endif
+    e.v1().tx.fee =
+        fee != 0 ? fee
+                : static_cast<uint32_t>(
+                        (ops.size() * app.getLedgerManager().getLastTxFee()) &
+                        UINT32_MAX);
     e.v1().tx.seqNum = seq;
     std::copy(std::begin(ops), std::end(ops),
               std::back_inserter(e.v1().tx.operations));

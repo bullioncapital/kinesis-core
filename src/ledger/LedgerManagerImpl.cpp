@@ -80,7 +80,7 @@ namespace stellar
 const uint32_t LedgerManager::GENESIS_LEDGER_SEQ = 1;
 const uint32_t LedgerManager::GENESIS_LEDGER_VERSION = 0;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_FEE = 100;
-const uint32_t LedgerManager::GENESIS_LEDGER_PERCENTAGE_FEE = 45;
+const uint32_t LedgerManager::GENESIS_LEDGER_PERCENTAGE_FEE = 0;
 const uint64_t LedgerManager::GENESIS_LEDGER_MAX_FEE = 250000000000;
 const uint32_t LedgerManager::GENESIS_LEDGER_BASE_RESERVE = 100000000;
 const uint32_t LedgerManager::GENESIS_LEDGER_MAX_TX_SIZE = 100;
