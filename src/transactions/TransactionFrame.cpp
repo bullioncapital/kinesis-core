@@ -168,7 +168,7 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     // affect: create_account and payment ops
     int64_t accumulatedBasePercentageFee = 0;
     double basePercentageFeeRate =
-        (double)header.basePercentageFee / (double)10000;
+        (double)header.basePercentageFee / (double)BASIS_POINTS_TO_PERCENT;
 
     int64_t totalAmount = 0;
     for (auto& op : mOperations)
