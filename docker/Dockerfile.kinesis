@@ -43,5 +43,7 @@ WORKDIR /stellar-core/src
 FROM ${STELLAR_CORE_IMAGE}
 
 RUN apt-get update && apt-get upgrade -y
+# utils
+RUN apt-get install jq -y && apt-get autoclean
 
 COPY --from=buildstage /usr/local/bin/stellar-core /usr/bin/stellar-core
