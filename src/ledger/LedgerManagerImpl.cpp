@@ -731,6 +731,7 @@ LedgerManagerImpl::closeLedger(LedgerCloseData const& ledgerData)
     if (ledgerData.getExpectedHash() &&
         *ledgerData.getExpectedHash() != mLastClosedLedger.hash)
     {
+        CLOG_TRACE(Ledger, "Expected Ledger Hash: {} vs Actual Ledger Hash: {}", *ledgerData.getExpectedHash(), mLastClosedLedger.hash);
         throw std::runtime_error("Local node's ledger corrupted during close");
     }
 
