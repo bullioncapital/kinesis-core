@@ -45,8 +45,7 @@ InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
         return false;
     }
 
-    auto inflationAmount = 0;
-    auto amountToDole = inflationAmount + lh.feePool;
+    auto amountToDole = lh.feePool;
     lh.feePool = 0;
     lh.inflationSeq++;
 
@@ -61,16 +60,14 @@ InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
     int64 toDoleThisWinner = amountToDole;
     int64 leftAfterDole = amountToDole;
     auto winner = stellar::loadAccount(ltx, feeDestination);
-    leftAfterDole -= toDoleThisWinner;
-    addBalance(header, winner, toDoleThisWinner);
-    payouts.emplace_back(feeDestination, toDoleThisWinner);
+    if (winner) {
+        leftAfterDole -= toDoleThisWinner;
+        addBalance(header, winner, toDoleThisWinner);
+        payouts.emplace_back(feeDestination, toDoleThisWinner);
+    }
 
     // put back in fee pool as unclaimed funds
     lh.feePool += leftAfterDole;
-    if (lh.ledgerVersion > 7)
-    {
-        lh.totalCoins += inflationAmount;
-    }
 
     return true;
 }
