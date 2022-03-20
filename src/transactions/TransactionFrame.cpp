@@ -30,6 +30,7 @@
 #include "util/Logging.h"
 #include "util/XDROperators.h"
 #include "util/XDRStream.h"
+#include "util/XDRCereal.h"
 #include "xdrpp/marshal.h"
 #include "xdrpp/printer.h"
 #include <Tracy.hpp>
@@ -147,15 +148,66 @@ TransactionFrame::getNumOperations() const
 int64_t
 TransactionFrame::getFeeBid() const
 {
-    return mEnvelope.type() == ENVELOPE_TYPE_TX_V0 ? mEnvelope.v0().tx.fee
+    auto feeBid = mEnvelope.type() == ENVELOPE_TYPE_TX_V0 ? mEnvelope.v0().tx.fee
                                                    : mEnvelope.v1().tx.fee;
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getFeeBid() - feeBid: {}", feeBid);
+    return feeBid;
 }
 
+
+#ifdef _KINESIS
+
+// kinesis implementation
+int64_t
+TransactionFrame::getMinFee(LedgerHeader const& header) const
+{
+    auto baseFee =
+        ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+
+    // apply base percentage fee
+    // affect: create_account and payment ops
+    int64_t accumulatedBasePercentageFee = 0;
+    double basePercentageFeeRate =
+        (double)header.basePercentageFee / (double)BASIS_POINTS_TO_PERCENT;
+
+    int64_t totalAmount = 0;
+    for (auto& op : mOperations)
+    {
+        auto operation = op->getOperation();
+        auto operationType = operation.body.type();
+        if (operationType == CREATE_ACCOUNT)
+        {
+            totalAmount += operation.body.createAccountOp().startingBalance;
+        }
+        else if (operationType == PAYMENT)
+        {
+            int8_t assetType =
+                operation.body.paymentOp().asset.type(); // 0 is native
+            if (assetType == 0)
+            {
+                totalAmount += operation.body.paymentOp().amount;
+            }
+        }
+    }
+
+    accumulatedBasePercentageFee +=
+        (int64_t)(totalAmount * basePercentageFeeRate);
+    int64_t totalFee = baseFee + accumulatedBasePercentageFee;
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getMinFee() - header.baseFee: {}, baseFee: {}, amount: {}, totalFee: {}",
+       header.baseFee, baseFee, totalAmount, totalFee
+    );
+    int64_t headerMaxFee=(int64_t)header.maxFee;
+    totalFee=totalFee>headerMaxFee?headerMaxFee:totalFee;
+    return totalFee;
+}
+#else
+// original function implementation
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
 {
     return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
 }
+#endif
 
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
@@ -163,7 +215,7 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
 {
     if (header.ledgerVersion >= 11 || !applying)
     {
-        int64_t adjustedFee =
+       int64_t adjustedFee =
             baseFee * std::max<int64_t>(1, getNumOperations());
 
         if (applying)
@@ -180,6 +232,7 @@ TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
         return getFeeBid();
     }
 }
+
 
 void
 TransactionFrame::addSignature(SecretKey const& secretKey)
@@ -307,7 +360,11 @@ TransactionFrame::resetResults(LedgerHeader const& header, int64_t baseFee,
 
     // feeCharged is updated accordingly to represent the cost of the
     // transaction regardless of the failure modes.
-    getResult().feeCharged = getFee(header, baseFee, applying);
+    auto feeCharged = getFee(header, baseFee, applying);
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::resetResults() Fee charged: {}, ops: {}, baseFee: {}, applying: {}",
+        feeCharged, ops.size(), baseFee, applying
+    );
+    getResult().feeCharged = feeCharged;
 }
 
 bool
@@ -556,6 +613,8 @@ TransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx, int64_t baseFee)
     ZoneScoped;
     mCachedAccount.reset();
 
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::processFeeSeqNum() - baseFee: {}", baseFee);
+
     auto header = ltx.loadHeader();
     resetResults(header.current(), baseFee, true);
 
@@ -749,7 +808,7 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
         {
             auto time = opTimer.TimeScope();
             LedgerTxn ltxOp(ltxTx);
-            bool txRes = op->apply(signatureChecker, ltxOp);
+            bool txRes = op->apply(app, signatureChecker, ltxOp);
 
             if (!txRes)
             {

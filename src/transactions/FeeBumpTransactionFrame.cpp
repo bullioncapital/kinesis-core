@@ -16,6 +16,8 @@
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
+#include "util/Logging.h"
+#include "util/XDRCereal.h"
 #include "xdrpp/marshal.h"
 
 #include <numeric>
@@ -184,7 +186,7 @@ FeeBumpTransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx)
         getResult().result.code(txNOT_SUPPORTED);
         return false;
     }
-
+    // std::cout << "\n  FeeBumpTransactionFrame::commonValidPreSeqNum ====== " << getFeeBid();
     if (getFeeBid() < getMinFee(header.current()))
     {
         getResult().result.code(txINSUFFICIENT_FEE);
@@ -265,16 +267,30 @@ FeeBumpTransactionFrame::getFeeBid() const
     return mEnvelope.feeBump().tx.fee;
 }
 
+#ifdef _KINESIS
+int64_t
+FeeBumpTransactionFrame::getMinFee(LedgerHeader const& header) const
+{
+    auto innerTxMinFee = mInnerTx->getMinFee(header);
+    auto feeBumpMinFee = ((int64_t)header.baseFee) + innerTxMinFee;
+    CLOG_DEBUG(Tx, "FeeBumpTransactionFrame - {} getMinFee {}",
+            xdr_to_string(getFullHash(), "fullHash"),
+            feeBumpMinFee);
+    return feeBumpMinFee;
+}
+#else
 int64_t
 FeeBumpTransactionFrame::getMinFee(LedgerHeader const& header) const
 {
     return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
 }
+#endif
 
 int64_t
 FeeBumpTransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                                 bool applying) const
 {
+    CLOG_DEBUG(Tx, "**Kinesis** FeeBumpTransactionFrame::getFee() - called, baseFee: {}", baseFee);
     int64_t adjustedFee = baseFee * std::max<int64_t>(1, getNumOperations());
     if (applying)
     {

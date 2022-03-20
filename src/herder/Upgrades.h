@@ -39,6 +39,10 @@ class Upgrades
                 std::make_optional<uint32>(cfg.LEDGER_PROTOCOL_VERSION);
             mBaseFee =
                 std::make_optional<uint32>(cfg.TESTING_UPGRADE_DESIRED_FEE);
+             mBasePercentageFee =
+                std::make_optional<uint32>(cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE);
+             mMaxFee =
+                std::make_optional<uint64>(cfg.TESTING_UPGRADE_DESIRED_MAX_FEE);
             mMaxTxSize =
                 std::make_optional<uint32>(cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE);
             mBaseReserve =
@@ -47,6 +51,8 @@ class Upgrades
         VirtualClock::system_time_point mUpgradeTime;
         std::optional<uint32> mProtocolVersion;
         std::optional<uint32> mBaseFee;
+        std::optional<uint32> mBasePercentageFee;
+        std::optional<uint64> mMaxFee;
         std::optional<uint32> mMaxTxSize;
         std::optional<uint32> mBaseReserve;
 

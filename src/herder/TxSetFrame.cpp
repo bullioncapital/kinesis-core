@@ -512,11 +512,15 @@ TxSetFrame::getBaseFee(LedgerHeader const& lh) const
         {
             surgeOpsCutoff = lh.maxTxSetSize - MAX_OPS_PER_TX;
         }
+        CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - ops: {}, surgeOpsCutOff: {}, lowBaseFee: {}",
+                ops, surgeOpsCutoff, lowBaseFee);
         if (ops > surgeOpsCutoff)
         {
             baseFee = lowBaseFee;
         }
     }
+    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - LH.baseFee: {}, baseFee: {}",
+        lh.baseFee, baseFee);
     return baseFee;
 }
 
@@ -525,11 +529,14 @@ TxSetFrame::getTotalFees(LedgerHeader const& lh) const
 {
     ZoneScoped;
     auto baseFee = getBaseFee(lh);
-    return std::accumulate(mTransactions.begin(), mTransactions.end(),
+    auto totalFee = std::accumulate(mTransactions.begin(), mTransactions.end(),
                            int64_t(0),
                            [&](int64_t t, TransactionFrameBasePtr const& tx) {
                                return t + tx->getFee(lh, baseFee, true);
                            });
+    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getTotalFees() - baseFee: {}, totalFee: {}",
+        baseFee, totalFee);
+    return totalFee;
 }
 
 void
