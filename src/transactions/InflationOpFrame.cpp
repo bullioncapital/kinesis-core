@@ -3,13 +3,13 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "transactions/InflationOpFrame.h"
+#include "crypto/SHA.h"
 #include "ledger/LedgerManager.h"
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/LedgerTxnHeader.h"
 #include "main/Application.h"
 #include "overlay/StellarXDR.h"
-#include "crypto/SHA.h"
 #include "transactions/TransactionUtils.h"
 #include "util/ProtocolVersion.h"
 
@@ -28,19 +28,25 @@ InflationOpFrame::InflationOpFrame(Operation const& op, OperationResult& res,
     : OperationFrame(op, res, parentTx)
 {
 }
+
 #ifdef _KINESIS
 
 bool
-InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
+InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
 {
     auto header = ltx.loadHeader();
     auto& lh = header.current();
     time_t closeTime = lh.scpValue.closeTime;
     uint64_t seq = lh.inflationSeq;
 
-    auto inflationAmount = 0;
-    auto amountToDole = inflationAmount + lh.feePool;
+    time_t inflationTime = (INFLATION_START_TIME + seq * INFLATION_FREQUENCY);
+    if (closeTime < inflationTime)
+    {
+        innerResult().code(INFLATION_NOT_TIME);
+        return false;
+    }
 
+    auto amountToDole = lh.feePool;
     lh.feePool = 0;
     lh.inflationSeq++;
 
@@ -48,23 +54,21 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
     innerResult().code(INFLATION_SUCCESS);
     auto& payouts = innerResult().payouts();
 
-    Hash seed = sha256("feepool");
+    Hash seed = sha256(app.getConfig().NETWORK_PASSPHRASE + "feepool");
     SecretKey feeKey = SecretKey::fromSeed(seed);
     AccountID feeDestination = feeKey.getPublicKey();
 
     int64 toDoleThisWinner = amountToDole;
     int64 leftAfterDole = amountToDole;
     auto winner = stellar::loadAccount(ltx, feeDestination);
-    leftAfterDole -= toDoleThisWinner;
-    addBalance(header, winner, toDoleThisWinner);
-    payouts.emplace_back(feeDestination, toDoleThisWinner);
+    if (winner) {
+        leftAfterDole -= toDoleThisWinner;
+        addBalance(header, winner, toDoleThisWinner);
+        payouts.emplace_back(feeDestination, toDoleThisWinner);
+    }
 
     // put back in fee pool as unclaimed funds
     lh.feePool += leftAfterDole;
-    if (lh.ledgerVersion > 7)
-    {
-        lh.totalCoins += inflationAmount;
-    }
 
     return true;
 }

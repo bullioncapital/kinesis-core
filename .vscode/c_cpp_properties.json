@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${default}",
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/lib/xdrpp",
+                "${workspaceFolder}/lib"
+            ],
+            "defines": ["_KINESIS"],
+            "compilerPath": "/usr/bin/clang-10",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-clang-x64"
+        }
+    ],
+    "version": 4
+}

@@ -2,6 +2,7 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include "main/Application.h"
 #include "transactions/OperationFrame.h"
 #include "transactions/AllowTrustOpFrame.h"
 #include "transactions/BeginSponsoringFutureReservesOpFrame.h"
@@ -128,7 +129,7 @@ OperationFrame::OperationFrame(Operation const& op, OperationResult& res,
 }
 
 bool
-OperationFrame::apply(SignatureChecker& signatureChecker,
+OperationFrame::apply(Application& app, SignatureChecker& signatureChecker,
                       AbstractLedgerTxn& ltx)
 {
     ZoneScoped;
@@ -137,7 +138,7 @@ OperationFrame::apply(SignatureChecker& signatureChecker,
     res = checkValid(signatureChecker, ltx, true);
     if (res)
     {
-        res = doApply(ltx);
+        res = doApply(app, ltx);
         CLOG_TRACE(Tx, "{}", xdr_to_string(mResult, "OperationResult"));
     }
 

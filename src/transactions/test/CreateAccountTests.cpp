@@ -144,7 +144,9 @@ TEST_CASE("create account", "[tx][createaccount]")
 
             REQUIRE_THROWS_AS(acc1.create("acc2", minBal0 + 1),
                               ex_CREATE_ACCOUNT_UNDERFUNDED);
+
             root.pay(acc1, txfee);
+
             acc1.create("acc2", minBal0);
         });
     }

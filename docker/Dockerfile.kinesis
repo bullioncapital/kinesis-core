@@ -1,5 +1,8 @@
+ARG STELLAR_CORE_IMAGE=stellar/stellar-core:17
+ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:3c1361f
+
 # Build stage, includes everything needed to build.
-FROM abxit/kinesis-core-builder:3c1361f as buildstage
+FROM ${CORE_BUILDER_IMAGE} as buildstage
 ENV DEBIAN_FRONTEND=noninteractive
 
 ENV USERNAME=postgres
@@ -25,18 +28,20 @@ RUN git submodule init && git submodule update
 
 ENV CC=clang-10
 ENV CXX=clang++-10
-ENV CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
-ENV CXXFLAGS='-w -O3 -g1 -D_KINESIS'
+ENV CFLAGS='-O3 -g0 -fno-omit-frame-pointer'
+ENV CXXFLAGS='-w -O3 -g0 -D_KINESIS'
 ENV CONFIGURE_FLAGS=''
 
 RUN ./autogen.sh
 RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
-# RUN make check -j2
+RUN make -j2
 RUN sudo make install
 
 # replace stellar-core
-FROM stellar/stellar-core:17
+FROM ${STELLAR_CORE_IMAGE}
 
 RUN apt-get update && apt-get upgrade -y
+# utils
+RUN apt-get install jq -y && apt-get autoclean
 
 COPY --from=buildstage /usr/local/bin/stellar-core /usr/bin/stellar-core
