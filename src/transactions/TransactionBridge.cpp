@@ -108,10 +108,10 @@ setSeqNum(TransactionFramePtr tx, int64_t seq)
 }
 
 void
-setFee(TransactionFramePtr tx, uint32_t fee)
+setFee(TransactionFramePtr tx, uint64_t fee)
 {
     auto& env = tx->getEnvelope();
-    uint32_t& f =
+    uint64_t& f =
         env.type() == ENVELOPE_TYPE_TX_V0 ? env.v0().tx.fee : env.v1().tx.fee;
     f = fee;
 }

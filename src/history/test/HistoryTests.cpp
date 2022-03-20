@@ -409,7 +409,7 @@ TEST_CASE("Tx results verification", "[batching][resultsverification]")
         }
         out.close();
 
-        auto verify = wm.executeWork<VerifyTxResultsWork>(tmpDir, range.last());
+        auto verify = wm.executeWork<VerifyTxResultsWork>(tmpDir, range.last()); 
         REQUIRE(verify->getState() == BasicWork::State::WORK_FAILURE);
     }
 }

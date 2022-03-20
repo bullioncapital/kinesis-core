@@ -32,6 +32,7 @@
 #include "util/XDROperators.h"
 #include "util/XDRStream.h"
 #include "xdr/Stellar-ledger.h"
+#include "util/XDRCereal.h"
 #include "xdrpp/marshal.h"
 #include "xdrpp/printer.h"
 #include <Tracy.hpp>
@@ -198,8 +199,10 @@ TransactionFrame::getRawOperations() const
 int64_t
 TransactionFrame::getFullFee() const
 {
-    return mEnvelope.type() == ENVELOPE_TYPE_TX_V0 ? mEnvelope.v0().tx.fee
+    auto feeBid = mEnvelope.type() == ENVELOPE_TYPE_TX_V0 ? mEnvelope.v0().tx.fee
                                                    : mEnvelope.v1().tx.fee;
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getFeeBid() - feeBid: {}", feeBid);
+    return feeBid;
 }
 
 int64_t
@@ -252,6 +255,7 @@ TransactionFrame::getFee(LedgerHeader const& header,
         return getFullFee();
     }
 }
+
 
 void
 TransactionFrame::addSignature(SecretKey const& secretKey)
@@ -1148,6 +1152,8 @@ TransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx,
 {
     ZoneScoped;
     mCachedAccount.reset();
+
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::processFeeSeqNum() - baseFee: {}", baseFee);
 
     auto header = ltx.loadHeader();
     resetResults(header.current(), baseFee, true);

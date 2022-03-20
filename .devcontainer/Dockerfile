@@ -38,7 +38,7 @@ RUN if [ ! -z "${APT_MIRROR}" ]; then \
 # install base container packages and prep for VSCode
 RUN apt-get update \
     # Verify process tools, lsb-release (common in install instructions for CLIs) installed
-    && apt-get -y install iproute2 procps lsb-release \
+    && apt-get -y install iproute2 procps lsb-release curl jq \
     #
     # Create a non-root user to use if preferred - see https://aka.ms/vscode-remote/containers/non-root-user.
     && groupadd --gid $USER_GID $USERNAME \

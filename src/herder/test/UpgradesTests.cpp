@@ -27,6 +27,7 @@
 #include "transactions/TransactionUtils.h"
 #include "util/StatusManager.h"
 #include "util/Timer.h"
+#include "util/XDRCereal.h"
 #include <fmt/format.h>
 #include <optional>
 #include <xdrpp/autocheck.h>
@@ -204,6 +205,14 @@ makeBaseFeeUpgrade(int baseFee)
 }
 
 LedgerUpgrade
+makeBasePercentageFeeUpgrade(int basePercentageFee)
+{
+    auto result = LedgerUpgrade{LEDGER_UPGRADE_BASE_PERCENTAGE_FEE};
+    result.newBasePercentageFee() = basePercentageFee;
+    return result;
+}
+
+LedgerUpgrade
 makeTxCountUpgrade(int txCount)
 {
     auto result = LedgerUpgrade{LEDGER_UPGRADE_MAX_TX_SET_SIZE};
@@ -219,68 +228,6 @@ makeFlagsUpgrade(int flags)
     return result;
 }
 
-#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
-ConfigUpgradeSetFrameConstPtr
-makeConfigUpgradeSet(AbstractLedgerTxn& ltx, ConfigUpgradeSet configUpgradeSet)
-{
-    // Make entry for the upgrade
-    auto opaqueUpgradeSet = xdr::xdr_to_opaque(configUpgradeSet);
-    auto hashOfUpgradeSet = sha256(opaqueUpgradeSet);
-    auto contractID = sha256("contract_id");
-
-    SCVal key;
-    key.type(SCV_BYTES);
-    key.bytes().insert(key.bytes().begin(), hashOfUpgradeSet.begin(),
-                       hashOfUpgradeSet.end());
-
-    SCVal val;
-    val.type(SCV_BYTES);
-    val.bytes().insert(val.bytes().begin(), opaqueUpgradeSet.begin(),
-                       opaqueUpgradeSet.end());
-
-    LedgerEntry le;
-    le.data.type(CONTRACT_DATA);
-    le.data.contractData().contractID = contractID;
-    le.data.contractData().key = key;
-    le.data.contractData().val = val;
-
-    ltx.create(InternalLedgerEntry(le));
-
-    auto upgradeKey = ConfigUpgradeSetKey{contractID, hashOfUpgradeSet};
-    return ConfigUpgradeSetFrame::makeFromKey(ltx, upgradeKey);
-}
-
-ConfigUpgradeSetFrameConstPtr
-makeMaxContractSizeBytesTestUpgrade(AbstractLedgerTxn& ltx,
-                                    uint32_t maxContractSizeBytes)
-{
-    // Make entry for the upgrade
-    ConfigUpgradeSet configUpgradeSet;
-    auto& configEntry = configUpgradeSet.updatedEntry.emplace_back();
-    configEntry.configSettingID(CONFIG_SETTING_CONTRACT_MAX_SIZE_BYTES);
-    configEntry.contractMaxSizeBytes() = maxContractSizeBytes;
-    return makeConfigUpgradeSet(ltx, configUpgradeSet);
-}
-
-LedgerUpgrade
-makeConfigUpgrade(ConfigUpgradeSetFrame const& configUpgradeSet)
-{
-    auto result = LedgerUpgrade{LEDGER_UPGRADE_CONFIG};
-    result.newConfig() = configUpgradeSet.getKey();
-    return result;
-}
-
-LedgerKey
-getMaxContractSizeKey()
-{
-    LedgerKey maxContractSizeKey(CONFIG_SETTING);
-    maxContractSizeKey.configSetting().configSettingID =
-        CONFIG_SETTING_CONTRACT_MAX_SIZE_BYTES;
-    return maxContractSizeKey;
-}
-
-#endif
-
 void
 testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
                  bool shouldListAny)
@@ -290,6 +237,8 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
     cfg.TESTING_UPGRADE_DESIRED_FEE = 100;
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 50;
     cfg.TESTING_UPGRADE_RESERVE = 100000000;
+    cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE = 45;
+    cfg.TESTING_UPGRADE_DESIRED_MAX_FEE = 250000000000;
     cfg.TESTING_UPGRADE_DATETIME = preferredUpgradeDatetime;
 
     VirtualClock clock;
@@ -300,6 +249,8 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
     header.baseFee = cfg.TESTING_UPGRADE_DESIRED_FEE;
     header.baseReserve = cfg.TESTING_UPGRADE_RESERVE;
     header.maxTxSetSize = cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE;
+    header.basePercentageFee = cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE;
+    header.maxFee = cfg.TESTING_UPGRADE_DESIRED_MAX_FEE;
     header.scpValue.closeTime = VirtualClock::to_time_t(genesis(0, 0));
 
     auto protocolVersionUpgrade =
@@ -309,6 +260,8 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
         makeTxCountUpgrade(cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE);
     auto baseReserveUpgrade =
         makeBaseReserveUpgrade(cfg.TESTING_UPGRADE_RESERVE);
+    auto basePercentageFeeUpgrade = makeBasePercentageFeeUpgrade(
+        cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE);    
     LedgerTxn ltx(app->getLedgerTxnRoot());
     SECTION("protocol version upgrade needed")
     {
@@ -317,6 +270,8 @@ testListUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
         auto expected = shouldListAny
                             ? std::vector<LedgerUpgrade>{protocolVersionUpgrade}
                             : std::vector<LedgerUpgrade>{};
+        // std::cout << xdr_to_string(upgrades, "upgrades.....");
+        // std::cout << xdr_to_string(expected, "expected.....");
         REQUIRE(upgrades == expected);
     }
 
@@ -1430,9 +1385,10 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
                         offers.push_back({offer.key, afterUpgrade});
                     }
                 };
-
+            auto startingBalance =lm.getLastMinBalance(10) + 2000 + 12 * txFee;
+            auto additionalFund = txFee + (startingBalance * 0.0045) +startingBalance;
             auto a1 =
-                root.create("A", lm.getLastMinBalance(10) + 2000 + 12 * txFee);
+                root.create("A", additionalFund);
             a1.changeTrust(cur1, 5125);
             a1.changeTrust(cur2, 5125);
             issuer.pay(a1, cur1, 2050);
@@ -1567,8 +1523,9 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
 
         SECTION("unauthorized offers still contribute liabilities")
         {
-            auto a1 =
-                root.create("A", lm.getLastMinBalance(10) + 2000 + 10 * txFee);
+            auto startingBalance =lm.getLastMinBalance(10) + 2000 + 10 * txFee;
+            auto additionalFund = txFee + (startingBalance * 0.0045) +startingBalance;
+            auto a1 = root.create("A", startingBalance);
             a1.changeTrust(cur1, 6000);
             a1.changeTrust(cur2, 6000);
             issuer.allowTrust(cur1, a1);
@@ -2699,6 +2656,13 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     },
     "flags": {
         "has": false
+    },
+    "percentagefee": {
+        "has": false,
+        "value": 45
+    },
+    "maxfee": {
+        "has": false
     }
 })";
 
@@ -2716,6 +2680,8 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     REQUIRE(up.mMaxTxSetSize.has_value());
     REQUIRE(up.mMaxTxSetSize.value() == 10000);
     REQUIRE(!up.mBaseReserve.has_value());
+    REQUIRE(!up.mBasePercentageFee.has_value());
+    REQUIRE(!up.mMaxFee.has_value());
 }
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
