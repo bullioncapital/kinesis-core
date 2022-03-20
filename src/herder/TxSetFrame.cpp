@@ -597,6 +597,8 @@ TxSetFrame::computeTxFees(LedgerHeader const& lclHeader, int64_t lowestBaseFee,
         {
             surgeOpsCutoff = lclHeader.maxTxSetSize - MAX_OPS_PER_TX;
         }
+        CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - ops: {}, surgeOpsCutOff: {}, lowBaseFee: {}",
+                ops, surgeOpsCutoff, lowBaseFee);
         if (sizeOp() > surgeOpsCutoff)
         {
             baseFee = lowestBaseFee;
@@ -608,6 +610,8 @@ TxSetFrame::computeTxFees(LedgerHeader const& lclHeader, int64_t lowestBaseFee,
         }
     }
 
+    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - LH.baseFee: {}, baseFee: {}",
+        lh.baseFee, baseFee);
     for (auto const& tx : mTxs)
     {
         mTxBaseFee[tx] = baseFee;
@@ -651,6 +655,57 @@ TxSetFrame::getTotalBids() const
                            [&](int64_t t, TransactionFrameBasePtr const& tx) {
                                return t + tx->getFeeBid();
                            });
+
+  CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getTotalFees() - baseFee: {}, totalFee: {}",
+        baseFee, totalFee);
+    return totalFee;
+}
+
+std::string
+TxSetFrame::summary() const
+{
+    if (mTxs.empty())
+    {
+        return "empty tx set";
+    }
+    if (isGeneralizedTxSet())
+    {
+        std::map<std::optional<int64_t>, std::pair<int, int>> componentStats;
+        for (auto const& [tx, fee] : mTxBaseFee)
+        {
+            ++componentStats[fee].first;
+            componentStats[fee].second += tx->getNumOperations();
+        }
+        std::string res = fmt::format(FMT_STRING("{} component(s): ["),
+                                      componentStats.size());
+
+        for (auto const& [fee, stats] : componentStats)
+        {
+            if (fee != componentStats.begin()->first)
+            {
+                res += ", ";
+            }
+            if (fee)
+            {
+                res += fmt::format(
+                    FMT_STRING("{{discounted txs:{}, ops:{}, base_fee:{}}}"),
+                    stats.first, stats.second, *fee);
+            }
+            else
+            {
+                res +=
+                    fmt::format(FMT_STRING("{{non-discounted txs:{}, ops:{}}}"),
+                                stats.first, stats.second);
+            }
+        }
+        res += "]";
+        return res;
+    }
+    else
+    {
+        return fmt::format(FMT_STRING("txs:{}, ops:{}, base_fee:{}"), sizeTx(),
+                           sizeOp(), *mTxBaseFee.begin()->second);
+    }
 }
 
 std::string

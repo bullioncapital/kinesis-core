@@ -60,9 +60,7 @@ load(Archive& ar, stellar::Upgrades::UpgradeParameters& o)
     ar(make_nvp("fee", o.mBaseFee));
     ar(make_nvp("maxtxsize", o.mMaxTxSetSize));
     ar(make_nvp("reserve", o.mBaseReserve));
-    ar(make_nvp("percentagefee", o.mBasePercentageFee));
-    ar(make_nvp("maxfee", o.mMaxFee));
-
+    
     // the flags upgrade was added after the fields above, so it's possible for
     // them not to exist in the database
     try
@@ -276,6 +274,7 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
                            upgrade.newBaseReserve());
     case LEDGER_UPGRADE_FLAGS:
         return fmt::format(FMT_STRING("flags={:d}"), upgrade.newFlags());
+        return fmt::format("basereserve={0}", upgrade.newBaseReserve());
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
          return fmt::format("basepercentagefee={0}", upgrade.newBasePercentageFee());
      case LEDGER_UPGRADE_MAX_FEE:
@@ -312,6 +311,8 @@ Upgrades::toString() const
     appendInfo("maxfee", mParams.mMaxFee);
     appendInfo("maxtxsetsize", mParams.mMaxTxSetSize);
     appendInfo("flags", mParams.mFlags);
+    appendInfo("basepercentagefee", mParams.mBasePercentageFee);
+    appendInfo("maxfee", mParams.mMaxFee);
 
     return r.str();
 }
@@ -343,6 +344,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         resetParamIfSet(res.mMaxTxSetSize);
         resetParamIfSet(res.mBaseReserve);
         resetParamIfSet(res.mFlags);
+
         resetParamIfSet(res.mBasePercentageFee);
         resetParamIfSet(res.mMaxFee);
         return res;
@@ -392,6 +394,12 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         case LEDGER_UPGRADE_FLAGS:
             resetParam(res.mFlags, lu.newFlags());
             break;
+        case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+            resetParam(res.mBasePercentageFee, lu.newBasePercentageFee());
+            break;
+        case LEDGER_UPGRADE_MAX_FEE:
+             resetParam(res.mMaxFee, lu.newMaxFee());
+             break;
         default:
             // skip unknown
             break;
@@ -447,6 +455,12 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
                                         ProtocolVersion::V_18) &&
               (upgrade.newFlags() & ~MASK_LEDGER_HEADER_FLAGS) == 0;
         break;
+    case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+         res = res && (upgrade.newBasePercentageFee() != 0);
+         break;
+    case LEDGER_UPGRADE_MAX_FEE:
+         res = res && (upgrade.newMaxFee() != 0);
+         break;
     default:
         res = false;
     }

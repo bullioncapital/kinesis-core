@@ -168,7 +168,7 @@ TransactionFrame::getFeeBid() const
 // kinesis implementation
 int64_t
 TransactionFrame::getMinFee(LedgerHeader const& header) const
-{    
+{
     auto baseFee =
         ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
 
@@ -208,6 +208,13 @@ TransactionFrame::getMinFee(LedgerHeader const& header) const
     totalFee=totalFee>headerMaxFee?headerMaxFee:totalFee;
     return totalFee;
 }
+#else
+// original function implementation
+int64_t
+TransactionFrame::getMinFee(LedgerHeader const& header) const
+{
+    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+}
 #endif
 
 int64_t
@@ -222,7 +229,7 @@ TransactionFrame::getFee(LedgerHeader const& header,
                                   ProtocolVersion::V_11) ||
         !applying)
     {
-        int64_t adjustedFee =
+       int64_t adjustedFee =
             *baseFee * std::max<int64_t>(1, getNumOperations());
 
         if (applying)
@@ -239,7 +246,6 @@ TransactionFrame::getFee(LedgerHeader const& header,
         return getFeeBid();
     }
 }
-
 
 void
 TransactionFrame::addSignature(SecretKey const& secretKey)
