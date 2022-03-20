@@ -384,6 +384,7 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
                            upgrade.newBaseReserve());
     case LEDGER_UPGRADE_FLAGS:
         return fmt::format(FMT_STRING("flags={:d}"), upgrade.newFlags());
+        return fmt::format("basereserve={0}", upgrade.newBaseReserve());
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
          return fmt::format("basepercentagefee={0}", upgrade.newBasePercentageFee());
      case LEDGER_UPGRADE_MAX_FEE:
@@ -431,6 +432,8 @@ Upgrades::toString() const
     appendInfo("maxfee", mParams.mMaxFee);
     appendInfo("maxtxsetsize", mParams.mMaxTxSetSize);
     appendInfo("flags", mParams.mFlags);
+    appendInfo("basepercentagefee", mParams.mBasePercentageFee);
+    appendInfo("maxfee", mParams.mMaxFee);
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     if (mParams.mConfigUpgradeSetKey)
     {
@@ -470,6 +473,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         resetParamIfSet(res.mMaxTxSetSize);
         resetParamIfSet(res.mBaseReserve);
         resetParamIfSet(res.mFlags);
+
         resetParamIfSet(res.mBasePercentageFee);
         resetParamIfSet(res.mMaxFee);
         #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
@@ -604,6 +608,12 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
                                         ProtocolVersion::V_18) &&
               (upgrade.newFlags() & ~MASK_LEDGER_HEADER_FLAGS) == 0;
         break;
+    case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+         res = res && (upgrade.newBasePercentageFee() != 0);
+         break;
+    case LEDGER_UPGRADE_MAX_FEE:
+         res = res && (upgrade.newMaxFee() != 0);
+         break;
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     case LEDGER_UPGRADE_CONFIG:
     {

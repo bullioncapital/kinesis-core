@@ -224,6 +224,54 @@ TransactionFrame::getFeeBid() const
 #endif
 }
 
+
+#ifdef _KINESIS
+
+// kinesis implementation
+int64_t 
+TransactionFrame::getMinFee(LedgerHeader const& header) const
+{
+    auto baseFee =
+        ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
+
+    // apply base percentage fee
+    // affect: create_account and payment ops
+    int64_t accumulatedBasePercentageFee = 0;
+    double basePercentageFeeRate =
+        (double)header.basePercentageFee / (double)BASIS_POINTS_TO_PERCENT;
+
+    int64_t totalAmount = 0;
+    for (auto& op : mOperations)
+    {
+        auto operation = op->getOperation();
+        auto operationType = operation.body.type();
+        if (operationType == CREATE_ACCOUNT)
+        {
+            totalAmount += operation.body.createAccountOp().startingBalance;
+        }
+        else if (operationType == PAYMENT)
+        {
+            int8_t assetType =
+                operation.body.paymentOp().asset.type(); // 0 is native
+            if (assetType == 0)
+            {
+                totalAmount += operation.body.paymentOp().amount;
+            }
+        }
+    }
+
+    accumulatedBasePercentageFee +=
+        (int64_t)(totalAmount * basePercentageFeeRate);
+    int64_t totalFee = baseFee + accumulatedBasePercentageFee;
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getMinFee() - header.baseFee: {}, baseFee: {}, amount: {}, totalFee: {}",
+       header.baseFee, baseFee, totalAmount, totalFee
+    );
+    int64_t headerMaxFee=(int64_t)header.maxFee;
+    totalFee=totalFee>headerMaxFee?headerMaxFee:totalFee;
+    return totalFee;
+}
+#endif
+// original function implementation
 int64_t
 TransactionFrame::getFee(LedgerHeader const& header,
                          std::optional<int64_t> baseFee, bool applying) const
@@ -440,7 +488,11 @@ TransactionFrame::resetResults(LedgerHeader const& header,
 
     // feeCharged is updated accordingly to represent the cost of the
     // transaction regardless of the failure modes.
-    getResult().feeCharged = getFee(header, baseFee, applying);
+    auto feeCharged = getFee(header, baseFee, applying);
+    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::resetResults() Fee charged: {}, ops: {}, baseFee: {}, applying: {}",
+        feeCharged, ops.size(), baseFee, applying
+    );
+    getResult().feeCharged = feeCharged;
 }
 
 std::optional<TimeBounds const> const

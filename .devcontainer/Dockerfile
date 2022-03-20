@@ -65,7 +65,7 @@ RUN apt-get -y install libstdc++-10-dev clang-format-12 ccache
 # gcc
 RUN apt-get -y install cpp-10 gcc-10 g++-10
 # clang
-RUN apt-get -y install clang-12 llvm-12
+RUN apt-get -y install clang-12 llvm-12 lldb-10
 # rust
 ENV PATH "/root/.cargo/bin:$PATH"
 
