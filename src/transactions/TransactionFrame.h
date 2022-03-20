@@ -42,6 +42,9 @@ using TransactionFramePtr = std::shared_ptr<TransactionFrame>;
 
 class TransactionFrame : public TransactionFrameBase
 {
+  private:
+    int64_t const BASIS_POINTS_TO_PERCENT = 10000;
+
   protected:
     TransactionEnvelope mEnvelope;
     TransactionResult mResult;

@@ -38,7 +38,7 @@ RUN if [ ! -z "${APT_MIRROR}" ]; then \
 # install base container packages and prep for VSCode
 RUN apt-get update \
     # Verify process tools, lsb-release (common in install instructions for CLIs) installed
-    && apt-get -y install iproute2 procps lsb-release \
+    && apt-get -y install iproute2 procps lsb-release curl jq \
     #
     # Create a non-root user to use if preferred - see https://aka.ms/vscode-remote/containers/non-root-user.
     && groupadd --gid $USER_GID $USERNAME \
@@ -65,7 +65,7 @@ RUN apt-get -y install libstdc++-8-dev clang-format-10 ccache
 # gcc
 RUN apt-get -y install cpp-8 gcc-8 g++-8
 # clang
-RUN apt-get -y install clang-10 llvm-10
+RUN apt-get -y install clang-10 llvm-10 lldb-10
 # rust
 RUN ./install-rust.sh
 ENV PATH "/root/.cargo/bin:$PATH"

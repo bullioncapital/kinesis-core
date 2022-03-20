@@ -18,6 +18,8 @@
 #include "util/GlobalChecks.h"
 #include "util/ProtocolVersion.h"
 #include "util/numeric128.h"
+#include "util/Logging.h"
+#include "util/XDRCereal.h"
 #include "xdrpp/marshal.h"
 
 #include <numeric>
@@ -268,6 +270,18 @@ FeeBumpTransactionFrame::getFeeBid() const
     return mEnvelope.feeBump().tx.fee;
 }
 
+#ifdef _KINESIS
+int64_t
+FeeBumpTransactionFrame::getMinFee(LedgerHeader const& header) const
+{
+    auto innerTxMinFee = mInnerTx->getMinFee(header);
+    auto feeBumpMinFee = ((int64_t)header.baseFee) + innerTxMinFee;
+    CLOG_DEBUG(Tx, "FeeBumpTransactionFrame - {} getMinFee {}",
+            xdr_to_string(getFullHash(), "fullHash"),
+            feeBumpMinFee);
+    return feeBumpMinFee;
+}
+#endif
 int64_t
 FeeBumpTransactionFrame::getFee(LedgerHeader const& header,
                                 std::optional<int64_t> baseFee,

@@ -225,7 +225,7 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
         thisConfig.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = gTestingVersion;
         LOG_INFO(DEFAULT_LOG, "Making config for {}",
                  thisConfig.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION);
-
+        thisConfig.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE = 0;
         thisConfig.BUCKET_DIR_PATH = rootDir + "bucket";
 
         thisConfig.INVARIANT_CHECKS = {".*"};
@@ -779,7 +779,7 @@ loadTestTxMeta(stdfs::path const& dir)
 static void
 saveTestTxMeta(stdfs::path const& dir)
 {
-    for (auto const& filePair : gTestTxMetadata)
+for (auto const& filePair : gTestTxMetadata)
     {
         Json::Value fileRoot;
         fileRoot[TESTKEY_PROTOCOL_VERSION] =
