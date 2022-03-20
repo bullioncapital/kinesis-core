@@ -5,7 +5,7 @@
 	"dockerFile": "Dockerfile",
 	"build": {
 		"args": {
-			"APT_MIRROR": "${localEnv:APT_MIRROR}"
+			"APT_MIRROR": "http://au.archive.ubuntu.com/ubuntu/"
 		}
 	},
 	// The optional 'runArgs' property can be used to specify additional runtime arguments.

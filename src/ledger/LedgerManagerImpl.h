@@ -113,9 +113,10 @@ class LedgerManagerImpl : public LedgerManager
     int64_t getLastMinBalance(uint32_t ownerCount) const override;
     uint32_t getLastReserve() const override;
     uint32_t getLastTxFee() const override;
-
+    uint32_t getTxPercentageFee() const override;
     uint32_t getLastClosedLedgerNum() const override;
     uint64_t secondsSinceLastLedgerClose() const override;
+    uint64_t getMaxTxFee() const override;
     void syncMetrics() override;
 
     void startNewLedger(LedgerHeader const& genesisLedger);
