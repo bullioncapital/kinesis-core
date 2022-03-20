@@ -189,7 +189,8 @@ FeeBumpTransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx)
         getResult().result.code(txNOT_SUPPORTED);
         return false;
     }
-    if (getFeeBid() < getMinFee(*this, header.current()))
+
+    if (getFeeBid() < getMinFee(header.current()))
     {
         getResult().result.code(txINSUFFICIENT_FEE);
         return false;
