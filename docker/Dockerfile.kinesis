@@ -46,6 +46,4 @@ RUN apt-get update && apt-get upgrade -y
 # utils
 RUN apt-get install jq -y && apt-get autoclean
 
-RUN apt-get install jq -y && apt-get autoclean
-
 COPY --from=buildstage /usr/local/bin/stellar-core /usr/bin/stellar-core
