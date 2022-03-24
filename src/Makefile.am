@@ -48,7 +48,7 @@ always:
 # Always rebuild because .git/HEAD is a symbolic ref one can't depend on
 main/StellarCoreVersion.cpp: always
 	@vers=$$(cd "$(srcdir)" \
-		&& git describe --always --dirty --tags 2>/dev/null \
+		&& git describe --always --dirty="" --tags 2>/dev/null \
 		|| echo "$(PACKAGE) $(VERSION)"); \
 		sed -e "s/%%VERSION%%/$$vers/" \
 			< "$(srcdir)/main/StellarCoreVersion.cpp.in" > $@~
