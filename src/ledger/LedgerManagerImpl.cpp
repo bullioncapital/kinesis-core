@@ -265,6 +265,13 @@ LedgerManagerImpl::startNewLedger()
         ledger.maxTxSetSize = cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE;
         ledger.maxFee = cfg.TESTING_UPGRADE_DESIRED_MAX_FEE;
     }
+#ifdef _KINESIS
+    else
+    if(cfg.KINESIS_TESTING_DEFAULT_LEDGER)
+    {
+        ledger.basePercentageFee = cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE; 
+    }
+#endif
 
     startNewLedger(ledger);
 }
