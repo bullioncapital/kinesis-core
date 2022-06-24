@@ -252,9 +252,9 @@ LedgerManagerImpl::startNewLedger()
     }
 #ifdef _KINESIS
     else
-    if(cfg.KINESIS_TESTING_UPGRADE)
+    if(cfg.KINESIS_TESTING_DEFAULT_LEDGER)
     {
-        ledger.basePercentageFee = 0;    
+        ledger.basePercentageFee = cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE; 
     }
 #endif
 

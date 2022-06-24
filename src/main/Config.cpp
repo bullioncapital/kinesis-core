@@ -125,7 +125,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     VERSION_STR = STELLAR_CORE_VERSION;
 
 #ifdef _KINESIS
-    KINESIS_TESTING_UPGRADE=true;
+    KINESIS_TESTING_DEFAULT_LEDGER=true;
 #endif
 
     // configurable

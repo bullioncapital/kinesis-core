@@ -258,7 +258,7 @@ class Config : public std::enable_shared_from_this<Config>
     bool USE_CONFIG_FOR_GENESIS;
 
 #ifdef _KINESIS
-    bool KINESIS_TESTING_UPGRADE;
+    bool KINESIS_TESTING_DEFAULT_LEDGER;
 #endif
 
     // This is the number of failures you want to be able to tolerate.
