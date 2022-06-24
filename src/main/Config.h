@@ -257,6 +257,10 @@ class Config : public std::enable_shared_from_this<Config>
     // not setable in config file - only tests are allowed to do this
     bool USE_CONFIG_FOR_GENESIS;
 
+#ifdef _KINESIS
+    bool KINESIS_TESTING_DEFAULT_LEDGER;
+#endif
+
     // This is the number of failures you want to be able to tolerate.
     // You will need at least 3f+1 nodes in your quorum set.
     // If you don't have enough in your quorum set to tolerate the level you

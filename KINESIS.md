@@ -15,3 +15,11 @@ If it is your first time checking out code you need to run `vscode-configure.sh`
 3. Set breakpoints
 4. Hit `F5`
 
+## Build Docker Image
+
+Use the following command to build a local docker image:
+
+```bash
+export TAG=kinesis-core:local
+docker build -t $TAG . -f docker/Dockerfile.kinesis
+```
