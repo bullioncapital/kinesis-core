@@ -28,6 +28,9 @@ TEST_CASE("genesisledger", "[ledger]")
     VirtualClock clock{};
     auto cfg = getTestConfig(0);
     cfg.USE_CONFIG_FOR_GENESIS = false;
+#ifdef _KINESIS
+        cfg.KINESIS_TESTING_DEFAULT_LEDGER=false;
+#endif
     auto app = Application::create<ApplicationImpl>(clock, cfg);
     app->start();
 
