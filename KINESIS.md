@@ -36,3 +36,11 @@ docker run --rm -it --entrypoint bash -v $PWD/_output/:/output $TAG
 ```
 
 You can also execute `./runTests.sh` from VSCode devcontainer, BUT make sure you first build the source code using `make -j $(nproc)`.
+## Build Docker Image
+
+Use the following command to build a local docker image:
+
+```bash
+export TAG=kinesis-core:local
+docker build -t $TAG . -f docker/Dockerfile.kinesis
+```
