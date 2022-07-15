@@ -288,7 +288,7 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
             break;
 #ifdef USE_POSTGRES
         case Config::TESTDB_POSTGRESQL:
-            dbname << "postgresql://dbname=test" << instanceNumber;
+            dbname << "postgresql://dbname=test" << instanceNumber<<" user=postgres";;
             break;
 #endif
         default:
