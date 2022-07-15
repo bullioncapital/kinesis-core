@@ -73,6 +73,7 @@ ENV CXX=clang++-10
 
 # Install postgresql to enable tests under make check
 RUN apt-get -y install postgresql
+COPY pg_hba.conf /etc/postgresql/12/main/
 
 # Set up locale
 RUN sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
