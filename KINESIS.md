@@ -27,27 +27,10 @@ docker build -t $TAG . -f docker/Dockerfile.kinesis
 
 ## Run Tests inside dev container 
 
-The PostgreSQL cluster should be running inside the dev container for the tests to establish the database connections 
+Before running the tests, run `vscode-configure.sh` and then build the code using make. 
+Run following script to start the PostgreSQL cluster , create database and run tests inside the dev container
 
-Use the following command to check if main cluster is running.
+sudo sh runTests.sh testReport.xml
 ```bash
-pg_lsclusters 
+sudo sh runTests.sh testReport.xml 
 ```
-Start the main cluster if not running already
-```bash
-sudo pg_ctlcluster 12 main start 
-```
-Run script file to create test db. 
-```bash
-./KINESIS_ci-build.sh
-```
-check if db is accepting connections
-```bash
-pg_isready 
-```
-
-Run stellar-core tests and generate report 'testReport'
-```bash
-./stellar-core test -r junit -o testReport.xml
-```
-

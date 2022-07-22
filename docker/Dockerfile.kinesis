@@ -20,6 +20,7 @@ ENV LANGUAGE en_US:en
 ENV LC_ALL en_US.UTF-8
 
 USER $USERNAME
+COPY pg_hba.conf /etc/postgresql/12/main/
 COPY . /stellar-core
 WORKDIR /stellar-core
 
@@ -37,7 +38,6 @@ RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}
 RUN make -j2
 RUN sudo make install
 
-WORKDIR /stellar-core/src
 
 # replace stellar-core
 FROM ${STELLAR_CORE_IMAGE}
