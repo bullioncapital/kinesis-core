@@ -7,5 +7,3 @@ export CONFIGURE_FLAGS=''
 
 ./autogen.sh
 ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
-
-sudo cp pg_hba.conf /etc/postgresql/12/main/
