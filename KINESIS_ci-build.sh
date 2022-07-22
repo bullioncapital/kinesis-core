@@ -1,7 +1,7 @@
 # /bin/sh
 
 # Create Postgres DB
-CreateDb() 
+create_test_databases() 
 {
   NPROCS=$(getconf _NPROCESSORS_ONLN)
   echo "Found $NPROCS processors"
@@ -19,7 +19,7 @@ CreateDb()
 }
 
 # Run Postgres main cluster
-RunCluster() 
+start_pg_service() 
 {
   state=$(pg_lsclusters | cut -d" " -f8)
   if [ $state = "down" ]
@@ -32,7 +32,7 @@ RunCluster()
 }
 
 #Verify DB and Create Db 
-CheckStartDb()
+probe_pg_connection()
 {
   local RETRY=0
   while ($(pg_isready) != "accepting")
@@ -50,5 +50,6 @@ CheckStartDb()
 ###############################
 
 echo "user=`whoami`" 
-RunCluster
-CheckStartDb
+start_pg_service
+probe_pg_connection
+create_test_databases
