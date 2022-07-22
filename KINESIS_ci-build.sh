@@ -35,9 +35,9 @@ start_pg_service()
 probe_pg_connection()
 {
   local RETRY=0
-  while ($(pg_isready) != "accepting")
+  while [ "$(pg_isready)" != "accepting" ]
   do
-    if (( $RETRY -gt 5 )); then
+    if [ $RETRY -gt 5 ]; then
       echo "PG server connection refused"
       exit 1 # fail fast 
     fi
