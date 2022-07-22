@@ -8,6 +8,7 @@
 			"APT_MIRROR": "http://au.archive.ubuntu.com/ubuntu/"
 		}
 	},
+	"context": "..",
 	"onCreateCommand": "./install-rust.sh",
 	// The optional 'runArgs' property can be used to specify additional runtime arguments.
 	"runArgs": [
