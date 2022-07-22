@@ -1,4 +1,4 @@
-# /bin/sh
+#!/usr/bin/env bash
 
 # Create Postgres DB
 create_test_databases() 
