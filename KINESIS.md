@@ -27,7 +27,6 @@ docker build -t $TAG . -f docker/Dockerfile.kinesis
 
 ## Run Tests inside dev container 
 
-Before running the tests, run `vscode-configure.sh` and then build the code using make. 
 Run following script to start the PostgreSQL cluster , create database and run tests inside the dev container
 
 ```bash
