@@ -1,29 +1,25 @@
 ARG STELLAR_CORE_IMAGE=stellar/stellar-core:17
-ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:3c1361f
+ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:51c3243
 
 # Build stage, includes everything needed to build.
 FROM ${CORE_BUILDER_IMAGE} as buildstage
 ENV DEBIAN_FRONTEND=noninteractive
 
-ENV USERNAME=postgres
-RUN echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
-    && chmod 0440 /etc/sudoers.d/$USERNAME
-
 # Set up locale
 RUN echo "LC_ALL=en_US.UTF-8" >> /etc/environment && \
-    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
-    echo "LANG=en_US.UTF-8" > /etc/locale.conf && \
-    locale-gen "en_US.UTF-8"
+  echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
+  echo "LANG=en_US.UTF-8" > /etc/locale.conf && \
+  locale-gen "en_US.UTF-8"
 
 ENV LANG en_US.UTF-8
 ENV LANGUAGE en_US:en
 ENV LC_ALL en_US.UTF-8
 
-USER $USERNAME
+# enable postgres connection
+COPY pg_hba.conf /etc/postgresql/12/main/
 COPY . /stellar-core
 WORKDIR /stellar-core
 
-RUN sudo chown -R $USERNAME /stellar-core
 RUN git submodule init && git submodule update
 
 ENV CC=clang-10
@@ -35,7 +31,7 @@ ENV CONFIGURE_FLAGS=''
 RUN ./autogen.sh
 RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
 RUN make -j2
-RUN sudo make install
+RUN make install
 
 # replace stellar-core
 FROM ${STELLAR_CORE_IMAGE}
