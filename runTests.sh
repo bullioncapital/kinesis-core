@@ -1,4 +1,4 @@
-#/bin/sh
+#!/usr/bin/env bash
 XML_TESTS_REPORT=${1:-test-result.xml}
 
 #--------Verify if cluster is running and create DB----------- 
