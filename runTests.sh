@@ -5,6 +5,11 @@ XML_TESTS_REPORT=${1:-test-result.xml}
 ./KINESIS_ci-build.sh
 
 # -------Run tests------
-pushd src
-./stellar-core test -r junit -o $XML_TESTS_REPORT
-popd
+run_stellar_tests() {
+    set -e
+    pushd src
+    ./stellar-core test -r junit -o $XML_TESTS_REPORT
+    popd
+}
+
+run_stellar_tests
