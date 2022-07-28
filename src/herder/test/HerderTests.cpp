@@ -360,18 +360,20 @@ testTxSet(uint32 protocolVersion)
             SECTION("gap middle")
             {
                 int remIdx = 2; // 3rd transaction
-                txSet->sortForApply();
-                txSet->mTransactions.erase(txSet->mTransactions.begin() +
-                                           (remIdx * 2));
+                
+		        // erase it from first account
+                txSet->mTransactions.erase(txSet->mTransactions.begin() +remIdx);
+
                 txSet->sortForHash();
                 REQUIRE(!txSet->checkValid(*app, 0, 0));
 
                 auto removed = txSet->trimInvalid(*app, 0, 0);
                 REQUIRE(txSet->checkValid(*app, 0, 0));
                 // one account has all its transactions,
-                // other, we removed all its tx
-                REQUIRE(removed.size() == (nbTransactions - 1));
-                REQUIRE(txSet->mTransactions.size() == nbTransactions);
+                // the other, we removed transactions after remIdx
+                auto expectedRemoved = nbTransactions - remIdx - 1;
+                REQUIRE(removed.size() == expectedRemoved);
+                REQUIRE(txSet->mTransactions.size() == (nbTransactions * 2 - expectedRemoved - 1));
             }
         }
         SECTION("insufficient balance")
