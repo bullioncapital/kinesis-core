@@ -73,7 +73,7 @@ InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
     return true;
 }
 
-#else
+#endif
 
 bool
 InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
@@ -164,7 +164,7 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
     return true;
 }
 
-#endif
+
 
 bool
 InflationOpFrame::doCheckValid(uint32_t ledgerVersion)
@@ -176,7 +176,7 @@ InflationOpFrame::doCheckValid(uint32_t ledgerVersion)
 
 // kinesis implementation
 bool
-InflationOpFrame::isVersionSupported(uint32_t protocolVersion) const
+InflationOpFrame::isOpSupported(LedgerHeader const& header) const
 {
     return true;
 }
