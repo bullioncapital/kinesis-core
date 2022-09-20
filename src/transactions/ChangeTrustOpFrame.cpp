@@ -12,31 +12,11 @@
 #include "main/Application.h"
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
 #include <Tracy.hpp>
 
 namespace stellar
 {
-
-static void
-decrementPoolUseCount(AbstractLedgerTxn& ltx, Asset const& asset,
-                      AccountID const& accountID)
-{
-    if (!isIssuer(accountID, asset) && asset.type() != ASSET_TYPE_NATIVE)
-    {
-        auto assetTrustLine = ltx.load(trustlineKey(accountID, asset));
-        if (!assetTrustLine)
-        {
-            throw std::runtime_error("asset trustline is missing");
-        }
-
-        if (--getTrustLineEntryExtensionV2(
-                  assetTrustLine.current().data.trustLine())
-                  .liquidityPoolUseCount < 0)
-        {
-            throw std::runtime_error("liquidityPoolUseCount is negative");
-        }
-    }
-}
 
 void
 ChangeTrustOpFrame::managePoolOnDeletedTrustLine(AbstractLedgerTxn& ltx,
@@ -51,8 +31,8 @@ ChangeTrustOpFrame::managePoolOnDeletedTrustLine(AbstractLedgerTxn& ltx,
 
     auto const& cp = mChangeTrust.line.liquidityPool().constantProduct();
 
-    decrementPoolUseCount(ltxInner, cp.assetA, getSourceID());
-    decrementPoolUseCount(ltxInner, cp.assetB, getSourceID());
+    decrementLiquidityPoolUseCount(ltxInner, cp.assetA, getSourceID());
+    decrementLiquidityPoolUseCount(ltxInner, cp.assetB, getSourceID());
 
     auto poolLtxEntry = loadLiquidityPool(ltxInner, tlAsset.liquidityPoolID());
     if (!poolLtxEntry)
@@ -60,18 +40,7 @@ ChangeTrustOpFrame::managePoolOnDeletedTrustLine(AbstractLedgerTxn& ltx,
         throw std::runtime_error("liquidity pool is missing");
     }
 
-    auto poolTLCount = --poolLtxEntry.current()
-                             .data.liquidityPool()
-                             .body.constantProduct()
-                             .poolSharesTrustLineCount;
-    if (poolTLCount == 0)
-    {
-        poolLtxEntry.erase();
-    }
-    else if (poolTLCount < 0)
-    {
-        throw std::runtime_error("poolSharesTrustLineCount is negative");
-    }
+    decrementPoolSharesTrustLineCount(poolLtxEntry);
 
     ltxInner.commit();
 }
@@ -181,7 +150,8 @@ ChangeTrustOpFrame::doApply(AbstractLedgerTxn& ltx)
         throw std::runtime_error("native asset is not valid in ChangeTrustOp");
     }
 
-    if (ltx.loadHeader().current().ledgerVersion > 2)
+    if (protocolVersionStartsFrom(ltx.loadHeader().current().ledgerVersion,
+                                  ProtocolVersion::V_3))
     {
         // Note: No longer checking if issuer exists here, because if
         //     issuerID == getSourceID()
@@ -224,13 +194,6 @@ ChangeTrustOpFrame::doApply(AbstractLedgerTxn& ltx)
 
         if (mChangeTrust.limit == 0)
         { // we are deleting a trustline
-
-            // line gets deleted. first release reserves
-            auto header = ltx.loadHeader();
-            auto sourceAccount = loadSourceAccount(ltx, header);
-            removeEntryWithPossibleSponsorship(ltx, header, trustLine.current(),
-                                               sourceAccount);
-
             // use a lambda so we don't hold a reference to the TrustLineEntry
             auto tlEntry = [&]() -> TrustLineEntry const& {
                 return trustLine.current().data.trustLine();
@@ -245,6 +208,11 @@ ChangeTrustOpFrame::doApply(AbstractLedgerTxn& ltx)
                 return false;
             }
 
+            // line gets deleted. first release reserves
+            auto header = ltx.loadHeader();
+            auto sourceAccount = loadSourceAccount(ltx, header);
+            removeEntryWithPossibleSponsorship(ltx, header, trustLine.current(),
+                                               sourceAccount);
             trustLine.erase();
 
             // this will create a child LedgerTxn and deactivate all loaded
@@ -350,7 +318,7 @@ ChangeTrustOpFrame::doCheckValid(uint32_t ledgerVersion)
         innerResult().code(CHANGE_TRUST_MALFORMED);
         return false;
     }
-    if (ledgerVersion > 9)
+    if (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_10))
     {
         if (mChangeTrust.line.type() == ASSET_TYPE_NATIVE)
         {
@@ -359,7 +327,8 @@ ChangeTrustOpFrame::doCheckValid(uint32_t ledgerVersion)
         }
     }
 
-    if (ledgerVersion > 15 && isIssuer(getSourceID(), mChangeTrust.line))
+    if (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_16) &&
+        isIssuer(getSourceID(), mChangeTrust.line))
     {
         innerResult().code(CHANGE_TRUST_MALFORMED);
         return false;

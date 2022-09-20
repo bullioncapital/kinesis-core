@@ -4,7 +4,10 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include "util/NonCopyable.h"
+#include "util/ProtocolVersion.h"
 #include "xdr/Stellar-ledger-entries.h"
+#include "xdr/Stellar-ledger.h"
 #include "xdr/Stellar-transaction.h"
 #include <algorithm>
 
@@ -41,6 +44,7 @@ TrustLineEntry::_ext_t::_v1_t&
 prepareTrustLineEntryExtensionV1(TrustLineEntry& tl);
 TrustLineEntryExtensionV2& prepareTrustLineEntryExtensionV2(TrustLineEntry& tl);
 LedgerEntryExtensionV1& prepareLedgerEntryExtensionV1(LedgerEntry& le);
+void setLedgerHeaderFlag(LedgerHeader& lh, uint32_t flags);
 
 AccountEntryExtensionV2& getAccountEntryExtensionV2(AccountEntry& ae);
 TrustLineEntryExtensionV2& getTrustLineEntryExtensionV2(TrustLineEntry& le);
@@ -58,10 +62,28 @@ LedgerKey poolShareTrustLineKey(AccountID const& accountID,
 InternalLedgerKey sponsorshipKey(AccountID const& sponsoredID);
 InternalLedgerKey sponsorshipCounterKey(AccountID const& sponsoringID);
 
-uint32_t const FIRST_PROTOCOL_SUPPORTING_OPERATION_LIMITS = 11;
-uint32_t const ACCOUNT_SUBENTRY_LIMIT = 1000;
+ProtocolVersion const FIRST_PROTOCOL_SUPPORTING_OPERATION_LIMITS =
+    ProtocolVersion::V_11;
+
+uint32_t getAccountSubEntryLimit();
+size_t getMaxOffersToCross();
+
+#ifdef BUILD_TESTS
+class TempReduceLimitsForTesting : public NonMovableOrCopyable
+{
+  private:
+    uint32_t mOldAccountSubEntryLimit;
+    size_t mOldMaxOffersToCross;
+
+  public:
+    TempReduceLimitsForTesting(uint32_t accountSubEntryLimit,
+                               size_t maxOffersToCross);
+    ~TempReduceLimitsForTesting();
+};
+
+#endif
+
 int32_t const EXPECTED_CLOSE_TIME_MULT = 2;
-size_t const MAX_OFFERS_TO_CROSS = 1000;
 uint32_t const TRUSTLINE_AUTH_FLAGS =
     AUTHORIZED_FLAG | AUTHORIZED_TO_MAINTAIN_LIABILITIES_FLAG;
 
@@ -187,7 +209,13 @@ bool isClawbackEnabledOnAccount(ConstLedgerTxnEntry const& entry);
 bool isClawbackEnabledOnClaimableBalance(ClaimableBalanceEntry const& entry);
 bool isClawbackEnabledOnClaimableBalance(LedgerEntry const& entry);
 
+void setClaimableBalanceClawbackEnabled(ClaimableBalanceEntry& cb);
+
 bool isImmutableAuth(LedgerTxnEntry const& entry);
+
+bool isPoolDepositDisabled(LedgerHeader const& header);
+bool isPoolWithdrawalDisabled(LedgerHeader const& header);
+bool isPoolTradingDisabled(LedgerHeader const& header);
 
 void releaseLiabilities(AbstractLedgerTxn& ltx, LedgerTxnHeader const& header,
                         LedgerTxnEntry const& offer);
@@ -214,9 +242,22 @@ bool hasTrustLineEntryExtV2(TrustLineEntry const& tl);
 Asset getAsset(AccountID const& issuer, AssetCode const& assetCode);
 
 bool claimableBalanceFlagIsValid(ClaimableBalanceEntry const& cb);
-void removeOffersByAccountAndAsset(AbstractLedgerTxn& ltx,
-                                   AccountID const& account,
-                                   Asset const& asset);
+
+enum class RemoveResult
+{
+    SUCCESS,
+    LOW_RESERVE,
+    TOO_MANY_SPONSORING
+};
+
+RemoveResult removeOffersAndPoolShareTrustLines(
+    AbstractLedgerTxn& ltx, AccountID const& accountID, Asset const& asset,
+    AccountID const& txSourceID, SequenceNumber txSeqNum, uint32_t opIndex);
+
+// this can delete the pool
+void decrementPoolSharesTrustLineCount(LedgerTxnEntry& liquidityPool);
+void decrementLiquidityPoolUseCount(AbstractLedgerTxn& ltx, Asset const& asset,
+                                    AccountID const& accountID);
 
 ClaimAtom makeClaimAtom(uint32_t ledgerVersion, AccountID const& accountID,
                         int64_t offerID, Asset const& wheat,
@@ -230,5 +271,4 @@ ChangeTrustAsset assetToChangeTrustAsset(Asset const& asset);
 
 int64_t getPoolWithdrawalAmount(int64_t amountPoolShares,
                                 int64_t totalPoolShares, int64_t reserve);
-
 }

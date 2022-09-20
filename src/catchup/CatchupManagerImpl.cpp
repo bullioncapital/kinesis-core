@@ -8,6 +8,7 @@
 #include "util/asio.h"
 #include "catchup/CatchupManagerImpl.h"
 #include "catchup/CatchupConfiguration.h"
+#include "history/FileTransferInfo.h"
 #include "ledger/LedgerManager.h"
 #include "main/Application.h"
 #include "medida/meter.h"
@@ -21,6 +22,49 @@
 
 namespace stellar
 {
+
+CatchupManagerImpl::CatchupMetrics::CatchupMetrics()
+    : mHistoryArchiveStatesDownloaded{0}
+    , mCheckpointsDownloaded{0}
+    , mLedgersVerified{0}
+    , mLedgerChainsVerificationFailed{0}
+    , mBucketsDownloaded{0}
+    , mBucketsApplied{0}
+    , mTxSetsDownloaded{0}
+    , mTxSetsApplied{0}
+{
+}
+
+CatchupManagerImpl::CatchupMetrics::CatchupMetrics(
+    uint64_t historyArchiveStatesDownloaded, uint64_t checkpointsDownloaded,
+    uint64_t ledgersVerified, uint64_t ledgerChainsVerificationFailed,
+    uint64_t bucketsDownloaded, uint64_t bucketsApplied,
+    uint64_t txSetsDownloaded, uint64_t txSetsApplied)
+    : mHistoryArchiveStatesDownloaded{historyArchiveStatesDownloaded}
+    , mCheckpointsDownloaded{checkpointsDownloaded}
+    , mLedgersVerified{ledgersVerified}
+    , mLedgerChainsVerificationFailed{ledgerChainsVerificationFailed}
+    , mBucketsDownloaded{bucketsDownloaded}
+    , mBucketsApplied{bucketsApplied}
+    , mTxSetsDownloaded{txSetsDownloaded}
+    , mTxSetsApplied{txSetsApplied}
+{
+}
+
+CatchupManagerImpl::CatchupMetrics
+operator-(CatchupManager::CatchupMetrics const& x,
+          CatchupManager::CatchupMetrics const& y)
+{
+    return CatchupManager::CatchupMetrics{
+        x.mHistoryArchiveStatesDownloaded - y.mHistoryArchiveStatesDownloaded,
+        x.mCheckpointsDownloaded - y.mCheckpointsDownloaded,
+        x.mLedgersVerified - y.mLedgersVerified,
+        x.mLedgerChainsVerificationFailed - y.mLedgerChainsVerificationFailed,
+        x.mBucketsDownloaded - y.mBucketsDownloaded,
+        x.mBucketsApplied - y.mBucketsApplied,
+        x.mTxSetsDownloaded - y.mTxSetsDownloaded,
+        x.mTxSetsApplied - y.mTxSetsApplied};
+}
 
 template <typename T>
 T
@@ -43,6 +87,7 @@ CatchupManagerImpl::CatchupManagerImpl(Application& app)
     , mCatchupWork(nullptr)
     , mSyncingLedgersSize(
           app.getMetrics().NewCounter({"ledger", "memory", "queued-ledgers"}))
+    , mLargestLedgerSeqHeard(0)
 {
 }
 
@@ -64,10 +109,13 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
     ZoneScoped;
     if (mCatchupWork && mCatchupWork->isDone())
     {
-        trimAndReset();
+        mCatchupWork.reset();
+        logAndUpdateCatchupStatus(true);
     }
 
     uint32_t lastReceivedLedgerSeq = ledgerData.getLedgerSeq();
+    mLargestLedgerSeqHeard =
+        std::max(mLargestLedgerSeqHeard, lastReceivedLedgerSeq);
 
     // 1. CatchupWork is not running yet
     // 2. CatchupManager received  ledger that was immediately applied by
@@ -109,14 +157,14 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
             return;
         }
 
-        addToSyncingLedgers(ledgerData);
+        addAndTrimSyncingLedgers(ledgerData);
         logAndUpdateCatchupStatus(true);
         return;
     }
 
     // Next, we buffer every out of sync ledger to allow us to get back in sync
     // in case the ledgers we're missing are received.
-    addToSyncingLedgers(ledgerData);
+    addAndTrimSyncingLedgers(ledgerData);
 
     // Finally we wait some number of ledgers beyond the smallest buffered
     // checkpoint ledger before we trigger the CatchupWork. This could be any
@@ -125,28 +173,24 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
     // we just check for any ledger larger than the checkpoint
 
     auto& hm = mApp.getHistoryManager();
-    auto it =
-        findFirstCheckpoint(mSyncingLedgers.begin(), mSyncingLedgers.end(), hm);
 
     std::string message;
+    uint32_t firstLedgerInBuffer = mSyncingLedgers.begin()->first;
     uint32_t lastLedgerInBuffer = mSyncingLedgers.crbegin()->first;
-    if (mApp.getConfig().MODE_DOES_CATCHUP && it != mSyncingLedgers.end() &&
-        it->first < lastLedgerInBuffer)
+    if (mApp.getConfig().MODE_DOES_CATCHUP &&
+        hm.isFirstLedgerInCheckpoint(firstLedgerInBuffer) &&
+        firstLedgerInBuffer < lastLedgerInBuffer)
     {
-        message = fmt::format("Starting catchup after ensuring checkpoint "
-                              "ledger {} was closed on network",
-                              lastLedgerInBuffer);
-
-        // We only need ledgers starting from the checkpoint. We can
-        // remove all ledgers before this
-        mSyncingLedgers.erase(mSyncingLedgers.begin(), it);
+        message =
+            fmt::format(FMT_STRING("Starting catchup after ensuring checkpoint "
+                                   "ledger {:d} was closed on network"),
+                        lastLedgerInBuffer);
 
         startOnlineCatchup();
     }
     else
     {
         // get the smallest checkpoint we need to start catchup
-        uint32_t firstLedgerInBuffer = mSyncingLedgers.cbegin()->first;
         uint32_t requiredFirstLedgerInCheckpoint =
             hm.isFirstLedgerInCheckpoint(firstLedgerInBuffer)
                 ? firstLedgerInBuffer
@@ -161,14 +205,15 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
         {
             auto eta = (catchupTriggerLedger - lastLedgerInBuffer) *
                        mApp.getConfig().getExpectedLedgerCloseTime();
-            message = fmt::format("Waiting for trigger ledger: {}/{}, ETA: {}s",
-                                  lastLedgerInBuffer, catchupTriggerLedger,
-                                  eta.count());
+            message = fmt::format(
+                FMT_STRING("Waiting for trigger ledger: {:d}/{:d}, ETA: {:d}s"),
+                lastLedgerInBuffer, catchupTriggerLedger, eta.count());
         }
         else
         {
             message = fmt::format(
-                "Waiting for out-of-order ledger(s). Trigger ledger: {}",
+                FMT_STRING(
+                    "Waiting for out-of-order ledger(s). Trigger ledger: {:d}"),
                 catchupTriggerLedger);
         }
     }
@@ -176,26 +221,38 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
 }
 
 void
-CatchupManagerImpl::startCatchup(CatchupConfiguration configuration,
-                                 std::shared_ptr<HistoryArchive> archive)
+CatchupManagerImpl::startCatchup(
+    CatchupConfiguration configuration, std::shared_ptr<HistoryArchive> archive,
+    std::set<std::shared_ptr<Bucket>> bucketsToRetain)
 {
     ZoneScoped;
     auto lastClosedLedger = mApp.getLedgerManager().getLastClosedLedgerNum();
     if ((configuration.toLedger() != CatchupConfiguration::CURRENT) &&
         (configuration.toLedger() <= lastClosedLedger))
     {
-        throw std::invalid_argument("Target ledger is not newer than LCL");
+        throw std::invalid_argument(fmt::format(
+            FMT_STRING("Target ledger({:d}) is not newer than LCL({:d})"),
+            configuration.toLedger(), lastClosedLedger));
     }
 
-    auto offlineCatchup = configuration.offline();
+    if (configuration.localBucketsOnly() !=
+        mApp.getLedgerManager().rebuildingInMemoryState())
+    {
+        throw std::invalid_argument(
+            "Local catchup is only valid when rebuilding ledger state");
+    }
+
+    // Offline and local catchup types aren't triggered by buffered ledgers
+    auto offlineCatchup =
+        configuration.offline() || configuration.localBucketsOnly();
     releaseAssert(offlineCatchup == mSyncingLedgers.empty());
 
     releaseAssert(!mCatchupWork);
 
-    // NB: if WorkScheduler is aborting this returns nullptr, but that
+    // NB: if WorkScheduler is aborting this returns nullptr,
     // which means we don't "really" start catchup.
     mCatchupWork = mApp.getWorkScheduler().scheduleWork<CatchupWork>(
-        configuration, archive);
+        configuration, bucketsToRetain, archive);
 }
 
 std::string
@@ -231,7 +288,7 @@ CatchupManagerImpl::logAndUpdateCatchupStatus(bool contiguous,
     {
         auto contiguousString =
             contiguous ? "" : " (discontiguous; will fail and restart): ";
-        auto state = fmt::format("{}{}", contiguousString, message);
+        auto state = fmt::format(FMT_STRING("{}{}"), contiguousString, message);
         auto existing = mApp.getStatusManager().getStatusMessage(
             StatusCategory::HISTORY_CATCHUP);
         if (existing != state)
@@ -254,46 +311,27 @@ CatchupManagerImpl::logAndUpdateCatchupStatus(bool contiguous)
     logAndUpdateCatchupStatus(contiguous, getStatus());
 }
 
-bool
-CatchupManagerImpl::hasBufferedLedger() const
+std::optional<LedgerCloseData>
+CatchupManagerImpl::maybeGetNextBufferedLedgerToApply()
 {
-    return !mSyncingLedgers.empty();
+    trimSyncingLedgers();
+    if (!mSyncingLedgers.empty() &&
+        mSyncingLedgers.begin()->first ==
+            mApp.getLedgerManager().getLastClosedLedgerNum() + 1)
+    {
+        return std::make_optional<LedgerCloseData>(
+            mSyncingLedgers.begin()->second);
+    }
+    else
+    {
+        return {};
+    }
 }
 
-LedgerCloseData const&
-CatchupManagerImpl::getFirstBufferedLedger() const
+uint32_t
+CatchupManagerImpl::getLargestLedgerSeqHeard() const
 {
-    if (!hasBufferedLedger())
-    {
-        throw std::runtime_error(
-            "getFirstBufferedLedger called when mSyncingLedgers is empty!");
-    }
-
-    return mSyncingLedgers.cbegin()->second;
-}
-
-LedgerCloseData const&
-CatchupManagerImpl::getLastBufferedLedger() const
-{
-    if (!hasBufferedLedger())
-    {
-        throw std::runtime_error(
-            "getLastBufferedLedger called when mSyncingLedgers is empty!");
-    }
-
-    return mSyncingLedgers.crbegin()->second;
-}
-
-void
-CatchupManagerImpl::popBufferedLedger()
-{
-    if (!hasBufferedLedger())
-    {
-        throw std::runtime_error(
-            "popBufferedLedger called when mSyncingLedgers is empty!");
-    }
-
-    mSyncingLedgers.erase(mSyncingLedgers.cbegin());
+    return mLargestLedgerSeqHeard;
 }
 
 void
@@ -303,21 +341,14 @@ CatchupManagerImpl::syncMetrics()
 }
 
 void
-CatchupManagerImpl::trimAndReset()
-{
-    releaseAssert(mCatchupWork);
-    mCatchupWork.reset();
-
-    logAndUpdateCatchupStatus(true);
-    trimSyncingLedgers();
-}
-
-void
-CatchupManagerImpl::addToSyncingLedgers(LedgerCloseData const& ledgerData)
+CatchupManagerImpl::addAndTrimSyncingLedgers(LedgerCloseData const& ledgerData)
 {
     mSyncingLedgers.emplace(ledgerData.getLedgerSeq(), ledgerData);
+    trimSyncingLedgers();
 
-    CLOG_INFO(Ledger, "Close of ledger {} buffered", ledgerData.getLedgerSeq());
+    CLOG_INFO(Ledger,
+              "Close of ledger {} buffered. mSyncingLedgers has {} ledgers",
+              ledgerData.getLedgerSeq(), mSyncingLedgers.size());
 }
 
 void
@@ -333,32 +364,45 @@ CatchupManagerImpl::startOnlineCatchup()
     auto hash = std::make_optional<Hash>(lcd.getTxSet()->previousLedgerHash());
     startCatchup({LedgerNumHashPair(firstBufferedLedgerSeq - 1, hash),
                   getCatchupCount(), CatchupConfiguration::Mode::ONLINE},
-                 nullptr);
+                 nullptr, {});
 }
 
 void
 CatchupManagerImpl::trimSyncingLedgers()
 {
-    // Look for newest checkpoint ledger by using a reverse iterator
-    auto rit =
-        findFirstCheckpoint(mSyncingLedgers.rbegin(), mSyncingLedgers.rend(),
-                            mApp.getHistoryManager());
 
-    // only keep ledgers after start of the latest checkpoint. If no checkpoint
-    // exists, then do nothing. We don't want to erase mSyncingLedgers in case
-    // we receive the missing ledgers and recover
-    if (rit != mSyncingLedgers.rend())
+    auto removeLedgersLessThan = [&](uint32_t ledger) {
+        // lower_bound returns an iterator pointing to the first element whose
+        // key is not considered to go before k. Thus we get the iterator to
+        // `ledger` if exists, or the first one after `ledger`.
+        auto it = mSyncingLedgers.lower_bound(ledger);
+        // This erases [begin, it).
+        mSyncingLedgers.erase(mSyncingLedgers.begin(), it);
+    };
+    removeLedgersLessThan(mApp.getLedgerManager().getLastClosedLedgerNum() + 1);
+    auto& hm = mApp.getHistoryManager();
+    if (!mSyncingLedgers.empty())
     {
-        // rit points to a ledger that's the first in a checkpoint, like 64 or
-        // 128; rit.base() is the underlying forward iterator one _past_ (in
-        // forward-order) the value pointed-to by rit. In other words
-        // (++rit).base() is the forward iterator pointing to the same ledger 64
-        // or 128 or such.
-        //
-        // We then erase the half-open range [begin, (++rit).base()) which is
-        // like [..., 64) or [..., 128), which leaves us with the checkpoint
-        // range [64, ...) or [128, ...) in mSyncingLedgers.
-        mSyncingLedgers.erase(mSyncingLedgers.begin(), (++rit).base());
+        auto const lastBufferedLedger = mSyncingLedgers.rbegin()->first;
+        if (hm.isFirstLedgerInCheckpoint(lastBufferedLedger))
+        {
+            // The last ledger is the first ledger in the checkpoint.
+            // This means that nodes may not have started publishing
+            // the checkpoint of lastBufferedLedger.
+            // We should only keep lastBufferedLedger _and_ the checkpoint
+            // before that.
+            removeLedgersLessThan(
+                hm.firstLedgerInCheckpointContaining(lastBufferedLedger - 1));
+        }
+        else
+        {
+            // The last ledger isn't the first ledger in the checkpoint.
+            // This means that nodes must have started publishing
+            // the checkpoint of lastBufferedLedger.
+            // Therefore, we will delete all ledgers before the checkpoint.
+            removeLedgersLessThan(
+                hm.firstLedgerInCheckpointContaining(lastBufferedLedger));
+        }
     }
 }
 
@@ -391,4 +435,58 @@ CatchupManagerImpl::tryApplySyncingLedgers()
 
     mSyncingLedgers.erase(mSyncingLedgers.cbegin(), it);
 }
+
+void
+CatchupManagerImpl::historyArchiveStatesDownloaded(uint32_t num)
+{
+    mMetrics.mHistoryArchiveStatesDownloaded += num;
+}
+
+void
+CatchupManagerImpl::ledgersVerified(uint32_t num)
+{
+    mMetrics.mLedgersVerified += num;
+}
+
+void
+CatchupManagerImpl::ledgerChainsVerificationFailed(uint32_t num)
+{
+    mMetrics.mLedgerChainsVerificationFailed += num;
+}
+
+void
+CatchupManagerImpl::bucketsApplied(uint32_t num)
+{
+    mMetrics.mBucketsApplied += num;
+}
+void
+CatchupManagerImpl::txSetsApplied(uint32_t num)
+{
+    mMetrics.mTxSetsApplied += num;
+}
+
+void
+CatchupManagerImpl::fileDownloaded(std::string type, uint32_t num)
+{
+    if (type == HISTORY_FILE_TYPE_BUCKET)
+    {
+        mMetrics.mBucketsDownloaded += num;
+    }
+    else if (type == HISTORY_FILE_TYPE_LEDGER)
+    {
+        mMetrics.mCheckpointsDownloaded += num;
+    }
+    else if (type == HISTORY_FILE_TYPE_TRANSACTIONS)
+    {
+        mMetrics.mTxSetsDownloaded += num;
+    }
+    else if (type != HISTORY_FILE_TYPE_RESULTS && type != HISTORY_FILE_TYPE_SCP)
+    {
+        throw std::runtime_error(fmt::format(
+            FMT_STRING(
+                "CatchupManagerImpl::fileDownloaded unknown file type {}"),
+            type));
+    }
+}
+
 }

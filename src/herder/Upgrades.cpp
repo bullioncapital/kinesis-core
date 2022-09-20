@@ -7,6 +7,7 @@
 #include "crypto/SHA.h"
 #include "database/Database.h"
 #include "database/DatabaseUtils.h"
+#include "ledger/LedgerHeaderUtils.h"
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/LedgerTxnHeader.h"
@@ -17,6 +18,7 @@
 #include "transactions/TransactionUtils.h"
 #include "util/Decoder.h"
 #include "util/Logging.h"
+#include "util/ProtocolVersion.h"
 #include "util/Timer.h"
 #include "util/types.h"
 #include <Tracy.hpp>
@@ -40,8 +42,9 @@ save(Archive& ar, stellar::Upgrades::UpgradeParameters const& p)
     ar(make_nvp("time", stellar::VirtualClock::to_time_t(p.mUpgradeTime)));
     ar(make_nvp("version", p.mProtocolVersion));
     ar(make_nvp("fee", p.mBaseFee));
-    ar(make_nvp("maxtxsize", p.mMaxTxSize));
+    ar(make_nvp("maxtxsize", p.mMaxTxSetSize));
     ar(make_nvp("reserve", p.mBaseReserve));
+    ar(make_nvp("flags", p.mFlags));
     ar(make_nvp("percentagefee", p.mBasePercentageFee));
     ar(make_nvp("maxfee", p.mMaxFee));
 }
@@ -55,10 +58,21 @@ load(Archive& ar, stellar::Upgrades::UpgradeParameters& o)
     o.mUpgradeTime = stellar::VirtualClock::from_time_t(t);
     ar(make_nvp("version", o.mProtocolVersion));
     ar(make_nvp("fee", o.mBaseFee));
-    ar(make_nvp("maxtxsize", o.mMaxTxSize));
+    ar(make_nvp("maxtxsize", o.mMaxTxSetSize));
     ar(make_nvp("reserve", o.mBaseReserve));
     ar(make_nvp("percentagefee", o.mBasePercentageFee));
     ar(make_nvp("maxfee", o.mMaxFee));
+
+    // the flags upgrade was added after the fields above, so it's possible for
+    // them not to exist in the database
+    try
+    {
+        ar(make_nvp("flags", o.mFlags));
+    }
+    catch (cereal::Exception&)
+    {
+        // flags name not found
+    }
 }
 } // namespace cereal
 
@@ -138,9 +152,10 @@ Upgrades::setParameters(UpgradeParameters const& params, Config const& cfg)
     if (params.mProtocolVersion &&
         *params.mProtocolVersion > cfg.LEDGER_PROTOCOL_VERSION)
     {
-        throw std::invalid_argument(fmt::format(
-            "Protocol version error: supported is up to {}, passed is {}",
-            cfg.LEDGER_PROTOCOL_VERSION, *params.mProtocolVersion));
+        throw std::invalid_argument(
+            fmt::format(FMT_STRING("Protocol version error: supported is up to "
+                                   "{:d}, passed is {:d}"),
+                        cfg.LEDGER_PROTOCOL_VERSION, *params.mProtocolVersion));
     }
     mParams = params;
 }
@@ -171,15 +186,37 @@ Upgrades::createUpgradesFor(LedgerHeader const& header) const
         result.emplace_back(LEDGER_UPGRADE_BASE_FEE);
         result.back().newBaseFee() = *mParams.mBaseFee;
     }
-    if (mParams.mMaxTxSize && (header.maxTxSetSize != *mParams.mMaxTxSize))
+    if (mParams.mMaxTxSetSize &&
+        (header.maxTxSetSize != *mParams.mMaxTxSetSize))
     {
         result.emplace_back(LEDGER_UPGRADE_MAX_TX_SET_SIZE);
-        result.back().newMaxTxSetSize() = *mParams.mMaxTxSize;
+        result.back().newMaxTxSetSize() = *mParams.mMaxTxSetSize;
     }
     if (mParams.mBaseReserve && (header.baseReserve != *mParams.mBaseReserve))
     {
         result.emplace_back(LEDGER_UPGRADE_BASE_RESERVE);
         result.back().newBaseReserve() = *mParams.mBaseReserve;
+    }
+    if (mParams.mFlags)
+    {
+        if (LedgerHeaderUtils::getFlags(header) != *mParams.mFlags)
+        {
+            result.emplace_back(LEDGER_UPGRADE_FLAGS);
+            result.back().newFlags() = *mParams.mFlags;
+        }
+    }
+
+    if (mParams.mBasePercentageFee &&
+        (header.basePercentageFee != *mParams.mBasePercentageFee))
+    {
+        result.emplace_back(LEDGER_UPGRADE_BASE_PERCENTAGE_FEE);
+        result.back().newBasePercentageFee() = *mParams.mBasePercentageFee;
+    }
+
+    if (mParams.mMaxFee && (header.maxFee != *mParams.mMaxFee))
+    {
+        result.emplace_back(LEDGER_UPGRADE_MAX_FEE);
+        result.back().newMaxFee() = *mParams.mMaxFee;
     }
 
     if (mParams.mBasePercentageFee &&
@@ -219,12 +256,17 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, AbstractLedgerTxn& ltx)
         ltx.loadHeader().current().basePercentageFee =
             upgrade.newBasePercentageFee();
         break;
-     case LEDGER_UPGRADE_MAX_FEE:
+    case LEDGER_UPGRADE_MAX_FEE:
          ltx.loadHeader().current().maxFee = upgrade.newMaxFee();
          break;
+    case LEDGER_UPGRADE_FLAGS:
+        setLedgerHeaderFlag(ltx.loadHeader().current(), upgrade.newFlags());
+        break;
+
     default:
     {
-        auto s = fmt::format("Unknown upgrade type: {0}", upgrade.type());
+        auto s =
+            fmt::format(FMT_STRING("Unknown upgrade type: {}"), upgrade.type());
         throw std::runtime_error(s);
     }
     }
@@ -236,12 +278,18 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
-        return fmt::format("protocolversion={0}", upgrade.newLedgerVersion());
+        return fmt::format(FMT_STRING("protocolversion={:d}"),
+                           upgrade.newLedgerVersion());
     case LEDGER_UPGRADE_BASE_FEE:
-        return fmt::format("basefee={0}", upgrade.newBaseFee());
+        return fmt::format(FMT_STRING("basefee={:d}"), upgrade.newBaseFee());
     case LEDGER_UPGRADE_MAX_TX_SET_SIZE:
-        return fmt::format("maxtxsetsize={0}", upgrade.newMaxTxSetSize());
+        return fmt::format(FMT_STRING("maxtxsetsize={:d}"),
+                           upgrade.newMaxTxSetSize());
     case LEDGER_UPGRADE_BASE_RESERVE:
+        return fmt::format(FMT_STRING("basereserve={:d}"),
+                           upgrade.newBaseReserve());
+    case LEDGER_UPGRADE_FLAGS:
+        return fmt::format(FMT_STRING("flags={:d}"), upgrade.newFlags());
         return fmt::format("basereserve={0}", upgrade.newBaseReserve());
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
          return fmt::format("basepercentagefee={0}", upgrade.newBasePercentageFee());
@@ -264,20 +312,21 @@ Upgrades::toString() const
             if (first)
             {
                 r << fmt::format(
-                    "upgradetime={}",
+                    FMT_STRING("upgradetime={}"),
                     VirtualClock::systemPointToISOString(mParams.mUpgradeTime));
                 first = false;
             }
-            r << fmt::format(", {}={}", s, *o);
+            r << fmt::format(FMT_STRING(", {}={:d}"), s, *o);
         }
     };
 
     appendInfo("protocolversion", mParams.mProtocolVersion);
     appendInfo("basefee", mParams.mBaseFee);
     appendInfo("basereserve", mParams.mBaseReserve);
+    appendInfo("maxtxsetsize", mParams.mMaxTxSetSize);
+    appendInfo("flags", mParams.mFlags);
     appendInfo("basepercentagefee", mParams.mBasePercentageFee);
     appendInfo("maxfee", mParams.mMaxFee);
-    appendInfo("maxtxsize", mParams.mMaxTxSize);
 
     return r.str();
 }
@@ -306,8 +355,9 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
 
         resetParamIfSet(res.mProtocolVersion);
         resetParamIfSet(res.mBaseFee);
-        resetParamIfSet(res.mMaxTxSize);
+        resetParamIfSet(res.mMaxTxSetSize);
         resetParamIfSet(res.mBaseReserve);
+        resetParamIfSet(res.mFlags);
         resetParamIfSet(res.mBasePercentageFee);
         resetParamIfSet(res.mMaxFee);
         return res;
@@ -343,7 +393,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
             resetParam(res.mBaseFee, lu.newBaseFee());
             break;
         case LEDGER_UPGRADE_MAX_TX_SET_SIZE:
-            resetParam(res.mMaxTxSize, lu.newMaxTxSetSize());
+            resetParam(res.mMaxTxSetSize, lu.newMaxTxSetSize());
             break;
         case LEDGER_UPGRADE_BASE_RESERVE:
             resetParam(res.mBaseReserve, lu.newBaseReserve());
@@ -354,6 +404,9 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         case LEDGER_UPGRADE_MAX_FEE:
              resetParam(res.mMaxFee, lu.newMaxFee());
              break;
+        case LEDGER_UPGRADE_FLAGS:
+            resetParam(res.mFlags, lu.newFlags());
+            break;
         default:
             // skip unknown
             break;
@@ -403,6 +456,12 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
     case LEDGER_UPGRADE_MAX_FEE:
          res = res && (upgrade.newMaxFee() != 0);
          break;
+    case LEDGER_UPGRADE_FLAGS:
+        res = res &&
+              protocolVersionStartsFrom(header.ledgerVersion,
+                                        ProtocolVersion::V_18) &&
+              (upgrade.newFlags() & ~MASK_LEDGER_HEADER_FLAGS) == 0;
+        break;
     default:
         res = false;
     }
@@ -426,8 +485,8 @@ Upgrades::isValidForNomination(LedgerUpgrade const& upgrade,
     case LEDGER_UPGRADE_BASE_FEE:
         return mParams.mBaseFee && (upgrade.newBaseFee() == *mParams.mBaseFee);
     case LEDGER_UPGRADE_MAX_TX_SET_SIZE:
-        return mParams.mMaxTxSize &&
-               (upgrade.newMaxTxSetSize() == *mParams.mMaxTxSize);
+        return mParams.mMaxTxSetSize &&
+               (upgrade.newMaxTxSetSize() == *mParams.mMaxTxSetSize);
     case LEDGER_UPGRADE_BASE_RESERVE:
         return mParams.mBaseReserve &&
                (upgrade.newBaseReserve() == *mParams.mBaseReserve);
@@ -437,6 +496,8 @@ Upgrades::isValidForNomination(LedgerUpgrade const& upgrade,
      case LEDGER_UPGRADE_MAX_FEE:
          return mParams.mMaxFee &&
                  (upgrade.newMaxFee() == *mParams.mMaxFee);
+    case LEDGER_UPGRADE_FLAGS:
+        return mParams.mFlags && (upgrade.newFlags() == *mParams.mFlags);
     default:
         return false;
     }
@@ -509,7 +570,7 @@ Upgrades::storeUpgradeHistory(Database& db, uint32_t ledgerSeq,
     st.exchange(soci::use(upgradeChanges64));
     st.define_and_bind();
     {
-        auto timer = db.getInsertTimer("upgradehistory");
+        ZoneNamedN(insertUpgradeZone, "insert upgradehistory", true);
         st.execute(true);
     }
 
@@ -912,9 +973,12 @@ prepareLiabilities(AbstractLedgerTxn& ltx, LedgerTxnHeader const& header)
                     ++nChangedTrustLines;
                 }
 
-                // the deltas should only be positive when liabilities were
-                // introduced in ledgerVersion 10
-                if (header.current().ledgerVersion > 10 &&
+                // The deltas could be negative when liabilities were
+                // introduced in ledgerVersion 10. This was fixed and
+                // ledgerVersion 11 and starting from it deltas should be
+                // positive.
+                if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                              ProtocolVersion::V_11) &&
                     (deltaSelling > 0 || deltaBuying > 0))
                 {
                     throw std::runtime_error("invalid liabilities delta");
@@ -1001,11 +1065,15 @@ Upgrades::applyVersionUpgrade(AbstractLedgerTxn& ltx, uint32_t newVersion)
     uint32_t prevVersion = header.current().ledgerVersion;
 
     header.current().ledgerVersion = newVersion;
-    if (header.current().ledgerVersion >= 10 && prevVersion < 10)
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_10) &&
+        protocolVersionIsBefore(prevVersion, ProtocolVersion::V_10))
     {
         prepareLiabilities(ltx, header);
     }
-    else if (header.current().ledgerVersion == 16 && prevVersion == 15)
+    else if (protocolVersionEquals(header.current().ledgerVersion,
+                                   ProtocolVersion::V_16) &&
+             protocolVersionEquals(prevVersion, ProtocolVersion::V_15))
     {
         upgradeFromProtocol15To16(ltx);
     }
@@ -1018,7 +1086,9 @@ Upgrades::applyReserveUpgrade(AbstractLedgerTxn& ltx, uint32_t newReserve)
     bool didReserveIncrease = newReserve > header.current().baseReserve;
 
     header.current().baseReserve = newReserve;
-    if (header.current().ledgerVersion >= 10 && didReserveIncrease)
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_10) &&
+        didReserveIncrease)
     {
         prepareLiabilities(ltx, header);
     }

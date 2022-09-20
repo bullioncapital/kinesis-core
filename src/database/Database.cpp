@@ -10,6 +10,7 @@
 #include "main/Config.h"
 #include "overlay/StellarXDR.h"
 #include "util/Decoder.h"
+#include "util/Fs.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
 #include "util/Timer.h"
@@ -62,7 +63,7 @@ bool Database::gDriversRegistered = false;
 
 // smallest schema version supported
 static unsigned long const MIN_SCHEMA_VERSION = 13;
-static unsigned long const SCHEMA_VERSION = 16;
+static unsigned long const SCHEMA_VERSION = 17;
 
 // These should always match our compiled version precisely, since we are
 // using a bundled version to get access to carray(). But in case someone
@@ -192,7 +193,13 @@ Database::Database(Application& app)
     CLOG_INFO(
         Database, "Connecting to: {}",
         removePasswordFromConnectionString(app.getConfig().DATABASE.value));
-    mSession.open(app.getConfig().DATABASE.value);
+    open();
+}
+
+void
+Database::open()
+{
+    mSession.open(mApp.getConfig().DATABASE.value);
     DatabaseConfigureSessionOp op(mSession);
     doDatabaseTypeSpecificOperation(op);
 }
@@ -214,6 +221,9 @@ Database::applySchemaUpgrade(unsigned long vers)
         break;
     case 16:
         mApp.getPersistentState().setRebuildForType(LIQUIDITY_POOL);
+        break;
+    case 17:
+        mApp.getPersistentState().setRebuildForType(OFFER);
         break;
     default:
         throw std::runtime_error("Unknown DB schema version");
@@ -350,7 +360,7 @@ Database::setCurrentTransactionReadOnly()
 bool
 Database::isSqlite() const
 {
-    return mApp.getConfig().DATABASE.value.find("sqlite3:") !=
+    return mApp.getConfig().DATABASE.value.find("sqlite3://") !=
            std::string::npos;
 }
 
@@ -390,6 +400,34 @@ void
 Database::initialize()
 {
     clearPreparedStatementCache();
+    if (isSqlite())
+    {
+        // delete the sqlite file directly if possible
+        std::string fn;
+
+        {
+            int i;
+            std::string databaseName, databaseLocation;
+            soci::statement st =
+                (mSession.prepare << "PRAGMA database_list;", soci::into(i),
+                 soci::into(databaseName), soci::into(databaseLocation));
+            st.execute(true);
+            while (st.got_data())
+            {
+                if (databaseName == "main")
+                {
+                    fn = databaseLocation;
+                    break;
+                }
+            }
+        }
+        if (!fn.empty() && fs::exists(fn))
+        {
+            mSession.close();
+            std::remove(fn.c_str());
+            open();
+        }
+    }
     // normally you do not want to touch this section as
     // schema updates are done in applySchemaUpgrade
 

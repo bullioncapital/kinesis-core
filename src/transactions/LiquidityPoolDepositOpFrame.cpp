@@ -7,6 +7,8 @@
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/TrustLineWrapper.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
+#include "util/numeric128.h"
 
 namespace stellar
 {
@@ -19,9 +21,11 @@ LiquidityPoolDepositOpFrame::LiquidityPoolDepositOpFrame(
 }
 
 bool
-LiquidityPoolDepositOpFrame::isVersionSupported(uint32_t protocolVersion) const
+LiquidityPoolDepositOpFrame::isOpSupported(LedgerHeader const& header) const
 {
-    return protocolVersion >= 18;
+    return protocolVersionStartsFrom(header.ledgerVersion,
+                                     ProtocolVersion::V_18) &&
+           !isPoolDepositDisabled(header);
 }
 
 static bool
@@ -29,7 +33,8 @@ isBadPrice(int64_t amountA, int64_t amountB, Price const& minPrice,
            Price const& maxPrice)
 {
     // a * d < b * n is equivalent to a/b < n/d but avoids rounding.
-    if (bigMultiply(amountA, minPrice.d) < bigMultiply(amountB, minPrice.n) ||
+    if (amountA == 0 || amountB == 0 ||
+        bigMultiply(amountA, minPrice.d) < bigMultiply(amountB, minPrice.n) ||
         bigMultiply(amountA, maxPrice.d) > bigMultiply(amountB, maxPrice.n))
     {
         return true;
@@ -107,9 +112,14 @@ LiquidityPoolDepositOpFrame::depositIntoNonEmptyPool(
                               ROUND_DOWN);
         if (!minAmongValid(amountPoolShares, sharesA, resA, sharesB, resB))
         {
-            // sharesA > INT64_MAX and sharesB > INT64_MAX so we always fail
-            innerResult().code(LIQUIDITY_POOL_DEPOSIT_POOL_FULL);
-            return false;
+            // This can't happen.
+            // It is guaranteed that either reserveA >=
+            // totalPoolShares or reserveB >= totalPoolShares. Suppose that
+            // reserveA >= totalPoolShares (everything works analogously for
+            // reserveB). Then sharesA = floor(totalPoolShares * maxAmountA /
+            // reserveA) <= floor(reserveA * maxAmountA / reserveA) =
+            // maxAmountA.
+            throw std::runtime_error("both shares calculations overflowed");
         }
     }
 
@@ -120,8 +130,17 @@ LiquidityPoolDepositOpFrame::depositIntoNonEmptyPool(
                               cp.totalPoolShares, ROUND_UP);
         if (!(resA && resB))
         {
-            innerResult().code(LIQUIDITY_POOL_DEPOSIT_UNDERFUNDED);
-            return false;
+            // This can't happen.
+            // Everything below works analogously for amountB.
+            //
+            // amountA  = ceil(amountPoolShares * reserveA / totalPoolShares)
+            // = ceil(min(sharesA, sharesB) * reserveA / totalPoolShares)
+            // <= ceil(sharesA * reserveA / totalPoolShares)
+            // = ceil(floor(totalPoolShares * maxAmountA / reserveA) * reserveA
+            // / totalPoolShares)
+            // <= ceil(totalPoolShares * maxAmountA / reserveA * reserveA /
+            // totalPoolShares) = maxAmountA.
+            throw std::runtime_error("amount overflowed");
         }
     }
 
@@ -224,6 +243,12 @@ LiquidityPoolDepositOpFrame::doApply(AbstractLedgerTxn& ltx)
     int64_t amountPoolShares = 0;
     int64_t availableA = tlA ? tlA.getAvailableBalance(header)
                              : getAvailableBalance(header, source);
+
+    // it's currently not possible for tlB to be false here because assetB can't
+    // be the native asset (pool share assets follow a lexicographically
+    // ordering, and the native asset is the "smallest" asset at the moment).
+    // The condition is still here in case a change is made in the future to
+    // allow assets with negative AssetTypes.
     int64_t availableB = tlB ? tlB.getAvailableBalance(header)
                              : getAvailableBalance(header, source);
     int64_t availableLimitPoolShares = getMaxAmountReceive(header, tlPool);
@@ -252,6 +277,12 @@ LiquidityPoolDepositOpFrame::doApply(AbstractLedgerTxn& ltx)
     {
         innerResult().code(LIQUIDITY_POOL_DEPOSIT_POOL_FULL);
         return false;
+    }
+
+    if (amountA <= 0 || amountB <= 0 || amountPoolShares <= 0)
+    {
+        throw std::runtime_error("must deposit positive amounts and receive a"
+                                 " positive amount of pool shares");
     }
 
     // At most one of these can use source because at most one of tlA and tlB

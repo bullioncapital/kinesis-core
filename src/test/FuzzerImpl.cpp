@@ -247,6 +247,13 @@ setShortKey(std::array<LedgerKey, NUM_STORED_LEDGER_KEYS> const& storedKeys,
     key = storedKeys[byte % NUM_STORED_LEDGER_KEYS];
 }
 
+void
+setShortKey(FuzzUtils::StoredPoolIDs const& storedPoolIDs, PoolID& key,
+            uint8_t byte)
+{
+    key = storedPoolIDs[byte % NUM_STORED_POOL_IDS];
+}
+
 SequenceNumber
 getSequenceNumber(AbstractLedgerTxn& ltx, PublicKey const& sourceAccountID)
 {
@@ -485,13 +492,16 @@ xdr_to_fuzzer_opaque(Args const&... args)
 struct xdr_fuzzer_unpacker
 {
     stellar::FuzzUtils::StoredLedgerKeys mStoredLedgerKeys;
+    stellar::FuzzUtils::StoredPoolIDs mStoredPoolIDs;
     std::uint8_t const* mCur;
     std::uint8_t const* const mEnd;
 
     xdr_fuzzer_unpacker(
         stellar::FuzzUtils::StoredLedgerKeys const& storedLedgerKeys,
+        stellar::FuzzUtils::StoredPoolIDs const& storedPoolIDs,
         void const* start, void const* end)
         : mStoredLedgerKeys(storedLedgerKeys)
+        , mStoredPoolIDs(storedPoolIDs)
         , mCur(reinterpret_cast<std::uint8_t const*>(start))
         , mEnd(reinterpret_cast<std::uint8_t const*>(end))
     {
@@ -499,8 +509,10 @@ struct xdr_fuzzer_unpacker
     }
     xdr_fuzzer_unpacker(
         stellar::FuzzUtils::StoredLedgerKeys const& storedLedgerKeys,
+        stellar::FuzzUtils::StoredPoolIDs const& storedPoolIDs,
         msg_ptr const& m)
-        : xdr_fuzzer_unpacker(storedLedgerKeys, m->data(), m->end())
+        : xdr_fuzzer_unpacker(storedLedgerKeys, storedPoolIDs, m->data(),
+                              m->end())
     {
     }
 
@@ -532,20 +544,28 @@ struct xdr_fuzzer_unpacker
     }
 
     template <typename T>
-    typename std::enable_if<std::is_same<
-        std::uint32_t, typename xdr_traits<T>::uint_type>::value>::type
-    operator()(T& t)
+    T
+    get32()
     {
         // 1 byte --> uint32
         check(1);
         uint32_t w = get_byte();
-        t = xdr_traits<T>::from_uint(w);
+        if (w == UINT8_MAX)
+        {
+            return std::numeric_limits<T>::max();
+        }
+        else if (w == UINT8_MAX - 1)
+        {
+            auto maxT = std::numeric_limits<T>::max();
+            return xdr_traits<T>::from_uint(maxT - 1);
+        }
+
+        return xdr_traits<T>::from_uint(w);
     }
 
     template <typename T>
-    typename std::enable_if<std::is_same<
-        std::uint64_t, typename xdr_traits<T>::uint_type>::value>::type
-    operator()(T& t)
+    T
+    get64()
     {
         // 2 bytes --> uint64 **with** "sign extension"
         check(2);
@@ -554,7 +574,32 @@ struct xdr_fuzzer_unpacker
         get_bytes(&w, 2);
         // extend to 64 bit
         int64_t ww = w;
-        t = xdr_traits<T>::from_uint(ww);
+        if (ww == INT16_MAX)
+        {
+            return std::numeric_limits<T>::max();
+        }
+        else if (ww == INT16_MAX - 1)
+        {
+            return std::numeric_limits<T>::max() - 1;
+        }
+
+        return xdr_traits<T>::from_uint(ww);
+    }
+
+    template <typename T>
+    typename std::enable_if<std::is_same<
+        std::uint32_t, typename xdr_traits<T>::uint_type>::value>::type
+    operator()(T& t)
+    {
+        t = get32<T>();
+    }
+
+    template <typename T>
+    typename std::enable_if<std::is_same<
+        std::uint64_t, typename xdr_traits<T>::uint_type>::value>::type
+    operator()(T& t)
+    {
+        t = get64<T>();
     }
 
     template <typename T>
@@ -592,6 +637,8 @@ struct xdr_fuzzer_unpacker
          !std::is_same<stellar::Asset, T>::value &&
          !std::is_same<stellar::AssetCode, T>::value &&
          !std::is_same<stellar::ClaimableBalanceID, T>::value &&
+         !std::is_same<stellar::LiquidityPoolDepositOp, T>::value &&
+         !std::is_same<stellar::LiquidityPoolWithdrawOp, T>::value &&
          !std::is_same<stellar::LedgerKey, T>::value) &&
         (xdr_traits<T>::is_class || xdr_traits<T>::is_container)>::type
     operator()(T& t)
@@ -660,6 +707,45 @@ struct xdr_fuzzer_unpacker
         }
     }
 
+    // PoolID is just an opaque vector of size 32, so we have to specialize the
+    // deposit and withdraw ops instead
+    template <typename T>
+    typename std::enable_if<
+        std::is_same<stellar::LiquidityPoolDepositOp, T>::value>::type
+    operator()(T& depositOp)
+    {
+        check(1);
+        auto v = get_byte();
+        stellar::FuzzUtils::setShortKey(mStoredPoolIDs,
+                                        depositOp.liquidityPoolID, v);
+
+        depositOp.maxAmountA = get64<int64_t>();
+        depositOp.maxAmountB = get64<int64_t>();
+
+        auto minN = get32<int32_t>();
+        auto minD = get32<int32_t>();
+        auto maxN = get32<int32_t>();
+        auto maxD = get32<int32_t>();
+
+        depositOp.minPrice = stellar::Price{minN, minD};
+        depositOp.maxPrice = stellar::Price{maxN, maxD};
+    }
+
+    template <typename T>
+    typename std::enable_if<
+        std::is_same<stellar::LiquidityPoolWithdrawOp, T>::value>::type
+    operator()(T& withdrawOp)
+    {
+        check(1);
+        auto v = get_byte();
+        stellar::FuzzUtils::setShortKey(mStoredPoolIDs,
+                                        withdrawOp.liquidityPoolID, v);
+
+        withdrawOp.amount = get64<int64_t>();
+        withdrawOp.minAmountA = get64<int64_t>();
+        withdrawOp.minAmountB = get64<int64_t>();
+    }
+
     template <typename T>
     typename std::enable_if<std::is_same<stellar::LedgerKey, T>::value>::type
     operator()(T& key)
@@ -683,9 +769,11 @@ template <typename Bytes, typename... Args>
 auto
 xdr_from_fuzzer_opaque(
     stellar::FuzzUtils::StoredLedgerKeys const& storedLedgerKeys,
-    Bytes const& m, Args&... args) -> decltype(detail::bytes_to_void(m))
+    stellar::FuzzUtils::StoredPoolIDs const& storedPoolIDs, Bytes const& m,
+    Args&... args) -> decltype(detail::bytes_to_void(m))
 {
-    xdr_fuzzer_unpacker g(storedLedgerKeys, m.data(), m.data() + m.size());
+    xdr_fuzzer_unpacker g(storedLedgerKeys, storedPoolIDs, m.data(),
+                          m.data() + m.size());
     xdr_argpack_archive(g, args...);
     g.done();
 }
@@ -735,18 +823,9 @@ getFuzzConfig(int instanceNumber)
 }
 
 static void
-resetRandomSeed(unsigned int seed)
-{
-    // seed randomness
-    srand(seed);
-    gRandomEngine.seed(seed);
-    autocheck::rng().seed(seed);
-}
-
-static void
 resetTxInternalState(Application& app)
 {
-    resetRandomSeed(1);
+    reinitializeAllGlobalStateWithSeed(1);
 // reset caches to clear persistent state
 #ifdef BUILD_TESTS
     app.getLedgerTxnRoot().resetForFuzzer();
@@ -1112,8 +1191,8 @@ std::array<TrustLineParameters, 12> constexpr trustLineParameters{
 
      // these 5 trustlines are required for claimable balances
      {2, AssetID(4), 256, 256},
-     {3, AssetID(4), 256, 256},
-     TrustLineParameters::withAllowTrust(4, AssetID(3), 256, 256,
+     {3, AssetID(4), INT64_MAX, 0},
+     TrustLineParameters::withAllowTrust(4, AssetID(3), INT64_MAX, 0,
                                          AUTHORIZED_FLAG),
 
      // deauthorize trustline
@@ -1217,7 +1296,7 @@ struct OfferParameters : public SponsoredEntryParameters
     bool const mPassive;
 };
 
-std::array<OfferParameters, 16> constexpr orderBookParameters{{
+std::array<OfferParameters, 17> constexpr orderBookParameters{{
 
     // The first two order books follow this structure
     // +------------+-----+------+--------+------------------------------+
@@ -1250,6 +1329,8 @@ std::array<OfferParameters, 16> constexpr orderBookParameters{{
     {3, AssetID(2), AssetID(1), 50, 10, 9, false},
     {3, AssetID(2), AssetID(1), 100, 22, 7, false},
 
+    {4, AssetID(4), AssetID(3), INT64_MAX - 50, 1, 1, false},
+
     // offer to trade all of one asset to another up to the trustline limit
     {4, AssetID(2), AssetID(), 256, 1, 1, true},
 
@@ -1259,10 +1340,83 @@ std::array<OfferParameters, 16> constexpr orderBookParameters{{
                   (2 * FuzzUtils::FUZZING_RESERVE) + 1),
      1, 1, false, 2}}};
 
+struct PoolSetupParameters : public SponsoredEntryParameters
+{
+    constexpr PoolSetupParameters(int trustor, AssetID const& assetA,
+                                  AssetID const& assetB, int64_t maxAmountA,
+                                  int64_t maxAmountB, int32_t minPriceNumerator,
+                                  int32_t minPriceDenominator,
+                                  int32_t maxPriceNumerator,
+                                  int32_t maxPriceDenominator, int64_t limit)
+        : SponsoredEntryParameters()
+        , mTrustor(trustor)
+        , mAssetA(assetA)
+        , mAssetB(assetB)
+        , mMaxAmountA(maxAmountA)
+        , mMaxAmountB(maxAmountB)
+        , mMinPriceNumerator(minPriceNumerator)
+        , mMinPriceDenominator(minPriceDenominator)
+        , mMaxPriceNumerator(maxPriceNumerator)
+        , mMaxPriceDenominator(maxPriceDenominator)
+        , mLimit(limit)
+    {
+    }
+
+    constexpr PoolSetupParameters(int trustor, AssetID const& assetA,
+                                  AssetID const& assetB, int64_t maxAmountA,
+                                  int64_t maxAmountB, int32_t minPriceNumerator,
+                                  int32_t minPriceDenominator,
+                                  int32_t maxPriceNumerator,
+                                  int32_t maxPriceDenominator, int64_t limit,
+                                  int sponsorKey)
+        : SponsoredEntryParameters(sponsorKey)
+        , mTrustor(trustor)
+        , mAssetA(assetA)
+        , mAssetB(assetB)
+        , mMaxAmountA(maxAmountA)
+        , mMaxAmountB(maxAmountB)
+        , mMinPriceNumerator(minPriceNumerator)
+        , mMinPriceDenominator(minPriceDenominator)
+        , mMaxPriceNumerator(maxPriceNumerator)
+        , mMaxPriceDenominator(maxPriceDenominator)
+        , mLimit(limit)
+    {
+    }
+
+    int const mTrustor;
+    AssetID const mAssetA;
+    AssetID const mAssetB;
+    int64_t const mMaxAmountA;
+    int64_t const mMaxAmountB;
+    int32_t const mMinPriceNumerator;
+    int32_t const mMinPriceDenominator;
+    int32_t const mMaxPriceNumerator;
+    int32_t const mMaxPriceDenominator;
+    int64_t const mLimit;
+};
+
+// NUM_STORED_POOL_IDS - 1 because we will push in a hash for a pool that
+// doesn't exist into mStoredPoolIDs later
+std::array<PoolSetupParameters,
+           FuzzUtils::NUM_STORED_POOL_IDS - 1> constexpr poolSetupParameters{
+    {// Native 1:1
+     {1, AssetID(), AssetID(1), 1000, 1000, 1, 1, 1, 1, 1000},
+     // Non-native 2:1
+     {2, AssetID(1), AssetID(2), 1000, 500, 2, 1, 2, 1, 1000},
+     // Non-native 1:2 sponsored by account 4
+     {3, AssetID(1), AssetID(3), 500, 1000, 1, 2, 1, 2, 1000, 4},
+     // Native no deposit
+     {3, AssetID(), AssetID(4), 0, 0, 0, 0, 0, 0, 1000},
+     // Non-native no deposit
+     {3, AssetID(2), AssetID(4), 0, 0, 0, 0, 0, 0, 1000},
+     // close to max reserves
+     {3, AssetID(3), AssetID(4), INT64_MAX - 50, INT64_MAX - 50, 1, 1, 1, 1,
+      INT64_MAX}}};
+
 void
 TransactionFuzzer::initialize()
 {
-    resetRandomSeed(1);
+    reinitializeAllGlobalStateWithSeed(1);
     mApp = createTestApplication(mClock, getFuzzConfig(0));
     OrderBookIsNotCrossed::registerAndEnableInvariant(*mApp);
     auto root = TestAccount::createRoot(*mApp);
@@ -1279,13 +1433,15 @@ TransactionFuzzer::initialize()
 
     initializeOffers(ltxOuter);
 
+    initializeLiquidityPools(ltxOuter);
+
     reduceNativeBalancesAfterSetup(ltxOuter);
 
-    reduceTrustLineBalancesAfterSetup(ltxOuter);
+    adjustTrustLineBalancesAfterSetup(ltxOuter);
 
     reduceTrustLineLimitsAfterSetup(ltxOuter);
 
-    storeSetupLedgerKeys(ltxOuter);
+    storeSetupLedgerKeysAndPoolIDs(ltxOuter);
 
     // commit this to the ledger so that we have a starting, persistent
     // state to fuzz test against
@@ -1297,7 +1453,28 @@ TransactionFuzzer::initialize()
 }
 
 void
-TransactionFuzzer::storeSetupLedgerKeys(AbstractLedgerTxn& ltx)
+TransactionFuzzer::storeSetupPoolIDs(AbstractLedgerTxn& ltx,
+                                     std::vector<LedgerEntry> const& entries)
+{
+    std::vector<PoolID> poolIDs;
+    for (auto const& entry : entries)
+    {
+        if (entry.data.type() != LIQUIDITY_POOL)
+        {
+            continue;
+        }
+        poolIDs.emplace_back(entry.data.liquidityPool().liquidityPoolID);
+    }
+
+    assert(poolIDs.size() == FuzzUtils::NUM_STORED_POOL_IDS - 1);
+    auto firstGeneratedPoolID =
+        std::copy(poolIDs.cbegin(), poolIDs.cend(), mStoredPoolIDs.begin());
+    std::generate(firstGeneratedPoolID, mStoredPoolIDs.end(),
+                  []() { return PoolID{}; });
+}
+
+void
+TransactionFuzzer::storeSetupLedgerKeysAndPoolIDs(AbstractLedgerTxn& ltx)
 {
     // Get the list of ledger entries created during setup to place into
     // mStoredLedgerKeys.
@@ -1334,6 +1511,8 @@ TransactionFuzzer::storeSetupLedgerKeys(AbstractLedgerTxn& ltx)
 
     stellar::FuzzUtils::generateStoredLedgerKeys(firstGeneratedLedgerKey,
                                                  mStoredLedgerKeys.end());
+
+    storeSetupPoolIDs(ltx, init);
 }
 
 void
@@ -1389,6 +1568,7 @@ TransactionFuzzer::initializeTrustLines(AbstractLedgerTxn& ltxOuter)
         auto trustOp = txtest::changeTrust(
             asset, std::max<int64_t>(FuzzUtils::INITIAL_TRUST_LINE_LIMIT,
                                      trustLine.mAssetAvailableForTestActivity));
+
         trustOp.sourceAccount.activate() = toMuxedAccount(account);
         FuzzUtils::emplaceConditionallySponsored(
             ops, trustOp, trustLine.mSponsored, trustLine.mSponsorKey, account);
@@ -1486,6 +1666,56 @@ TransactionFuzzer::initializeOffers(AbstractLedgerTxn& ltxOuter)
 }
 
 void
+TransactionFuzzer::initializeLiquidityPools(AbstractLedgerTxn& ltxOuter)
+{
+    LedgerTxn ltx(ltxOuter);
+
+    xdr::xvector<Operation> ops;
+
+    for (auto const& param : poolSetupParameters)
+    {
+        auto const trustor = param.mTrustor;
+        PublicKey account;
+        FuzzUtils::setShortKey(account, trustor);
+
+        // First create the pool
+        auto const assetA = param.mAssetA.toAsset();
+        auto const assetB = param.mAssetB.toAsset();
+
+        ChangeTrustAsset poolAsset;
+        poolAsset.type(ASSET_TYPE_POOL_SHARE);
+        poolAsset.liquidityPool().constantProduct().assetA = assetA;
+        poolAsset.liquidityPool().constantProduct().assetB = assetB;
+        poolAsset.liquidityPool().constantProduct().fee =
+            LIQUIDITY_POOL_FEE_V18;
+
+        auto trustOp = txtest::changeTrust(
+            poolAsset, std::max<int64_t>(FuzzUtils::INITIAL_TRUST_LINE_LIMIT,
+                                         param.mLimit));
+        trustOp.sourceAccount.activate() = toMuxedAccount(account);
+        FuzzUtils::emplaceConditionallySponsored(ops, trustOp, param.mSponsored,
+                                                 param.mSponsorKey, account);
+
+        // Then deposit
+        if (param.mMaxAmountA > 0 && param.mMaxAmountB > 0)
+        {
+            auto depositOp = txtest::liquidityPoolDeposit(
+                xdrSha256(poolAsset.liquidityPool()), param.mMaxAmountA,
+                param.mMaxAmountB,
+                Price{param.mMinPriceNumerator, param.mMinPriceDenominator},
+                Price{param.mMaxPriceNumerator, param.mMaxPriceDenominator});
+            depositOp.sourceAccount.activate() = toMuxedAccount(account);
+            FuzzUtils::emplaceConditionallySponsored(
+                ops, depositOp, param.mSponsored, param.mSponsorKey, account);
+        }
+    }
+
+    applySetupOperations(ltx, mSourceAccountID, ops.begin(), ops.end(), *mApp);
+
+    ltx.commit();
+}
+
+void
 TransactionFuzzer::reduceNativeBalancesAfterSetup(AbstractLedgerTxn& ltxOuter)
 {
     LedgerTxn ltx(ltxOuter);
@@ -1519,7 +1749,7 @@ TransactionFuzzer::reduceNativeBalancesAfterSetup(AbstractLedgerTxn& ltxOuter)
 }
 
 void
-TransactionFuzzer::reduceTrustLineBalancesAfterSetup(
+TransactionFuzzer::adjustTrustLineBalancesAfterSetup(
     AbstractLedgerTxn& ltxOuter)
 {
     LedgerTxn ltx(ltxOuter);
@@ -1553,6 +1783,8 @@ TransactionFuzzer::reduceTrustLineBalancesAfterSetup(
             }
             continue;
         }
+
+        auto const maxRecv = tle.getMaxAmountReceive(ltx.loadHeader());
         auto const availableTLBalance =
             tle.getAvailableBalance(ltx.loadHeader());
         auto const targetAvailableTLBalance =
@@ -1567,6 +1799,18 @@ TransactionFuzzer::reduceTrustLineBalancesAfterSetup(
             reduceNonNativeBalanceOp.sourceAccount.activate() =
                 toMuxedAccount(account);
             ops.emplace_back(reduceNonNativeBalanceOp);
+        }
+        else if (availableTLBalance < targetAvailableTLBalance && maxRecv > 0 &&
+                 (!trustLine.mCallAllowTrustOp ||
+                  trustLine.mAllowTrustFlags & AUTHORIZED_FLAG))
+        {
+            auto increaseNonNativeBalanceOp = txtest::payment(
+                account, asset,
+                std::min(targetAvailableTLBalance - availableTLBalance,
+                         maxRecv));
+            increaseNonNativeBalanceOp.sourceAccount.activate() =
+                toMuxedAccount(issuer);
+            ops.emplace_back(increaseNonNativeBalanceOp);
         }
     }
 
@@ -1594,9 +1838,13 @@ TransactionFuzzer::reduceTrustLineLimitsAfterSetup(AbstractLedgerTxn& ltxOuter)
 
         // Reduce this trustline's limit.
         auto tle = stellar::loadTrustLine(ltx, account, asset);
+        auto const balancePlusBuyLiabilities =
+            tle.getBalance() + tle.getBuyingLiabilities(ltx.loadHeader());
         auto const targetTrustLineLimit =
-            tle.getBalance() + tle.getBuyingLiabilities(ltx.loadHeader()) +
-            trustLine.mSpareLimitAfterSetup;
+            INT64_MAX - trustLine.mSpareLimitAfterSetup <
+                    balancePlusBuyLiabilities
+                ? INT64_MAX
+                : balancePlusBuyLiabilities + trustLine.mSpareLimitAfterSetup;
 
         auto changeTrustLineLimitOp =
             txtest::changeTrust(asset, targetTrustLineLimit);
@@ -1613,10 +1861,7 @@ TransactionFuzzer::reduceTrustLineLimitsAfterSetup(AbstractLedgerTxn& ltxOuter)
 void
 TransactionFuzzer::shutdown()
 {
-    mApp->gracefulStop();
-    while (mClock.crank(true))
-    {
-    }
+    exit(1);
 }
 
 void
@@ -1640,7 +1885,8 @@ TransactionFuzzer::inject(std::string const& filename)
     bins.resize(actual);
     try
     {
-        xdr::xdr_from_fuzzer_opaque(mStoredLedgerKeys, bins, ops);
+        xdr::xdr_from_fuzzer_opaque(mStoredLedgerKeys, mStoredPoolIDs, bins,
+                                    ops);
     }
     catch (std::exception const& e)
     {
@@ -1677,7 +1923,7 @@ TransactionFuzzer::xdrSizeLimit()
 void
 TransactionFuzzer::genFuzz(std::string const& filename)
 {
-    resetRandomSeed(std::random_device()());
+    reinitializeAllGlobalStateWithSeed(std::random_device()());
     std::ofstream out;
     out.exceptions(std::ios::failbit | std::ios::badbit);
     out.open(filename, std::ofstream::binary | std::ofstream::trunc);
@@ -1711,7 +1957,7 @@ OverlayFuzzer::shutdown()
 void
 OverlayFuzzer::initialize()
 {
-    resetRandomSeed(1);
+    reinitializeAllGlobalStateWithSeed(1);
     stellar::FuzzUtils::generateStoredLedgerKeys(mStoredLedgerKeys.begin(),
                                                  mStoredLedgerKeys.end());
     auto networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
@@ -1769,7 +2015,8 @@ OverlayFuzzer::inject(std::string const& filename)
     bins.resize(actual);
     try
     {
-        xdr::xdr_from_fuzzer_opaque(mStoredLedgerKeys, bins, msg);
+        xdr::xdr_from_fuzzer_opaque(mStoredLedgerKeys, mStoredPoolIDs, bins,
+                                    msg);
     }
     catch (...)
     {
@@ -1792,8 +2039,11 @@ OverlayFuzzer::inject(std::string const& filename)
     auto acceptor = loopbackPeerConnection->getAcceptor();
 
     initiator->getApp().getClock().postAction(
-        [initiator, msg]() { initiator->Peer::sendMessage(msg); }, "main",
-        Scheduler::ActionType::NORMAL_ACTION);
+        [initiator, msg]() {
+            initiator->Peer::sendMessage(
+                std::make_shared<StellarMessage const>(msg));
+        },
+        "main", Scheduler::ActionType::NORMAL_ACTION);
 
     mSimulation->crankForAtMost(std::chrono::milliseconds{500}, false);
 
@@ -1817,7 +2067,7 @@ OverlayFuzzer::xdrSizeLimit()
 void
 OverlayFuzzer::genFuzz(std::string const& filename)
 {
-    resetRandomSeed(std::random_device()());
+    reinitializeAllGlobalStateWithSeed(std::random_device()());
     std::ofstream out;
     out.exceptions(std::ios::failbit | std::ios::badbit);
     out.open(filename, std::ofstream::binary | std::ofstream::trunc);

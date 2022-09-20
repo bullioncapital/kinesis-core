@@ -7,6 +7,7 @@
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/TrustLineWrapper.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
 
 namespace stellar
 {
@@ -19,9 +20,11 @@ LiquidityPoolWithdrawOpFrame::LiquidityPoolWithdrawOpFrame(
 }
 
 bool
-LiquidityPoolWithdrawOpFrame::isVersionSupported(uint32_t protocolVersion) const
+LiquidityPoolWithdrawOpFrame::isOpSupported(LedgerHeader const& header) const
 {
-    return protocolVersion >= 18;
+    return protocolVersionStartsFrom(header.ledgerVersion,
+                                     ProtocolVersion::V_18) &&
+           !isPoolWithdrawalDisabled(header);
 }
 
 bool
@@ -75,9 +78,22 @@ LiquidityPoolWithdrawOpFrame::doApply(AbstractLedgerTxn& ltx)
     {
         throw std::runtime_error("pool withdrawal invalid");
     }
-    constantProduct().totalPoolShares -= mLiquidityPoolWithdraw.amount;
-    constantProduct().reserveA -= amountA;
-    constantProduct().reserveB -= amountB;
+
+    if (!addBalance(constantProduct().totalPoolShares,
+                    -mLiquidityPoolWithdraw.amount))
+    {
+        throw std::runtime_error("insufficient totalPoolShares");
+    }
+
+    if (!addBalance(constantProduct().reserveA, -amountA))
+    {
+        throw std::runtime_error("insufficient reserveA");
+    }
+
+    if (!addBalance(constantProduct().reserveB, -amountB))
+    {
+        throw std::runtime_error("insufficient reserveB");
+    }
 
     innerResult().code(LIQUIDITY_POOL_WITHDRAW_SUCCESS);
     return true;

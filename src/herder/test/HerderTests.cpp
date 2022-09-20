@@ -30,6 +30,7 @@
 #include "transactions/TransactionFrame.h"
 #include "transactions/TransactionUtils.h"
 #include "util/Math.h"
+#include "util/ProtocolVersion.h"
 
 #include "xdr/Stellar-ledger.h"
 #include "xdrpp/marshal.h"
@@ -151,7 +152,9 @@ TEST_CASE("standalone", "[herder][acceptance]")
                 bool hasC = false;
                 {
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    hasC = ltx.loadHeader().current().ledgerVersion >= 10;
+                    hasC = protocolVersionStartsFrom(
+                        ltx.loadHeader().current().ledgerVersion,
+                        ProtocolVersion::V_10);
                 }
                 if (hasC)
                 {
@@ -253,7 +256,7 @@ testTxSet(uint32 protocolVersion)
 {
     Config cfg(getTestConfig());
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 14;
-    cfg.LEDGER_PROTOCOL_VERSION = protocolVersion;
+    cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = protocolVersion;
     VirtualClock clock;
     Application::pointer app = createTestApplication(clock, cfg);
 
@@ -310,6 +313,7 @@ testTxSet(uint32 protocolVersion)
 
             txSet->trimInvalid(*app, 0, 0);
             REQUIRE(txSet->checkValid(*app, 0, 0));
+            REQUIRE(txSet->mTransactions.size() == (2 * nbTransactions));
         }
         SECTION("out of order")
         {
@@ -318,6 +322,7 @@ testTxSet(uint32 protocolVersion)
 
             txSet->trimInvalid(*app, 0, 0);
             REQUIRE(txSet->checkValid(*app, 0, 0));
+            REQUIRE(txSet->mTransactions.size() == (2 * nbTransactions));
         }
     }
     SECTION("invalid tx")
@@ -331,6 +336,7 @@ testTxSet(uint32 protocolVersion)
 
             txSet->trimInvalid(*app, 0, 0);
             REQUIRE(txSet->checkValid(*app, 0, 0));
+            REQUIRE(txSet->mTransactions.size() == (2 * nbTransactions));
         }
         SECTION("sequence gap")
         {
@@ -344,6 +350,7 @@ testTxSet(uint32 protocolVersion)
 
                 txSet->trimInvalid(*app, 0, 0);
                 REQUIRE(txSet->checkValid(*app, 0, 0));
+                REQUIRE(txSet->mTransactions.size() == (2 * nbTransactions));
             }
             SECTION("gap begin")
             {
@@ -360,18 +367,20 @@ testTxSet(uint32 protocolVersion)
             SECTION("gap middle")
             {
                 int remIdx = 2; // 3rd transaction
-                txSet->sortForApply();
+                // erase it from first account
                 txSet->mTransactions.erase(txSet->mTransactions.begin() +
-                                           (remIdx * 2));
+                                           remIdx);
                 txSet->sortForHash();
                 REQUIRE(!txSet->checkValid(*app, 0, 0));
 
                 auto removed = txSet->trimInvalid(*app, 0, 0);
                 REQUIRE(txSet->checkValid(*app, 0, 0));
                 // one account has all its transactions,
-                // other, we removed all its tx
-                REQUIRE(removed.size() == (nbTransactions - 1));
-                REQUIRE(txSet->mTransactions.size() == nbTransactions);
+                // the other, we removed transactions after remIdx
+                auto expectedRemoved = nbTransactions - remIdx - 1;
+                REQUIRE(removed.size() == expectedRemoved);
+                REQUIRE(txSet->mTransactions.size() ==
+                        (nbTransactions * 2 - expectedRemoved - 1));
             }
         }
         SECTION("insufficient balance")
@@ -430,7 +439,7 @@ testTxSetWithFeeBumps(uint32 protocolVersion)
 {
     Config cfg(getTestConfig());
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 14;
-    cfg.LEDGER_PROTOCOL_VERSION = protocolVersion;
+    cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = protocolVersion;
     VirtualClock clock;
     Application::pointer app = createTestApplication(clock, cfg);
 
@@ -655,13 +664,13 @@ TEST_CASE("txset", "[herder][txset]")
 TEST_CASE("txset base fee", "[herder][txset]")
 {
     Config cfg(getTestConfig());
-    uint32_t const maxTxSize = 112;
-    cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = maxTxSize;
+    uint32_t const maxTxSetSize = 112;
+    cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = maxTxSetSize;
 
     auto testBaseFee = [&](uint32_t protocolVersion, uint32 nbTransactions,
                            uint32 extraAccounts, size_t lim, int64_t expLowFee,
                            int64_t expHighFee) {
-        cfg.LEDGER_PROTOCOL_VERSION = protocolVersion;
+        cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = protocolVersion;
         VirtualClock clock;
         Application::pointer app = createTestApplication(clock, cfg);
 
@@ -760,7 +769,8 @@ TEST_CASE("txset base fee", "[herder][txset]")
             {
                 // low = base tx
                 // high = last extra tx
-                testBaseFee(10, baseCount, v10ExtraTx, maxTxSize, 1000, 20104);
+                testBaseFee(10, baseCount, v10ExtraTx, maxTxSetSize, 1000,
+                            20104);
             }
             SECTION("protocol current")
             {
@@ -769,13 +779,14 @@ TEST_CASE("txset base fee", "[herder][txset]")
                 SECTION("maxed out surged")
                 {
                     testBaseFee(Config::CURRENT_LEDGER_PROTOCOL_VERSION,
-                                baseCount, v11ExtraTx, maxTxSize, 1000, 2000);
+                                baseCount, v11ExtraTx, maxTxSetSize, 1000,
+                                2000);
                 }
                 SECTION("smallest surged")
                 {
                     testBaseFee(Config::CURRENT_LEDGER_PROTOCOL_VERSION,
                                 baseCount + 1, v11ExtraTx - 50,
-                                maxTxSize - 100 + 1, 1000, 2000);
+                                maxTxSetSize - 100 + 1, 1000, 2000);
                 }
             }
         }
@@ -785,14 +796,14 @@ TEST_CASE("txset base fee", "[herder][txset]")
             {
                 // low = 20000+1
                 // high = 20000+112
-                testBaseFee(10, 0, v10NewCount, maxTxSize, 20001, 20112);
+                testBaseFee(10, 0, v10NewCount, maxTxSetSize, 20001, 20112);
             }
             SECTION("protocol current")
             {
                 // low = 20000+1 -> baseFee = 20001/2+ = 10001
                 // high = 10001*2
                 testBaseFee(Config::CURRENT_LEDGER_PROTOCOL_VERSION, 0,
-                            v11NewCount, maxTxSize, 20001, 20002);
+                            v11NewCount, maxTxSetSize, 20001, 20002);
             }
         }
     }
@@ -812,7 +823,7 @@ TEST_CASE("txset base fee", "[herder][txset]")
                 // high = 2*minFee
                 // highest number of ops not surged is max-100
                 testBaseFee(Config::CURRENT_LEDGER_PROTOCOL_VERSION, baseCount,
-                            v11ExtraTx - 50, maxTxSize - 100, 100, 200);
+                            v11ExtraTx - 50, maxTxSetSize - 100, 100, 200);
             }
         }
         SECTION("newOnly")
@@ -829,7 +840,7 @@ TEST_CASE("txset base fee", "[herder][txset]")
                 // high = 2*minFee
                 // highest number of ops not surged is max-100
                 testBaseFee(Config::CURRENT_LEDGER_PROTOCOL_VERSION, 0,
-                            v11NewCount - 50, maxTxSize - 100, 200, 200);
+                            v11NewCount - 50, maxTxSetSize - 100, 200, 200);
             }
         }
     }
@@ -845,7 +856,7 @@ surgeTest(uint32 protocolVersion, uint32_t nbTxs, uint32_t maxTxSetSize,
 {
     Config cfg(getTestConfig());
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = maxTxSetSize;
-    cfg.LEDGER_PROTOCOL_VERSION = protocolVersion;
+    cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = protocolVersion;
 
     VirtualClock clock;
     Application::pointer app = createTestApplication(clock, cfg);
@@ -1062,15 +1073,15 @@ TEST_CASE("surge pricing", "[herder][txset]")
 }
 
 static void
-testSCPDriver(uint32 protocolVersion, uint32_t maxTxSize, size_t expectedOps)
+testSCPDriver(uint32 protocolVersion, uint32_t maxTxSetSize, size_t expectedOps)
 {
     using SVUpgrades = decltype(StellarValue::upgrades);
 
     Config cfg(getTestConfig(0, Config::TESTDB_DEFAULT));
 
     cfg.MANUAL_CLOSE = false;
-    cfg.LEDGER_PROTOCOL_VERSION = protocolVersion;
-    cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = maxTxSize;
+    cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = protocolVersion;
+    cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = maxTxSetSize;
 
     VirtualClock clock;
     auto s = SecretKey::pseudoRandomForTesting();
@@ -1256,9 +1267,10 @@ testSCPDriver(uint32 protocolVersion, uint32_t maxTxSize, size_t expectedOps)
             std::max_element(txSetSizes.begin(), txSetSizes.end()));
         REQUIRE(txSetOpSizes[bestTxSetIndex] == expectedOps);
 
-        TxSetFramePtr txSetL = makeTransactions(lcl.hash, maxTxSize, 1, 101);
+        TxSetFramePtr txSetL = makeTransactions(lcl.hash, maxTxSetSize, 1, 101);
         addToCandidates(makeTxPair(herder, txSetL, 20));
-        TxSetFramePtr txSetL2 = makeTransactions(lcl.hash, maxTxSize, 1, 1000);
+        TxSetFramePtr txSetL2 =
+            makeTransactions(lcl.hash, maxTxSetSize, 1, 1000);
         addToCandidates(makeTxPair(herder, txSetL2, 20));
         auto v = herder.getHerderSCPDriver().combineCandidates(1, candidates);
         StellarValue sv;
@@ -1791,7 +1803,7 @@ static void
 checkSynced(Application& app)
 {
     REQUIRE(app.getLedgerManager().isSynced());
-    REQUIRE(!app.getCatchupManager().hasBufferedLedger());
+    REQUIRE(!app.getCatchupManager().maybeGetNextBufferedLedgerToApply());
 }
 
 void
@@ -1866,6 +1878,9 @@ TEST_CASE("herder externalizes values", "[herder]")
     auto currentALedger = [&]() {
         return A->getLedgerManager().getLastClosedLedgerNum();
     };
+    auto currentBLedger = [&]() {
+        return B->getLedgerManager().getLastClosedLedgerNum();
+    };
     auto currentCLedger = [&]() {
         return getC()->getLedgerManager().getLastClosedLedgerNum();
     };
@@ -1880,10 +1895,13 @@ TEST_CASE("herder externalizes values", "[herder]")
         return std::min(currentALedger(), currentCLedger());
     };
 
-    auto waitForA = [&](int nLedgers) {
+    auto waitForAB = [&](int nLedgers, bool waitForB) {
         auto destinationLedger = currentALedger() + nLedgers;
         simulation->crankUntil(
-            [&]() { return currentALedger() >= destinationLedger; },
+            [&]() {
+                return currentALedger() >= destinationLedger &&
+                       (!waitForB || currentBLedger() >= destinationLedger);
+            },
             2 * nLedgers * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
         return currentALedger();
     };
@@ -1915,7 +1933,7 @@ TEST_CASE("herder externalizes values", "[herder]")
     std::map<uint32_t, std::pair<SCPEnvelope, TxSetFramePtr>>
         validatorSCPMessagesB;
 
-    auto destinationLedger = waitForA(4);
+    auto destinationLedger = waitForAB(4, true);
     for (auto start = currentLedger + 1; start <= destinationLedger; start++)
     {
         for (auto const& env : herderA.getSCP().getLatestMessagesSend(start))
@@ -1989,6 +2007,7 @@ TEST_CASE("herder externalizes values", "[herder]")
         REQUIRE(!lmC.isSynced());
         checkHerder(*(getC()), herderC,
                     Herder::State::HERDER_TRACKING_NETWORK_STATE, fourth);
+        REQUIRE(herderC.getTriggerTimer().seq() == 0);
 
         // Next, externalize a contiguous ledger
         // This will cause LM to apply it, and catchup manager will try to apply
@@ -2016,10 +2035,17 @@ TEST_CASE("herder externalizes values", "[herder]")
             if (i == ledgers.size() - 1)
             {
                 checkSynced(*(getC()));
+                // All the buffered ledgers are applied by now, so it's safe to
+                // trigger the next ledger
+                REQUIRE(herderC.getTriggerTimer().seq() > 0);
+                REQUIRE(herderC.mTriggerNextLedgerSeq == fourth + 1);
             }
             else
             {
                 REQUIRE(!lmC.isSynced());
+                // As we're not in sync yet, ensure next ledger is not triggered
+                REQUIRE(herderC.getTriggerTimer().seq() == 0);
+                REQUIRE(herderC.mTriggerNextLedgerSeq == currentLedger + 1);
             }
         }
 
@@ -2058,6 +2084,11 @@ TEST_CASE("herder externalizes values", "[herder]")
                             msgPair.first);
                 // LM is synced
                 checkSynced(*(getC()));
+
+                // Since we're externalizing ledgers in order, make sure ledger
+                // trigger is scheduled
+                REQUIRE(herderC.getTriggerTimer().seq() > 0);
+                REQUIRE(herderC.mTriggerNextLedgerSeq == msgPair.first + 1);
             }
         };
 
@@ -2125,6 +2156,8 @@ TEST_CASE("herder externalizes values", "[herder]")
                         Herder::State::HERDER_TRACKING_NETWORK_STATE,
                         currentlyTracking);
             checkSynced(*newC);
+            // Externalizing an old ledger should not trigger next ledger
+            REQUIRE(newHerderC.mTriggerNextLedgerSeq == currentlyTracking + 1);
         }
         SECTION("not tracking")
         {
@@ -2144,6 +2177,9 @@ TEST_CASE("herder externalizes values", "[herder]")
             checkHerder(*newC, newHerderC, Herder::State::HERDER_SYNCING_STATE,
                         currentlyTracking);
             checkSynced(*newC);
+
+            // Externalizing an old ledger should not trigger next ledger
+            REQUIRE(newHerderC.mTriggerNextLedgerSeq == currentlyTracking + 1);
         }
     }
     SECTION("trigger next ledger")
@@ -2165,10 +2201,37 @@ TEST_CASE("herder externalizes values", "[herder]")
             // Make sure A and C are starting from the same ledger
             REQUIRE(lcl == currentCLedger());
 
-            waitForA(fewLedgers);
+            waitForAB(fewLedgers, false);
             REQUIRE(currentALedger() == nextLedger);
             // C is at most a ledger behind
             REQUIRE(currentCLedger() >= nextLedger - 1);
+        }
+        SECTION("restarting C should not trigger twice")
+        {
+            auto configC = getC()->getConfig();
+
+            simulation->removeNode(validatorCKey.getPublicKey());
+
+            auto newC =
+                simulation->addNode(validatorCKey, qset, &configC, false);
+
+            // Restarting C should trigger due to FORCE_SCP
+            newC->start();
+            HerderImpl& newHerderC =
+                *static_cast<HerderImpl*>(&newC->getHerder());
+
+            auto expiryTime = newHerderC.getTriggerTimer().expiry_time();
+            REQUIRE(newHerderC.getTriggerTimer().seq() > 0);
+
+            simulation->crankForAtLeast(std::chrono::seconds(1), false);
+
+            // C receives enough messages to externalize LCL again
+            receiveLedger(newC->getLedgerManager().getLastClosedLedgerNum(),
+                          newHerderC);
+
+            // Trigger timer did not change
+            REQUIRE(expiryTime == newHerderC.getTriggerTimer().expiry_time());
+            REQUIRE(newHerderC.getTriggerTimer().seq() > 0);
         }
     }
 }
@@ -2437,7 +2500,7 @@ TEST_CASE("do not flood invalid transactions", "[herder]")
 {
     VirtualClock clock;
     auto cfg = getTestConfig();
-    cfg.FLOOD_TX_PERIOD_MS = 0;
+    cfg.FLOOD_TX_PERIOD_MS = 1; // flood as fast as possible
     auto app = createTestApplication(clock, cfg);
 
     auto& lm = app->getLedgerManager();
@@ -2460,7 +2523,12 @@ TEST_CASE("do not flood invalid transactions", "[herder]")
     tq.mTxBroadcastedEvent = [&](TransactionFrameBasePtr&) { ++numBroadcast; };
 
     externalize(cfg.NODE_SEED, lm, herder, {tx1r});
-    REQUIRE(numBroadcast == 1);
+    auto timeout = clock.now() + std::chrono::seconds(5);
+    while (numBroadcast != 1)
+    {
+        clock.crank(true);
+        REQUIRE(clock.now() < timeout);
+    }
 
     auto const& lhhe = lm.getLastClosedLedgerHeader();
     auto txSet = tq.toTxSet(lhhe);
@@ -2472,7 +2540,7 @@ TEST_CASE("do not flood invalid transactions", "[herder]")
 
 TEST_CASE("do not flood too many transactions", "[herder][transactionqueue]")
 {
-    auto test = [](bool delayed, uint32_t numOps) {
+    auto test = [](uint32_t numOps) {
         auto networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
         auto simulation = std::make_shared<Simulation>(
             Simulation::OVER_LOOPBACK, networkID, [&](int i) {
@@ -2480,7 +2548,7 @@ TEST_CASE("do not flood too many transactions", "[herder][transactionqueue]")
                 cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 500;
                 cfg.NODE_IS_VALIDATOR = false;
                 cfg.FORCE_SCP = false;
-                cfg.FLOOD_TX_PERIOD_MS = delayed ? 100 : 0;
+                cfg.FLOOD_TX_PERIOD_MS = 100;
                 cfg.FLOOD_OP_RATE_PER_LEDGER = 2.0;
                 return cfg;
             });
@@ -2602,80 +2670,58 @@ TEST_CASE("do not flood too many transactions", "[herder][transactionqueue]")
 
         externalize(cfg.NODE_SEED, lm, herder, {tx1a, tx1r});
 
-        if (delayed)
+        // no broadcast right away
+        REQUIRE(numBroadcast == 0);
+        // wait for a bit more than a broadcast period
+        // rate per period is
+        // 2*(maxOps=500)*(FLOOD_TX_PERIOD_MS=100)/((ledger time=5)*1000)
+        // 1000*100/5000=20
+        auto constexpr opsRatePerPeriod = 20;
+        auto broadcastPeriod =
+            std::chrono::milliseconds(cfg.FLOOD_TX_PERIOD_MS);
+        auto const delta = std::chrono::milliseconds(1);
+        simulation->crankForAtLeast(broadcastPeriod + delta, false);
+
+        if (numOps <= opsRatePerPeriod)
         {
-            // no broadcast right away
-            REQUIRE(numBroadcast == 0);
-            // wait for a bit more than a broadcast period
-            // rate per period is
-            // 2*(maxOps=500)*(FLOOD_TX_PERIOD_MS=100)/((ledger time=5)*1000)
-            // 1000*100/5000=20
-            auto constexpr opsRatePerPeriod = 20;
-            auto broadcastPeriod =
-                std::chrono::milliseconds(cfg.FLOOD_TX_PERIOD_MS);
-            auto const delta = std::chrono::milliseconds(1);
-            simulation->crankForAtLeast(broadcastPeriod + delta, false);
-
-            if (numOps <= opsRatePerPeriod)
-            {
-                auto opsBroadcasted = numBroadcast * numOps;
-                // goal reached
-                REQUIRE(opsBroadcasted <= opsRatePerPeriod);
-                // an extra tx would have exceeded the limit
-                REQUIRE(opsBroadcasted + numOps > opsRatePerPeriod);
-            }
-            else
-            {
-                // can only flood up to 1 transaction per cycle
-                REQUIRE(numBroadcast <= 1);
-            }
-            // as we're waiting for a ledger worth of capacity
-            // and we have a multiplier of 2
-            // it should take about half a ledger period to broadcast everything
-
-            // we wait a bit more, and inject an extra high fee transaction
-            // from an account with no pending transactions
-            // this transactions should be the next one to be broadcasted
-            simulation->crankForAtLeast(std::chrono::milliseconds(500), false);
-            genTx(root, numOps, true);
-
-            simulation->crankForAtLeast(std::chrono::milliseconds(2000), false);
-            REQUIRE(numBroadcast == (numTx - 1));
-            REQUIRE(tq.toTxSet({})->mTransactions.size() == numTx - 1);
+            auto opsBroadcasted = numBroadcast * numOps;
+            // goal reached
+            REQUIRE(opsBroadcasted <= opsRatePerPeriod);
+            // an extra tx would have exceeded the limit
+            REQUIRE(opsBroadcasted + numOps > opsRatePerPeriod);
         }
         else
         {
-            REQUIRE(numBroadcast == (numTx - 2));
-            REQUIRE(tq.toTxSet({})->mTransactions.size() == numTx - 2);
-            // check that there is no broadcast after that
-            simulation->crankForAtLeast(std::chrono::seconds(1), false);
-            REQUIRE(numBroadcast == (numTx - 2));
-            REQUIRE(tq.toTxSet({})->mTransactions.size() == numTx - 2);
+            // can only flood up to 1 transaction per cycle
+            REQUIRE(numBroadcast <= 1);
         }
+        // as we're waiting for a ledger worth of capacity
+        // and we have a multiplier of 2
+        // it should take about half a ledger period to broadcast everything
+
+        // we wait a bit more, and inject an extra high fee transaction
+        // from an account with no pending transactions
+        // this transactions should be the next one to be broadcasted
+        simulation->crankForAtLeast(std::chrono::milliseconds(500), false);
+        genTx(root, numOps, true);
+
+        simulation->crankForAtLeast(std::chrono::milliseconds(2000), false);
+        REQUIRE(numBroadcast == (numTx - 1));
+        REQUIRE(tq.toTxSet({})->mTransactions.size() == numTx - 1);
         simulation->stopAllNodes();
     };
 
-    auto testOps = [&](bool delayed) {
-        SECTION("one operation per transaction")
-        {
-            test(delayed, 1);
-        }
-        SECTION("a few operations per transaction")
-        {
-            test(delayed, 7);
-        }
-        SECTION("full transactions")
-        {
-            test(delayed, 100);
-        }
-    };
-    SECTION("no delay")
+    SECTION("one operation per transaction")
     {
-        testOps(false);
+        test(1);
     }
-    SECTION("delayed")
+    SECTION("a few operations per transaction")
     {
-        testOps(true);
+        test(7);
+    }
+    SECTION("full transactions")
+    {
+        test(100);
     }
 }
 

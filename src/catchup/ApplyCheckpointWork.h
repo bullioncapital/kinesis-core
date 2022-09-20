@@ -14,11 +14,6 @@
 #include "xdr/Stellar-SCP.h"
 #include "xdr/Stellar-ledger.h"
 
-namespace medida
-{
-class Meter;
-}
-
 namespace stellar
 {
 
@@ -57,9 +52,6 @@ class ApplyCheckpointWork : public BasicWork
     LedgerHeaderHistoryEntry mHeaderHistoryEntry;
     OnFailureCallback mOnFailure;
 
-    medida::Meter& mApplyLedgerSuccess;
-    medida::Meter& mApplyLedgerFailure;
-
     bool mFilesOpen{false};
 
     std::shared_ptr<ConditionalWork> mConditionalWork;
@@ -68,6 +60,8 @@ class ApplyCheckpointWork : public BasicWork
     void openInputFiles();
 
     std::shared_ptr<LedgerCloseData> getNextLedgerCloseData();
+
+    void closeFiles();
 
   public:
     ApplyCheckpointWork(Application& app, TmpDir const& downloadDir,

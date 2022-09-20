@@ -19,6 +19,7 @@
 #include "transactions/InflationOpFrame.h"
 #include "transactions/TransactionUtils.h"
 #include "util/Logging.h"
+#include "util/ProtocolVersion.h"
 #include "util/Timer.h"
 #include "util/XDROperators.h"
 #include <functional>
@@ -127,7 +128,7 @@ simulateInflation(int ledgerVersion, int nbAccounts, int64& totCoins,
 
     // 1% annual inflation on a weekly basis
     // 0.000190721
-    auto inflation = bigDivide(totCoins, 190721, 1000000000, ROUND_DOWN);
+    auto inflation = bigDivideOrThrow(totCoins, 190721, 1000000000, ROUND_DOWN);
     auto coinsToDole = inflation + totFees;
     int64 leftToDole = coinsToDole;
 
@@ -135,8 +136,8 @@ simulateInflation(int ledgerVersion, int nbAccounts, int64& totCoins,
     {
         // computes the share of this guy
         int64 toDoleToThis =
-            bigDivide(coinsToDole, votes.at(w), totVotes, ROUND_DOWN);
-        if (ledgerVersion >= 10)
+            bigDivideOrThrow(coinsToDole, votes.at(w), totVotes, ROUND_DOWN);
+        if (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_10))
         {
             LedgerTxn ltx(app.getLedgerTxnRoot());
             auto header = ltx.loadHeader();
@@ -148,7 +149,7 @@ simulateInflation(int ledgerVersion, int nbAccounts, int64& totCoins,
         if (balances[w] >= 0)
         {
             balances[w] += toDoleToThis;
-            if (ledgerVersion <= 7)
+            if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_8))
             {
                 totCoins += toDoleToThis;
             }
@@ -156,7 +157,7 @@ simulateInflation(int ledgerVersion, int nbAccounts, int64& totCoins,
         }
     }
 
-    if (ledgerVersion > 7)
+    if (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_8))
     {
         totCoins += inflation;
     }
@@ -463,7 +464,8 @@ TEST_CASE("inflation", "[tx][inflation]")
     // minVote to participate in inflation
     const int64 minVote = 1000000000LL;
     // .05% of all coins
-    const int64 winnerVote = bigDivide(getTotalCoins(), 5, 10000, ROUND_DOWN);
+    const int64 winnerVote =
+        bigDivideOrThrow(getTotalCoins(), 5, 10000, ROUND_DOWN);
 
     SECTION("inflation scenarios")
     {
@@ -538,7 +540,8 @@ TEST_CASE("inflation", "[tx][inflation]")
                 const int midPoint = nbAccounts / 2;
 
                 const int64 each =
-                    bigDivide(winnerVote, 2, nbAccounts, ROUND_DOWN) + minVote;
+                    bigDivideOrThrow(winnerVote, 2, nbAccounts, ROUND_DOWN) +
+                    minVote;
 
                 voteFunc = [&](int n) { return (n < midPoint) ? 0 : 1; };
                 balanceFunc = [&](int n) { return each; };
@@ -559,7 +562,8 @@ TEST_CASE("inflation", "[tx][inflation]")
                 const int midPoint = nbAccounts / 2;
 
                 const int64 each =
-                    bigDivide(winnerVote, 2, nbAccounts, ROUND_DOWN) + minVote;
+                    bigDivideOrThrow(winnerVote, 2, nbAccounts, ROUND_DOWN) +
+                    minVote;
 
                 voteFunc = [&](int n) { return (n < midPoint) ? 0 : 1; };
                 balanceFunc = [&](int n) {
@@ -600,7 +604,7 @@ TEST_CASE("inflation", "[tx][inflation]")
         };
 
         int64_t maxPayout =
-            bigDivide(getTotalCoins(), 190721, 1000000000, ROUND_DOWN) +
+            bigDivideOrThrow(getTotalCoins(), 190721, 1000000000, ROUND_DOWN) +
             getFeePool();
 
         SECTION("no available balance")

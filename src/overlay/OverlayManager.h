@@ -126,6 +126,8 @@ class OverlayManager
 
     virtual bool isPreferred(Peer* peer) const = 0;
 
+    virtual bool isFloodMessage(StellarMessage const& msg) = 0;
+
     // Return the current in-memory set of inbound pending peers.
     virtual std::vector<Peer::pointer> const&
     getInboundPendingPeers() const = 0;
@@ -153,6 +155,9 @@ class OverlayManager
 
     // Return number of authenticated peers
     virtual int getAuthenticatedPeersCount() const = 0;
+
+    // Return the number of flow-contolled peers
+    virtual int64_t getFlowControlPercentage() const = 0;
 
     // Attempt to connect to a peer identified by peer address.
     virtual void connectTo(PeerBareAddress const& address) = 0;

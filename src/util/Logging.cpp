@@ -92,9 +92,9 @@ Logging::init(bool truncate)
         using std::shared_ptr;
 
         auto console = (mColor ? static_cast<shared_ptr<sink>>(
-                                     make_shared<stdout_color_sink_mt>())
+                                     make_shared<stderr_color_sink_mt>())
                                : static_cast<shared_ptr<sink>>(
-                                     make_shared<stdout_sink_mt>()));
+                                     make_shared<stderr_sink_mt>()));
 
         std::vector<shared_ptr<sink>> sinks{console};
 
@@ -147,7 +147,8 @@ Logging::init(bool truncate)
             if (out.fail())
             {
                 throw std::runtime_error(fmt::format(
-                    "Could not open log file {}, check access rights",
+                    FMT_STRING(
+                        "Could not open log file {}, check access rights"),
                     filename));
             }
             else

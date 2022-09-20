@@ -4,6 +4,7 @@
 
 #include "util/numeric.h"
 #include "util/GlobalChecks.h"
+#include "util/numeric128.h"
 
 #include <stdexcept>
 
@@ -16,7 +17,8 @@ bigDivide(int64_t& result, int64_t A, int64_t B, int64_t C, Rounding rounding)
     bool res;
     releaseAssertOrThrow((A >= 0) && (B >= 0) && (C > 0));
     uint64_t r2;
-    res = bigDivide(r2, (uint64_t)A, (uint64_t)B, (uint64_t)C, rounding);
+    res =
+        bigDivideUnsigned(r2, (uint64_t)A, (uint64_t)B, (uint64_t)C, rounding);
     if (res)
     {
         res = r2 <= INT64_MAX;
@@ -26,9 +28,11 @@ bigDivide(int64_t& result, int64_t A, int64_t B, int64_t C, Rounding rounding)
 }
 
 bool
-bigDivide(uint64_t& result, uint64_t A, uint64_t B, uint64_t C,
-          Rounding rounding)
+bigDivideUnsigned(uint64_t& result, uint64_t A, uint64_t B, uint64_t C,
+                  Rounding rounding)
 {
+    releaseAssertOrThrow(C > 0);
+
     // update when moving to (signed) int128
     uint128_t a(A);
     uint128_t b(B);
@@ -40,7 +44,7 @@ bigDivide(uint64_t& result, uint64_t A, uint64_t B, uint64_t C,
 }
 
 int64_t
-bigDivide(int64_t A, int64_t B, int64_t C, Rounding rounding)
+bigDivideOrThrow(int64_t A, int64_t B, int64_t C, Rounding rounding)
 {
     int64_t res;
     if (!bigDivide(res, A, B, C, rounding))
@@ -51,12 +55,12 @@ bigDivide(int64_t A, int64_t B, int64_t C, Rounding rounding)
 }
 
 bool
-bigDivide(int64_t& result, uint128_t a, int64_t B, Rounding rounding)
+bigDivide128(int64_t& result, uint128_t const& a, int64_t B, Rounding rounding)
 {
     releaseAssertOrThrow(B > 0);
 
     uint64_t r2;
-    bool res = bigDivide(r2, a, (uint64_t)B, rounding);
+    bool res = bigDivideUnsigned128(r2, a, (uint64_t)B, rounding);
     if (res)
     {
         res = r2 <= INT64_MAX;
@@ -66,7 +70,8 @@ bigDivide(int64_t& result, uint128_t a, int64_t B, Rounding rounding)
 }
 
 bool
-bigDivide(uint64_t& result, uint128_t a, uint64_t B, Rounding rounding)
+bigDivideUnsigned128(uint64_t& result, uint128_t const& a, uint64_t B,
+                     Rounding rounding)
 {
     releaseAssertOrThrow(B != 0);
 
@@ -85,7 +90,7 @@ bigDivide(uint64_t& result, uint128_t a, uint64_t B, Rounding rounding)
     //         = (UINT64_MAX * UINT64_MAX + 2 * UINT64_MAX) / UINT64_MAX
     //         = UINT64_MAX + 2
     // which would have overflowed uint64_t anyway.
-    uint128_t const UINT128_MAX = ~uint128_0;
+    uint128_t const UINT128_MAX = uint128_max();
     if ((rounding == ROUND_UP) && (a > UINT128_MAX - (b - 1u)))
     {
         return false;
@@ -99,10 +104,10 @@ bigDivide(uint64_t& result, uint128_t a, uint64_t B, Rounding rounding)
 }
 
 int64_t
-bigDivide(uint128_t a, int64_t B, Rounding rounding)
+bigDivideOrThrow128(uint128_t const& a, int64_t B, Rounding rounding)
 {
     int64_t res;
-    if (!bigDivide(res, a, B, rounding))
+    if (!bigDivide128(res, a, B, rounding))
     {
         throw std::overflow_error("overflow while performing bigDivide");
     }
@@ -110,7 +115,7 @@ bigDivide(uint128_t a, int64_t B, Rounding rounding)
 }
 
 uint128_t
-bigMultiply(uint64_t a, uint64_t b)
+bigMultiplyUnsigned(uint64_t a, uint64_t b)
 {
     uint128_t A(a);
     uint128_t B(b);
@@ -121,7 +126,7 @@ uint128_t
 bigMultiply(int64_t a, int64_t b)
 {
     releaseAssertOrThrow((a >= 0) && (b >= 0));
-    return bigMultiply((uint64_t)a, (uint64_t)b);
+    return bigMultiplyUnsigned((uint64_t)a, (uint64_t)b);
 }
 
 // Fix R >= 0. Consider the modified Babylonian method that operates only on
@@ -208,18 +213,18 @@ bigMultiply(int64_t a, int64_t b)
 // Now that we have an algorithm to compute ceil(sqrt(R+1)) then we can simply
 // use R-1 instead of R in the definition of the sequence to compute
 // ceil(sqrt(R)). This requires handling R=0 as a special case.
-uint64_t
-bigSquareRoot(uint64_t a, uint64_t b)
+static uint64_t
+bigSquareRootCeil(uint64_t a, uint64_t b)
 {
     // a * b = 0 is a special-case because we can't compute a * b - 1
     if (a == 0 || b == 0)
     {
         return 0;
     }
-    uint128_t R = bigMultiply(a, b) - 1u;
+    uint128_t R = bigMultiplyUnsigned(a, b) - 1u;
 
     // Seed the result with a reasonable estimate x >= ceil(sqrt(R+1))
-    uint8_t numBits = R.bits() / 2 + 1;
+    int numBits = uint128_bits(R) / 2 + 1;
     uint64_t x = numBits >= 64 ? UINT64_MAX : (1ull << numBits);
 
     uint64_t prev = 0;
@@ -228,7 +233,7 @@ bigSquareRoot(uint64_t a, uint64_t b)
         prev = x;
 
         uint64_t y = 0;
-        bool res = bigDivide(y, R, x, ROUND_UP);
+        bool res = bigDivideUnsigned128(y, R, x, ROUND_UP);
         if (!res)
         {
             throw std::runtime_error("Overflow during bigSquareRoot");
@@ -250,15 +255,41 @@ bigSquareRoot(uint64_t a, uint64_t b)
     return x;
 }
 
+// Find x such that x * x <= a * b < (x+1) * (x+1).
+uint64_t
+bigSquareRoot(uint64_t a, uint64_t b)
+{
+    uint64_t sqrtCeil = bigSquareRootCeil(a, b);
+
+    // sqrtCeil * sqrtCeil >= a * b so
+    //     sqrtCeil * sqrtCeil <= a * b
+    // implies sqrtCeil * sqrtCeil = a * b.
+    if (bigMultiplyUnsigned(sqrtCeil, sqrtCeil) <= bigMultiplyUnsigned(a, b))
+    {
+        return sqrtCeil;
+    }
+
+    // sqrtCeil > 0 because
+    //     0 * 0 <= a * b
+    // for all a, b.
+    //
+    // sqrtCeil * sqrtCeil > a * b implies that
+    //     (sqrtCeil - 1) * (sqrtCeil - 1) = a * b - 2 * sqrtCeil + 1
+    //                                     < a * b
+    // because
+    //     1 - 2 * sqrtCeil < 0 .
+    return sqrtCeil - 1;
+}
+
 bool
-hugeDivide(int64_t& result, int32_t a, uint128_t B, uint128_t C,
+hugeDivide(int64_t& result, int32_t a, uint128_t const& B, uint128_t const& C,
            Rounding rounding)
 {
-    static uint128_t const i32_max((uint32_t)INT32_MAX);
-    static uint128_t const i64_max((uint64_t)INT64_MAX);
+    uint128_t constexpr i32_max((uint32_t)INT32_MAX);
+    uint128_t constexpr i64_max((uint64_t)INT64_MAX);
 
     releaseAssertOrThrow(a >= 0);
-    releaseAssertOrThrow(C != 0);
+    releaseAssertOrThrow(C != 0ul);
     releaseAssertOrThrow(C <= i32_max * i64_max);
 
     // Use the remainder theorem to yield B = QC + R with R < C

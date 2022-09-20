@@ -21,6 +21,7 @@
 #include "transactions/TransactionBridge.h"
 #include "transactions/TransactionUtils.h"
 #include "util/Logging.h"
+#include "util/ProtocolVersion.h"
 #include "util/StatusManager.h"
 #include <Tracy.hpp>
 #include <fmt/format.h>
@@ -137,7 +138,7 @@ CommandHandler::safeRouter(CommandHandler::HandlerRoute route,
     }
     catch (std::exception const& e)
     {
-        retStr = fmt::format(R"({{"exception": "{}"}})", e.what());
+        retStr = fmt::format(FMT_STRING(R"({{"exception": "{}"}})"), e.what());
     }
     catch (...)
     {
@@ -184,7 +185,7 @@ parseOptionalParam(std::map<std::string, std::string> const& map,
         if (str.fail() || !str.eof())
         {
             std::string errorMsg =
-                fmt::format("Failed to parse '{}' argument", key);
+                fmt::format(FMT_STRING("Failed to parse '{}' argument"), key);
             throw std::runtime_error(errorMsg);
         }
         return std::make_optional<T>(val);
@@ -222,7 +223,8 @@ parseRequiredParam(std::map<std::string, std::string> const& map,
     auto res = parseOptionalParam<T>(map, key);
     if (!res)
     {
-        std::string errorMsg = fmt::format("'{}' argument is required!", key);
+        std::string errorMsg =
+            fmt::format(FMT_STRING("'{}' argument is required!"), key);
         throw std::runtime_error(errorMsg);
     }
     return *res;
@@ -289,6 +291,8 @@ CommandHandler::peers(std::string const& params, std::string& retStr)
                 peerNode["olver"] = (int)peer.second->getRemoteOverlayVersion();
                 peerNode["id"] =
                     mApp.getConfig().toStrKey(peer.first, fullKeys);
+                peerNode["flow_control"] =
+                    peer.second->getFlowControlJsonInfo();
             }
         };
     addAuthenticatedPeers(
@@ -306,13 +310,67 @@ CommandHandler::info(std::string const&, std::string& retStr)
     retStr = mApp.getJsonInfo().toStyledString();
 }
 
+static bool
+shouldEnable(std::set<std::string> const& toEnable,
+             medida::MetricName const& name)
+{
+    // Enable individual metric name or a partition
+    if (toEnable.find(name.domain()) == toEnable.end() &&
+        toEnable.find(name.ToString()) == toEnable.end())
+    {
+        return false;
+    }
+    return true;
+}
+
 void
 CommandHandler::metrics(std::string const& params, std::string& retStr)
 {
     ZoneScoped;
+
+    std::map<std::string, std::string> retMap;
+    http::server::server::parseParams(params, retMap);
+    std::set<std::string> toEnable;
+
+    // Filter which metrics to report based on the parameters
+    auto metricToEnable = retMap.find("enable");
+    if (metricToEnable != retMap.end())
+    {
+        std::stringstream ss(metricToEnable->second);
+        std::string metric;
+
+        while (getline(ss, metric, ','))
+        {
+            toEnable.insert(metric);
+        }
+    }
+
     mApp.syncAllMetrics();
-    medida::reporting::JsonReporter jr(mApp.getMetrics());
-    retStr = jr.Report();
+
+    auto reportMetrics =
+        [&](std::map<medida::MetricName,
+                     std::shared_ptr<medida::MetricInterface>> const& metrics) {
+            medida::reporting::JsonReporter jr(metrics);
+            retStr = jr.Report();
+        };
+
+    if (!toEnable.empty())
+    {
+        std::map<medida::MetricName, std::shared_ptr<medida::MetricInterface>>
+            metricsToReport;
+        for (auto const& m : mApp.getMetrics().GetAllMetrics())
+        {
+            if (shouldEnable(toEnable, m.first))
+            {
+                metricsToReport.emplace(m);
+            }
+        }
+        reportMetrics(metricsToReport);
+    }
+    else
+    {
+        reportMetrics(mApp.getMetrics().GetAllMetrics());
+    }
 }
 
 void
@@ -472,8 +530,8 @@ CommandHandler::upgrades(std::string const& params, std::string& retStr)
         }
         catch (std::exception&)
         {
-            retStr =
-                fmt::format("could not parse upgradetime: '{}'", upgradeTime);
+            retStr = fmt::format(
+                FMT_STRING("could not parse upgradetime: '{}'"), upgradeTime);
             return;
         }
         p.mUpgradeTime = VirtualClock::tmToSystemPoint(tm);
@@ -481,12 +539,13 @@ CommandHandler::upgrades(std::string const& params, std::string& retStr)
 
         p.mBaseFee = parseOptionalParam<uint32>(retMap, "basefee");
         p.mBaseReserve = parseOptionalParam<uint32>(retMap, "basereserve");
+        p.mMaxTxSetSize = parseOptionalParam<uint32>(retMap, "maxtxsetsize");
         p.mBasePercentageFee =
             parseOptionalParam<uint32>(retMap, "basepercentagefee");
         p.mMaxFee = parseOptionalParam<uint64>(retMap, "maxfee");
-        p.mMaxTxSize = parseOptionalParam<uint32>(retMap, "maxtxsize");
         p.mProtocolVersion =
             parseOptionalParam<uint32>(retMap, "protocolversion");
+        p.mFlags = parseOptionalParam<uint32>(retMap, "flags");
 
         mApp.getHerder().setUpgrades(p);
     }
@@ -497,7 +556,7 @@ CommandHandler::upgrades(std::string const& params, std::string& retStr)
     }
     else
     {
-        retStr = fmt::format("Unknown mode: {}", s);
+        retStr = fmt::format(FMT_STRING("Unknown mode: {}"), s);
     }
 }
 
@@ -617,7 +676,8 @@ CommandHandler::tx(std::string const& params, std::string& retStr)
 
         {
             auto lhhe = mApp.getLedgerManager().getLastClosedLedgerHeader();
-            if (lhhe.header.ledgerVersion >= 13)
+            if (protocolVersionStartsFrom(lhhe.header.ledgerVersion,
+                                          ProtocolVersion::V_13))
             {
                 envelope = txbridge::convertForV13(envelope);
             }
@@ -761,7 +821,7 @@ CommandHandler::clearMetrics(std::string const& params, std::string& retStr)
 
     mApp.clearMetrics(domain);
 
-    retStr = fmt::format("Cleared {} metrics!", domain);
+    retStr = fmt::format(FMT_STRING("Cleared {} metrics!"), domain);
 }
 
 void
@@ -854,8 +914,9 @@ CommandHandler::generateLoad(std::string const& params, std::string& retStr)
         mApp.generateLoad(mode, nAccounts, offset, nTxs, txRate, batchSize,
                           spikeInterval, spikeSize);
 
-        retStr += fmt::format(" Generating load: {:d} {:s}, {:d} tx/s",
-                              numItems, itemType, txRate);
+        retStr +=
+            fmt::format(FMT_STRING(" Generating load: {:d} {:s}, {:d} tx/s"),
+                        numItems, itemType, txRate);
     }
     else
     {

@@ -143,17 +143,49 @@ createSponsoredEntryButSponsorHasInsufficientBalance(
     }
 }
 
+static uint32_t
+getNumReservesRequiredForOperation(Operation const& op)
+{
+    if (op.body.type() == REVOKE_SPONSORSHIP &&
+        op.body.revokeSponsorshipOp().type() ==
+            REVOKE_SPONSORSHIP_LEDGER_ENTRY &&
+        (op.body.revokeSponsorshipOp().ledgerKey().type() == ACCOUNT ||
+         (op.body.revokeSponsorshipOp().ledgerKey().type() == TRUSTLINE &&
+          op.body.revokeSponsorshipOp().ledgerKey().trustLine().asset.type() ==
+              ASSET_TYPE_POOL_SHARE)))
+    {
+        return 2;
+    }
+    else if (op.body.type() == CREATE_ACCOUNT)
+    {
+        return 2;
+    }
+    else if (op.body.type() == CHANGE_TRUST &&
+             op.body.changeTrustOp().line.type() == ASSET_TYPE_POOL_SHARE)
+    {
+        return 2;
+    }
+    else if (op.body.type() == CREATE_CLAIMABLE_BALANCE)
+    {
+        return static_cast<uint32_t>(
+            op.body.createClaimableBalanceOp().claimants.size());
+    }
+
+    return 1;
+}
+
 static void
 createModifyAndRemoveSponsoredEntry(Application& app, TestAccount& sponsoredAcc,
                                     Operation const& opCreate,
                                     Operation const& opModify1,
                                     Operation const& opModify2,
                                     Operation const& opRemove,
-                                    RevokeSponsorshipOp const& rso)
+                                    RevokeSponsorshipOp const& rso,
+                                    uint32_t ledgerVersionFrom)
 {
     SECTION("create, modify, and remove sponsored entry")
     {
-        for_versions_from(14, app, [&] {
+        for_versions_from(ledgerVersionFrom, app, [&] {
             uint32_t nse;
             {
                 LedgerTxn ltx(app.getLedgerTxnRoot());
@@ -202,6 +234,8 @@ createModifyAndRemoveSponsoredEntry(Application& app, TestAccount& sponsoredAcc,
                 }
             };
 
+            auto numReserves = getNumReservesRequiredForOperation(opCreate);
+
             {
                 LedgerTxn ltx(app.getLedgerTxnRoot());
                 TransactionMeta txm(2);
@@ -209,9 +243,9 @@ createModifyAndRemoveSponsoredEntry(Application& app, TestAccount& sponsoredAcc,
                 REQUIRE(tx->apply(app, ltx, txm));
 
                 check(ltx);
-                checkSponsorship(ltx, sponsoredAcc, 0, nullptr, nse + 1, 2, 0,
-                                 1);
-                checkSponsorship(ltx, root, 0, nullptr, 0, 2, 1, 0);
+                checkSponsorship(ltx, sponsoredAcc, 0, nullptr,
+                                 nse + numReserves, 2, 0, numReserves);
+                checkSponsorship(ltx, root, 0, nullptr, 0, 2, numReserves, 0);
                 ltx.commit();
             }
 
@@ -223,9 +257,9 @@ createModifyAndRemoveSponsoredEntry(Application& app, TestAccount& sponsoredAcc,
                 REQUIRE(tx2->apply(app, ltx2, txm2));
 
                 check(ltx2);
-                checkSponsorship(ltx2, sponsoredAcc, 0, nullptr, nse + 1, 2, 0,
-                                 1);
-                checkSponsorship(ltx2, root, 0, nullptr, 0, 2, 1, 0);
+                checkSponsorship(ltx2, sponsoredAcc, 0, nullptr,
+                                 nse + numReserves, 2, 0, numReserves);
+                checkSponsorship(ltx2, root, 0, nullptr, 0, 2, numReserves, 0);
                 ltx2.commit();
             }
 
@@ -237,9 +271,9 @@ createModifyAndRemoveSponsoredEntry(Application& app, TestAccount& sponsoredAcc,
                 REQUIRE(tx3->apply(app, ltx3, txm3));
 
                 check(ltx3);
-                checkSponsorship(ltx3, sponsoredAcc, 0, nullptr, nse + 1, 2, 0,
-                                 1);
-                checkSponsorship(ltx3, root, 0, nullptr, 0, 2, 1, 0);
+                checkSponsorship(ltx3, sponsoredAcc, 0, nullptr,
+                                 nse + numReserves, 2, 0, numReserves);
+                checkSponsorship(ltx3, root, 0, nullptr, 0, 2, numReserves, 0);
                 checkSponsorship(ltx3, a2, 0, nullptr, 0, 0, 0, 0);
                 ltx3.commit();
             }
@@ -264,17 +298,16 @@ createModifyAndRemoveSponsoredEntry(Application& app, TestAccount& sponsoredAcc,
 }
 
 void
-createModifyAndRemoveSponsoredEntry(Application& app, TestAccount& sponsoredAcc,
-                                    Operation const& opCreate,
-                                    Operation const& opModify1,
-                                    Operation const& opModify2,
-                                    Operation const& opRemove,
-                                    LedgerKey const& lk)
+createModifyAndRemoveSponsoredEntry(
+    Application& app, TestAccount& sponsoredAcc, Operation const& opCreate,
+    Operation const& opModify1, Operation const& opModify2,
+    Operation const& opRemove, LedgerKey const& lk, uint32_t ledgerVersionFrom)
 {
     RevokeSponsorshipOp rso(REVOKE_SPONSORSHIP_LEDGER_ENTRY);
     rso.ledgerKey() = lk;
     createModifyAndRemoveSponsoredEntry(app, sponsoredAcc, opCreate, opModify1,
-                                        opModify2, opRemove, rso);
+                                        opModify2, opRemove, rso,
+                                        ledgerVersionFrom);
 }
 
 void
@@ -289,84 +322,302 @@ createModifyAndRemoveSponsoredEntry(Application& app, TestAccount& sponsoredAcc,
     rso.signer().accountID = sponsoredAcc;
     rso.signer().signerKey = signerKey;
     createModifyAndRemoveSponsoredEntry(app, sponsoredAcc, opCreate, opModify1,
-                                        opModify2, opRemove, rso);
+                                        opModify2, opRemove, rso, 14);
 }
 
 void
 tooManySponsoring(Application& app, TestAccount& sponsoredAcc,
-                  Operation const& successfulOp, Operation const& failOp)
+                  Operation const& successfulOp, Operation const& failOp,
+                  uint32_t reservesForSuccesfulOp)
 {
-    tooManySponsoring(app, sponsoredAcc, sponsoredAcc, successfulOp, failOp);
+    tooManySponsoring(app, sponsoredAcc, sponsoredAcc, successfulOp, failOp,
+                      reservesForSuccesfulOp);
 }
+
+static uint32_t
+getMinProtocolVersionForTooManyTestsFromOp(Operation const& op)
+{
+    if (op.body.type() == CHANGE_TRUST &&
+        op.body.changeTrustOp().line.type() == ASSET_TYPE_POOL_SHARE)
+    {
+        return 18;
+    }
+    else if (op.body.type() == REVOKE_SPONSORSHIP &&
+             op.body.revokeSponsorshipOp().type() ==
+                 REVOKE_SPONSORSHIP_LEDGER_ENTRY &&
+             op.body.revokeSponsorshipOp().ledgerKey().type() == TRUSTLINE &&
+             op.body.revokeSponsorshipOp()
+                     .ledgerKey()
+                     .trustLine()
+                     .asset.type() == ASSET_TYPE_POOL_SHARE)
+    {
+        return 18;
+    }
+    else if (op.body.type() == ALLOW_TRUST ||
+             op.body.type() == SET_TRUST_LINE_FLAGS)
+    {
+        // An assumption is made here that if you are using one of these
+        // operations, you are testing the pool share revoke scenario.
+        return 18;
+    }
+
+    return 14;
+}
+
+static void
+submitTooManySponsoringTxs(Application& app, TestAccount& successfulOpAcc,
+                           TestAccount& failOpAcc,
+                           Operation const& successfulOp,
+                           Operation const& failOp)
+{
+    auto root = TestAccount::createRoot(app);
+    {
+        auto tx1 = transactionFrameFromOps(
+            app.getNetworkID(), root,
+            {root.op(beginSponsoringFutureReserves(successfulOpAcc)),
+             successfulOp, successfulOpAcc.op(endSponsoringFutureReserves())},
+            {successfulOpAcc});
+
+        LedgerTxn ltx(app.getLedgerTxnRoot());
+        TransactionMeta txm1(2);
+        REQUIRE(tx1->checkValid(ltx, 0, 0, 0));
+        REQUIRE(tx1->apply(app, ltx, txm1));
+        ltx.commit();
+    }
+
+    {
+        auto tx2 = transactionFrameFromOps(
+            app.getNetworkID(), root,
+            {root.op(beginSponsoringFutureReserves(failOpAcc)), failOp,
+             failOpAcc.op(endSponsoringFutureReserves())},
+            {failOpAcc});
+
+        LedgerTxn ltx(app.getLedgerTxnRoot());
+        TransactionMeta txm2(2);
+        REQUIRE(tx2->checkValid(ltx, 0, 0, 0));
+        REQUIRE(!tx2->apply(app, ltx, txm2));
+        REQUIRE(tx2->getResult().result.results()[1].code() ==
+                opTOO_MANY_SPONSORING);
+    }
+}
+
 void
 tooManySponsoring(Application& app, TestAccount& successfulOpAcc,
                   TestAccount& failOpAcc, Operation const& successfulOp,
-                  Operation const& failOp)
+                  Operation const& failOp, uint32_t reservesForSuccesfulOp)
 {
+    REQUIRE(failOp.body.type() == successfulOp.body.type());
+
     // root is the sponsoring account
     auto root = TestAccount::createRoot(app);
-    SECTION("too many sponsoring")
+    auto minVersion = getMinProtocolVersionForTooManyTestsFromOp(successfulOp);
+
+    auto tooManySponsoring = [&](uint32_t reservesForFirstOp) {
+        SECTION("too many sponsoring")
+        {
+            for_versions_from(minVersion, app, [&] {
+                {
+                    LedgerTxn ltx(app.getLedgerTxnRoot());
+                    auto acc = stellar::loadAccount(ltx, root.getPublicKey());
+                    auto& le = acc.current();
+                    auto& ae = le.data.account();
+                    ae.ext.v(1);
+                    ae.ext.v1().ext.v(2);
+
+                    // we want to be able to do one successful op before the
+                    // fail op
+                    ae.ext.v1().ext.v2().numSponsoring =
+                        UINT32_MAX - reservesForFirstOp;
+                    ltx.commit();
+                }
+
+                submitTooManySponsoringTxs(app, successfulOpAcc, failOpAcc,
+                                           successfulOp, failOp);
+            });
+        }
+        SECTION("too many sponsoring but not due to subentries")
+        {
+            for_versions(minVersion, 17, app, [&] {
+                {
+                    LedgerTxn ltx(app.getLedgerTxnRoot());
+                    auto acc = stellar::loadAccount(ltx, root.getPublicKey());
+                    auto& le = acc.current();
+                    auto& ae = le.data.account();
+                    ae.ext.v(1);
+                    ae.ext.v1().ext.v(2);
+
+                    // we want to be able to do one successful op before the
+                    // fail op
+                    ae.ext.v1().ext.v2().numSponsoring =
+                        UINT32_MAX - reservesForFirstOp;
+
+                    // make sure numSubEntry + numSponsoring limit doesn't exist
+                    // pre 18
+                    ae.numSubEntries = 50;
+
+                    ltx.commit();
+                }
+
+                submitTooManySponsoringTxs(app, successfulOpAcc, failOpAcc,
+                                           successfulOp, failOp);
+            });
+        }
+        SECTION("too many sponsoring but due to subentries")
+        {
+            for_versions_from(18, app, [&] {
+                {
+                    LedgerTxn ltx(app.getLedgerTxnRoot());
+                    auto acc = stellar::loadAccount(ltx, root.getPublicKey());
+                    auto& le = acc.current();
+                    auto& ae = le.data.account();
+                    ae.ext.v(1);
+                    ae.ext.v1().ext.v(2);
+
+                    // Set numSponsoring close to UINT32_MAX and set
+                    // numSubEntries high enough so only the successfulOp will
+                    // succeed. This should validate the numSponsoring +
+                    // numSubEntries <= UINT32_MAX protocol v18 check.
+                    ae.ext.v1().ext.v2().numSponsoring =
+                        UINT32_MAX - reservesForFirstOp - 50;
+
+                    ae.numSubEntries = 50;
+
+                    ltx.commit();
+                }
+
+                submitTooManySponsoringTxs(app, successfulOpAcc, failOpAcc,
+                                           successfulOp, failOp);
+            });
+        }
+    };
+
+    SECTION("no space left after first op")
     {
-        for_versions_from(14, app, [&] {
-            {
-                LedgerTxn ltx(app.getLedgerTxnRoot());
-                auto acc = stellar::loadAccount(ltx, root.getPublicKey());
-                auto& le = acc.current();
-                auto& ae = le.data.account();
-                ae.ext.v(1);
-                ae.ext.v1().ext.v(2);
+        tooManySponsoring(reservesForSuccesfulOp);
+    }
 
-                uint32_t offset = 1;
-                // we want to be able to do one successful op before the fail op
-                if (successfulOp.body.type() == REVOKE_SPONSORSHIP &&
-                    successfulOp.body.revokeSponsorshipOp().type() ==
-                        REVOKE_SPONSORSHIP_LEDGER_ENTRY &&
-                    successfulOp.body.revokeSponsorshipOp()
-                            .ledgerKey()
-                            .type() == ACCOUNT)
+    // For entries that need more than one reserve, we want to make sure the
+    // second operation would still fail if there is space for one reserve
+    // (instead of no space like in the test above). We assume that both
+    // operations will require the same number of reserves, and if they use at
+    // least two reserves each, one extra space of reserve should not make a
+    // difference. This is just making sure we’re not assuming the entry
+    // uses one reserve for any overflow checks.
+    if (reservesForSuccesfulOp > 1)
+    {
+        SECTION("one reserve left after first op")
+        {
+            tooManySponsoring(reservesForSuccesfulOp + 1);
+        }
+    }
+}
+
+static void
+submitTooManyNumSubEntries(Application& app, TestAccount& testAcc,
+                           Operation const& successfulOp,
+                           Operation const& failOp)
+{
+    {
+        auto tx1 = transactionFrameFromOps(app.getNetworkID(), testAcc,
+                                           {successfulOp}, {});
+
+        LedgerTxn ltx(app.getLedgerTxnRoot());
+        TransactionMeta txm1(2);
+        REQUIRE(tx1->checkValid(ltx, 0, 0, 0));
+        REQUIRE(tx1->apply(app, ltx, txm1));
+        ltx.commit();
+    }
+
+    {
+        auto tx2 =
+            transactionFrameFromOps(app.getNetworkID(), testAcc, {failOp}, {});
+
+        LedgerTxn ltx(app.getLedgerTxnRoot());
+        TransactionMeta txm2(2);
+        REQUIRE(tx2->checkValid(ltx, 0, 0, 0));
+        REQUIRE(!tx2->apply(app, ltx, txm2));
+        REQUIRE(tx2->getResult().result.results()[0].code() ==
+                opTOO_MANY_SUBENTRIES);
+    }
+}
+
+void
+tooManySubentries(Application& app, TestAccount& testAcc,
+                  Operation const& successfulOp, Operation const& failOp)
+{
+    REQUIRE(failOp.body.type() == successfulOp.body.type());
+
+    // testAcc needs a high balance
+    auto root = TestAccount::createRoot(app);
+    root.pay(testAcc, root.getAvailableBalance() - 100);
+
+    auto minVersion = getMinProtocolVersionForTooManyTestsFromOp(successfulOp);
+
+    auto tooManySubentries = [&](uint32_t reservesForFirstOp) {
+        SECTION("too many subentries")
+        {
+            for_versions_from(minVersion, app, [&] {
                 {
-                    ++offset;
+                    LedgerTxn ltx(app.getLedgerTxnRoot());
+                    auto acc =
+                        stellar::loadAccount(ltx, testAcc.getPublicKey());
+                    auto& le = acc.current();
+                    auto& ae = le.data.account();
+
+                    ae.numSubEntries =
+                        getAccountSubEntryLimit() - reservesForFirstOp;
+
+                    ltx.commit();
                 }
-                else if (successfulOp.body.type() == CREATE_ACCOUNT)
+
+                submitTooManyNumSubEntries(app, testAcc, successfulOp, failOp);
+            });
+        }
+        SECTION("too many subentries due to numSponsoring")
+        {
+            for_versions_from(18, app, [&] {
                 {
-                    ++offset;
+                    LedgerTxn ltx(app.getLedgerTxnRoot());
+                    auto acc =
+                        stellar::loadAccount(ltx, testAcc.getPublicKey());
+                    auto& le = acc.current();
+                    auto& ae = le.data.account();
+
+                    // Set numSponsoring close to UINT32_MAX and set
+                    // numSubEntries high enough so only the successfulOp will
+                    // succeed. This should validate the numSponsoring +
+                    // numSubEntries <= UINT32_MAX protocol v18 check.
+                    ae.ext.v(1);
+                    ae.ext.v1().ext.v(2);
+                    ae.ext.v1().ext.v2().numSponsoring =
+                        UINT32_MAX - reservesForFirstOp - 50;
+
+                    ae.numSubEntries = 50;
+
+                    ltx.commit();
                 }
 
-                ae.ext.v1().ext.v2().numSponsoring = UINT32_MAX - offset;
-                ltx.commit();
-            }
+                submitTooManyNumSubEntries(app, testAcc, successfulOp, failOp);
+            });
+        }
+    };
 
-            {
-                auto tx1 = transactionFrameFromOps(
-                    app.getNetworkID(), root,
-                    {root.op(beginSponsoringFutureReserves(successfulOpAcc)),
-                     successfulOp,
-                     successfulOpAcc.op(endSponsoringFutureReserves())},
-                    {successfulOpAcc});
+    auto reservesForSuccesfulOp =
+        getNumReservesRequiredForOperation(successfulOp);
 
-                LedgerTxn ltx(app.getLedgerTxnRoot());
-                TransactionMeta txm1(2);
-                REQUIRE(tx1->checkValid(ltx, 0, 0, 0));
-                REQUIRE(tx1->apply(app, ltx, txm1));
-                ltx.commit();
-            }
+    SECTION("no space left after first op")
+    {
+        tooManySubentries(reservesForSuccesfulOp);
+    }
 
-            {
-                auto tx2 = transactionFrameFromOps(
-                    app.getNetworkID(), root,
-                    {root.op(beginSponsoringFutureReserves(failOpAcc)), failOp,
-                     failOpAcc.op(endSponsoringFutureReserves())},
-                    {failOpAcc});
-
-                LedgerTxn ltx(app.getLedgerTxnRoot());
-                TransactionMeta txm2(2);
-                REQUIRE(tx2->checkValid(ltx, 0, 0, 0));
-                REQUIRE(!tx2->apply(app, ltx, txm2));
-                REQUIRE(tx2->getResult().result.results()[1].code() ==
-                        opTOO_MANY_SPONSORING);
-                ltx.commit();
-            }
-        });
+    // See comment at the bottom of tooManySponsoring for an explanation on how
+    // this works
+    if (reservesForSuccesfulOp > 1)
+    {
+        SECTION("one reserve left after first op")
+        {
+            tooManySubentries(reservesForSuccesfulOp + 1);
+        }
     }
 }
 }

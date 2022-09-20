@@ -5,6 +5,7 @@
 #include "transactions/ClawbackOpFrame.h"
 #include "ledger/LedgerTxn.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
 #include <Tracy.hpp>
 
 namespace stellar
@@ -17,9 +18,10 @@ ClawbackOpFrame::ClawbackOpFrame(Operation const& op, OperationResult& res,
 }
 
 bool
-ClawbackOpFrame::isVersionSupported(uint32_t protocolVersion) const
+ClawbackOpFrame::isOpSupported(LedgerHeader const& header) const
 {
-    return protocolVersion >= 17;
+    return protocolVersionStartsFrom(header.ledgerVersion,
+                                     ProtocolVersion::V_17);
 }
 
 bool

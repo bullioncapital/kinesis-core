@@ -81,6 +81,24 @@ More information can be found:
   * Note that when using the default libc++, we set `_LIBCPP_DEBUG=0` to avoid compatibility issues with the default shared runtimes.
   * To enable full debug mode `_LIBCPP_DEBUG=1`, you need to build a custom libc++ with the same flags, including `_LIBCPP_DEBUG=1` (see below on how to do this)
 
+#### enable-codecoverage
+This enables source based code coverage.
+
+More information can be found [here](https://clang.llvm.org/docs/SourceBasedCodeCoverage.html)
+
+Steps (tested on Mac OS):
+
+1. Run `./configure --enable-codecoverage` (include `--enable-next-protocol-version-unsafe-for-production` if testing a future protocol version)
+2. Compile stellar core
+3. Run the desired test, but with the LLVM_PROFILE_FILE environment variable set (ex. `LLVM_PROFILE_FILE="cov.profraw" src/stellar-core test '[liquiditypool]'`). This should generate a cov.profraw file in the current directory.
+4. Run `xcrun llvm-profdata merge -output=cov.profdata cov.profraw`
+   * the llvm tools are only accessible on Mac OS through `xcrun`
+5. Run `xcrun llvm-cov show ./src/stellar-core -instr-profile=cov.profdata -format="html" > cov.html`
+   * The resulting html file can be around ~45MB, so it can be difficult to navigate with a
+   browser. You can use the `-ignore-filename-regex` option to remove files/directories that you aren't
+   interested in (ex. The following option excludes every directory specified `-ignore-filename-regex='.*lib[/\\].*|.*bucket[/\\].*|.*catchup[/\\].*|.*crypto[/\\].*|.*database[/\\].*|.*herder[/\\].*|.*history[/\\].*|.*historywork[/\\].*|.*overlay[/\\].*|.*xdr[/\\].*|.*sodium[/\\].*|.*work[/\\].*|.*test[/\\].*|.*scp[/\\].*|.*main[/\\].*|.*simulation[/\\].*|.*invariant[/\\].*|.*util[/\\].*'`)
+
+
 ### Special configure flags for unreleased protocol versions
 
 When building with `configure`, the flag below must be used to enable unreleased protocol
@@ -190,7 +208,7 @@ The `make check` command runs tests and supports parallelization. This functiona
 * `TEST_SPEC`: Used to run just a subset of the tests (default: "~[.]")
 * `NUM_PARTITIONS`: Partitions the test suite (after applying `TEST_SPEC`) into
 `$NUM_PARTITIONS` disjoint sets (default: 1)
-* `BATCH_SIZE`: The number of tests to be batched together to reduce setup overhead. (default: 5)
+* `BATCHSIZE`: The number of tests to be batched together to reduce setup overhead. (default: 5)
 * `RUN_PARTITIONS`: Run only a subset of the partitions, indexed from 0
 (default: "$(seq 0 $((NUM_PARTITIONS-1)))")
 * `TEMP_POSTGRES`: Automatically generates temporary database clusters instead
@@ -214,3 +232,34 @@ Then, running:
 * `stellar-core test [stress]` will run all the stress tests,
 * `stellar-core test [foo-stress]` will run the stress tests for subsystem foo alone, and
 * neither `stellar-core test` nor `stellar-core test [foo]` will run stress tests.
+
+## Running and updating TxMeta checks
+
+The `stellar-core test` unit tests can be run in two special modes that hash the
+TxMeta of each transaction executed. These two modes can increase confidence
+that a change to stellar-core does not alter the semantics of any transactions.
+The two modes are:
+
+  * `--record-test-tx-meta <dirname>` which records TxMeta hashes into `<dirname>`
+  * `--check-test-tx-meta <dirname>` which checks TxMeta hashes against `<dirname>`
+
+Continuous integration tests automatically run the `--check-test-tx-meta` mode
+against a pair of captured baseline directories stored in the repository, called
+`test-tx-meta-baseline-current` (for the current protocol) and
+`text-tx-meta-baseline-next` (for the next protocol). If you make _intentional_
+changes to the semantics of any transactions, or add any new transactions that
+need to have their hashes recorded, you can re-record the baseline using a
+command like:
+
+    stellar-core test [tx] --all-versions --rng-seed 12345 --record-test-tx-meta test-tx-meta-baseline-current
+
+for a build with only the current protocol enabled, and:
+
+    stellar-core test [tx] --all-versions --rng-seed 12345 --record-test-tx-meta test-tx-meta-baseline-next
+
+for a build configured with `--enable-next-protocol-version-unsafe-for-production`.
+
+These commands will rewrite the baseline files, which are human-readable JSON
+files. You should then inspect to see that only the transactions you expected to
+see change did so. If so, commit the changes as a new set of baselines for
+future tests.

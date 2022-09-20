@@ -4,7 +4,6 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
-#include "lib/util/uint128_t.h"
 #include "numeric.h"
 #include "overlay/StellarXDR.h"
 #include "xdrpp/message.h"
@@ -24,8 +23,8 @@ Hash& operator^=(Hash& l, Hash const& r);
 // returns true if ( l ^ x ) < ( r ^ x)
 bool lessThanXored(Hash const& l, Hash const& r, Hash const& x);
 
-// returns true if the passed string32 is valid
-bool isString32Valid(std::string const& str);
+// returns true if the passed string is valid
+bool isStringValid(std::string const& str);
 
 // returns true if the currencies are the same
 bool compareAsset(Asset const& first, Asset const& second);

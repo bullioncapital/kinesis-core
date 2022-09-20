@@ -8,6 +8,7 @@
 #include "ledger/LedgerTxnHeader.h"
 #include "main/Application.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
 #include <Tracy.hpp>
 
 namespace stellar
@@ -15,75 +16,85 @@ namespace stellar
 
 SetTrustLineFlagsOpFrame::SetTrustLineFlagsOpFrame(Operation const& op,
                                                    OperationResult& res,
-                                                   TransactionFrame& parentTx)
-    : OperationFrame(op, res, parentTx)
+                                                   TransactionFrame& parentTx,
+                                                   uint32_t index)
+    : TrustFlagsOpFrameBase(op, res, parentTx)
     , mSetTrustLineFlags(mOperation.body.setTrustLineFlagsOp())
+    , mOpIndex(index)
 {
-}
-
-ThresholdLevel
-SetTrustLineFlagsOpFrame::getThresholdLevel() const
-{
-    return ThresholdLevel::LOW;
 }
 
 bool
-SetTrustLineFlagsOpFrame::isVersionSupported(uint32_t protocolVersion) const
+SetTrustLineFlagsOpFrame::isOpSupported(LedgerHeader const& header) const
 {
-    return protocolVersion >= 17;
+    return protocolVersionStartsFrom(header.ledgerVersion,
+                                     ProtocolVersion::V_17);
+}
+
+void
+SetTrustLineFlagsOpFrame::setResultSelfNotAllowed()
+{
+    throw std::runtime_error("Not implemented.");
+}
+
+void
+SetTrustLineFlagsOpFrame::setResultNoTrustLine()
+{
+    innerResult().code(SET_TRUST_LINE_FLAGS_NO_TRUST_LINE);
+}
+
+void
+SetTrustLineFlagsOpFrame::setResultLowReserve()
+{
+    innerResult().code(SET_TRUST_LINE_FLAGS_LOW_RESERVE);
+}
+
+void
+SetTrustLineFlagsOpFrame::setResultSuccess()
+{
+    innerResult().code(SET_TRUST_LINE_FLAGS_SUCCESS);
+}
+
+AccountID const&
+SetTrustLineFlagsOpFrame::getOpTrustor() const
+{
+    return mSetTrustLineFlags.trustor;
+}
+
+Asset const&
+SetTrustLineFlagsOpFrame::getOpAsset() const
+{
+    return mSetTrustLineFlags.asset;
+}
+
+uint32_t
+SetTrustLineFlagsOpFrame::getOpIndex() const
+{
+    return mOpIndex;
 }
 
 bool
-SetTrustLineFlagsOpFrame::doApply(AbstractLedgerTxn& ltx)
+SetTrustLineFlagsOpFrame::calcExpectedFlagValue(LedgerTxnEntry const& trust,
+                                                uint32_t& expectedVal)
 {
-    ZoneNamedN(applyZone, "SetTrustLineFlagsOp apply", true);
+    expectedVal = trust.current().data.trustLine().flags;
+    expectedVal &= ~mSetTrustLineFlags.clearFlags;
+    expectedVal |= mSetTrustLineFlags.setFlags;
 
-    if (!isAuthRevocationValid(ltx))
+    if (!trustLineFlagAuthIsValid(expectedVal))
     {
-        innerResult().code(SET_TRUST_LINE_FLAGS_CANT_REVOKE);
+        innerResult().code(SET_TRUST_LINE_FLAGS_INVALID_STATE);
         return false;
     }
-
-    auto key =
-        trustlineKey(mSetTrustLineFlags.trustor, mSetTrustLineFlags.asset);
-    bool shouldRemoveOffers = false;
-    uint32_t expectedFlagValue = 0;
-    {
-        // trustline is loaded in this inner scope because it can be loaded
-        // again in removeOffersByAccountAndAsset
-        auto const trust = ltx.load(key);
-        if (!trust)
-        {
-            innerResult().code(SET_TRUST_LINE_FLAGS_NO_TRUST_LINE);
-            return false;
-        }
-
-        expectedFlagValue = trust.current().data.trustLine().flags;
-
-        expectedFlagValue &= ~mSetTrustLineFlags.clearFlags;
-        expectedFlagValue |= mSetTrustLineFlags.setFlags;
-
-        if (!trustLineFlagAuthIsValid(expectedFlagValue))
-        {
-            innerResult().code(SET_TRUST_LINE_FLAGS_INVALID_STATE);
-            return false;
-        }
-
-        shouldRemoveOffers =
-            isAuthorizedToMaintainLiabilities(trust) &&
-            !isAuthorizedToMaintainLiabilitiesUnsafe(expectedFlagValue);
-    }
-
-    if (shouldRemoveOffers)
-    {
-        removeOffersByAccountAndAsset(ltx, mSetTrustLineFlags.trustor,
-                                      mSetTrustLineFlags.asset);
-    }
-
-    auto trust = ltx.load(key);
-    trust.current().data.trustLine().flags = expectedFlagValue;
-    innerResult().code(SET_TRUST_LINE_FLAGS_SUCCESS);
     return true;
+}
+
+void
+SetTrustLineFlagsOpFrame::setFlagValue(AbstractLedgerTxn& ltx,
+                                       LedgerKey const& key, uint32_t flagVal)
+{
+    auto trust = ltx.load(key);
+    trust.current().data.trustLine().flags = flagVal;
 }
 
 bool
@@ -152,8 +163,11 @@ SetTrustLineFlagsOpFrame::insertLedgerKeysToPrefetch(
 }
 
 bool
-SetTrustLineFlagsOpFrame::isAuthRevocationValid(AbstractLedgerTxn& ltx)
+SetTrustLineFlagsOpFrame::isAuthRevocationValid(AbstractLedgerTxn& ltx,
+                                                bool& authRevocable)
 {
+
+    // Load the source account entry
     LedgerTxn ltxSource(ltx); // ltxSource will be rolled back
     auto header = ltxSource.loadHeader();
     auto sourceAccountEntry = loadSourceAccount(ltxSource, header);
@@ -163,6 +177,9 @@ SetTrustLineFlagsOpFrame::isAuthRevocationValid(AbstractLedgerTxn& ltx)
     {
         return true;
     }
+
+    // If the account entry doesn't have "authorization revocable" flag,
+    // Check if the operation is still allowed.
 
     // AUTH_REVOCABLE_FLAG is not set on the account, so the three transitions
     // below are not allowed.
@@ -181,6 +198,22 @@ SetTrustLineFlagsOpFrame::isAuthRevocationValid(AbstractLedgerTxn& ltx)
     bool settingAuthorized =
         (mSetTrustLineFlags.setFlags & AUTHORIZED_FLAG) != 0;
 
-    return !clearingAnyAuth || settingAuthorized;
+    bool isValid = !clearingAnyAuth || settingAuthorized;
+
+    if (!isValid)
+    {
+        innerResult().code(SET_TRUST_LINE_FLAGS_CANT_REVOKE);
+    }
+    return isValid;
 }
+
+bool
+SetTrustLineFlagsOpFrame::isRevocationToMaintainLiabilitiesValid(
+    bool authRevocable, LedgerTxnEntry const& trust, uint32_t flags)
+{
+    // This has already been checked in isAuthRevocationValid,
+    // always return true here.
+    return true;
+}
+
 }

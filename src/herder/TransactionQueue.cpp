@@ -5,25 +5,36 @@
 #include "herder/TransactionQueue.h"
 #include "crypto/SecretKey.h"
 #include "herder/TxQueueLimiter.h"
+#include "ledger/LedgerHashUtils.h"
 #include "ledger/LedgerManager.h"
 #include "ledger/LedgerTxn.h"
 #include "main/Application.h"
 #include "overlay/OverlayManager.h"
+#include "test/TxTests.h"
 #include "transactions/FeeBumpTransactionFrame.h"
+#include "transactions/OperationFrame.h"
 #include "transactions/TransactionBridge.h"
 #include "transactions/TransactionUtils.h"
+#include "util/BitSet.h"
 #include "util/GlobalChecks.h"
 #include "util/HashOfHash.h"
+#include "util/Math.h"
+#include "util/ProtocolVersion.h"
+#include "util/TarjanSCCCalculator.h"
 #include "util/XDROperators.h"
+#include "util/numeric128.h"
 
 #include <Tracy.hpp>
 #include <algorithm>
 #include <fmt/format.h>
 #include <functional>
+#include <limits>
 #include <medida/meter.h>
 #include <medida/metrics_registry.h>
 #include <medida/timer.h>
 #include <numeric>
+#include <optional>
+#include <random>
 
 namespace stellar
 {
@@ -44,6 +55,10 @@ TransactionQueue::TransactionQueue(Application& app, uint32 pendingDepth,
                          .header.ledgerVersion)
     , mBannedTransactionsCounter(
           app.getMetrics().NewCounter({"herder", "pending-txs", "banned"}))
+    , mArbTxSeenCounter(
+          app.getMetrics().NewCounter({"herder", "arb-tx", "seen"}))
+    , mArbTxDroppedCounter(
+          app.getMetrics().NewCounter({"herder", "arb-tx", "dropped"}))
     , mTransactionsDelay(
           app.getMetrics().NewTimer({"herder", "pending-txs", "delay"}))
     , mBroadcastTimer(app)
@@ -53,7 +68,7 @@ TransactionQueue::TransactionQueue(Application& app, uint32 pendingDepth,
     for (uint32 i = 0; i < pendingDepth; i++)
     {
         mSizeByAge.emplace_back(&app.getMetrics().NewCounter(
-            {"herder", "pending-txs", fmt::format("age{}", i)}));
+            {"herder", "pending-txs", fmt::format(FMT_STRING("age{:d}"), i)}));
     }
 
     auto const& filteredTypes =
@@ -86,13 +101,14 @@ canReplaceByFee(TransactionFrameBasePtr tx, TransactionFrameBasePtr oldTx,
     //
     // FEE_MULTIPLIER * v2 does not overflow uint128_t because fees are bounded
     // by INT64_MAX, while number of operations and FEE_MULTIPLIER are small.
-    auto v1 = bigMultiply(newFee, oldNumOps);
-    auto v2 = bigMultiply(oldFee, newNumOps);
-    auto minFeeN = v2 * TransactionQueue::FEE_MULTIPLIER;
+    uint128_t v1 = bigMultiply(newFee, oldNumOps);
+    uint128_t v2 = bigMultiply(oldFee, newNumOps);
+    uint128_t minFeeN = v2 * TransactionQueue::FEE_MULTIPLIER;
     bool res = v1 >= minFeeN;
     if (!res)
     {
-        if (!bigDivide(minFee, minFeeN, int64_t(oldNumOps), Rounding::ROUND_UP))
+        if (!bigDivide128(minFee, minFeeN, int64_t(oldNumOps),
+                          Rounding::ROUND_UP))
         {
             minFee = INT64_MAX;
         }
@@ -236,7 +252,12 @@ TransactionQueue::canAdd(TransactionFrameBasePtr tx,
     auto closeTime = mApp.getLedgerManager()
                          .getLastClosedLedgerHeader()
                          .header.scpValue.closeTime;
-    LedgerTxn ltx(mApp.getLedgerTxnRoot());
+
+    // Transaction queue performs read-only transactions to the database and
+    // there are no concurrent writers, so it is safe to not enclose all the SQL
+    // statements into one transaction here.
+    LedgerTxn ltx(mApp.getLedgerTxnRoot(), /* shouldUpdateLastModified */ true,
+                  TransactionMode::READ_ONLY_WITHOUT_SQL_TXN);
     if (!tx->checkValid(ltx, seqNum, 0,
                         getUpperBoundCloseTimeOffset(mApp, closeTime)))
     {
@@ -289,6 +310,115 @@ TransactionQueue::prepareDropTransaction(AccountState& as, TimestampedTx& tstx)
     releaseFeeMaybeEraseAccountState(tstx.mTx);
 }
 
+// Heuristic: an "arbitrage transaction" as identified by this function as any
+// tx that has 1 or more path payments in it that collectively form a payment
+// _loop_. That is: a tx that performs a sequence of order-book conversions of
+// at least some quantity of some asset _back_ to itself via some number of
+// intermediate steps. Typically these are only a single path-payment op, but
+// for thoroughness sake we're also going to cover cases where there's any
+// atomic _sequence_ of path payment ops that cause a conversion-loop.
+//
+// Such transactions are not going to be outright banned, note: just damped
+// so that they do not overload the network. Currently people are submitting
+// thousands of such txs per second in an attempt to win races for arbitrage,
+// and we just want to make those races a behave more like bidding wars than
+// pure resource-wasting races.
+//
+// This function doesn't catch all forms of arbitrage -- there are an unlimited
+// number of types, many of which involve holding assets, interacting with
+// real-world actors, etc. and are indistinguishable from "real" traffic -- but
+// it does cover the case of zero-risk (fee-only) instantaneous-arbitrage
+// attempts, which users are (at the time of writing) flooding the network with.
+std::vector<AssetPair>
+TransactionQueue::findAllAssetPairsInvolvedInPaymentLoops(
+    TransactionFrameBasePtr tx)
+{
+    std::map<Asset, size_t> assetToNum;
+    std::vector<Asset> numToAsset;
+    std::vector<BitSet> graph;
+
+    auto internAsset = [&](Asset const& a) -> size_t {
+        size_t n = numToAsset.size();
+        auto pair = assetToNum.emplace(a, n);
+        if (pair.second)
+        {
+            numToAsset.emplace_back(a);
+            graph.emplace_back(BitSet());
+        }
+        return pair.first->second;
+    };
+
+    auto internEdge = [&](Asset const& src, Asset const& dst) {
+        auto si = internAsset(src);
+        auto di = internAsset(dst);
+        graph.at(si).set(di);
+    };
+
+    auto internSegment = [&](Asset const& src, Asset const& dst,
+                             std::vector<Asset> const& path) {
+        Asset const* prev = &src;
+        for (auto const& a : path)
+        {
+            internEdge(*prev, a);
+            prev = &a;
+        }
+        internEdge(*prev, dst);
+    };
+
+    for (auto const& op : tx->getRawOperations())
+    {
+        switch (op.body.type())
+        {
+        case PATH_PAYMENT_STRICT_RECEIVE:
+        {
+            auto const& pop = op.body.pathPaymentStrictReceiveOp();
+            internSegment(pop.sendAsset, pop.destAsset, pop.path);
+        }
+        break;
+        case PATH_PAYMENT_STRICT_SEND:
+        {
+            auto const& pop = op.body.pathPaymentStrictSendOp();
+            internSegment(pop.sendAsset, pop.destAsset, pop.path);
+        }
+        break;
+        default:
+            continue;
+        }
+    }
+
+    // We build a TarjanSCCCalculator for the graph of all the edges we've seen,
+    // and return the set of edges that participate in nontrivial SCCs (which
+    // are loops). This is O(|v| + |e|) and just operations on a vector of pairs
+    // of integers.
+
+    TarjanSCCCalculator tsc;
+    tsc.calculateSCCs(graph.size(), [&graph](size_t i) -> BitSet const& {
+        // NB: this closure must be written with the explicit const&
+        // returning type signature, otherwise it infers wrong and
+        // winds up returning a dangling reference at its site of use.
+        return graph.at(i);
+    });
+
+    std::vector<AssetPair> ret;
+    for (BitSet const& scc : tsc.mSCCs)
+    {
+        if (scc.count() > 1)
+        {
+            for (size_t src = 0; scc.nextSet(src); ++src)
+            {
+                BitSet edgesFromSrcInSCC = graph.at(src);
+                edgesFromSrcInSCC.inplaceIntersection(scc);
+                for (size_t dst = 0; edgesFromSrcInSCC.nextSet(dst); ++dst)
+                {
+                    ret.emplace_back(
+                        AssetPair{numToAsset.at(src), numToAsset.at(dst)});
+                }
+            }
+        }
+    }
+    return ret;
+}
+
 TransactionQueue::AddResult
 TransactionQueue::tryAdd(TransactionFrameBasePtr tx)
 {
@@ -338,14 +468,7 @@ TransactionQueue::tryAdd(TransactionFrameBasePtr tx)
     }
     mTxQueueLimiter->addTransaction(tx);
 
-    if (mApp.getConfig().FLOOD_TX_PERIOD_MS != 0)
-    {
-        broadcast(false);
-    }
-    else
-    {
-        broadcastTx(thisAccountState, *oldTxIter);
-    }
+    broadcast(false);
 
     return res;
 }
@@ -574,6 +697,7 @@ TransactionQueue::shift()
     ZoneScoped;
     mBannedTransactions.pop_back();
     mBannedTransactions.emplace_front();
+    mArbitrageFloodDamping.clear();
 
     auto sizes = std::vector<int64_t>{};
     sizes.resize(mPendingDepth);
@@ -692,7 +816,9 @@ void
 TransactionQueue::maybeVersionUpgraded()
 {
     auto const& lcl = mApp.getLedgerManager().getLastClosedLedgerHeader();
-    if (mLedgerVersion < 13 && lcl.header.ledgerVersion >= 13)
+    if (protocolVersionIsBefore(mLedgerVersion, ProtocolVersion::V_13) &&
+        protocolVersionStartsFrom(lcl.header.ledgerVersion,
+                                  ProtocolVersion::V_13))
     {
         clearAll();
     }
@@ -712,28 +838,84 @@ TransactionQueue::getMaxOpsToFloodThisPeriod() const
     int64_t opsToFloodLedger = static_cast<int64_t>(opsToFloodLedgerDbl);
 
     int64_t opsToFlood;
-    if (mApp.getConfig().FLOOD_TX_PERIOD_MS != 0)
-    {
-        opsToFlood = mBroadcastOpCarryover +
-                     bigDivide(opsToFloodLedger, cfg.FLOOD_TX_PERIOD_MS,
-                               cfg.getExpectedLedgerCloseTime().count() * 1000,
-                               Rounding::ROUND_UP);
-    }
-    else
-    {
-        // else, flood the target at once
-        opsToFlood = opsToFloodLedger;
-    }
+    opsToFlood =
+        mBroadcastOpCarryover +
+        bigDivideOrThrow(opsToFloodLedger, cfg.FLOOD_TX_PERIOD_MS,
+                         cfg.getExpectedLedgerCloseTime().count() * 1000,
+                         Rounding::ROUND_UP);
     releaseAssertOrThrow(opsToFlood >= 0);
     return static_cast<size_t>(opsToFlood);
 }
 
-bool
+TransactionQueue::BroadcastStatus
 TransactionQueue::broadcastTx(AccountState& state, TimestampedTx& tx)
 {
     if (tx.mBroadcasted)
     {
-        return false;
+        return BroadcastStatus::BROADCAST_STATUS_ALREADY;
+    }
+
+    bool allowTx{true};
+    int32_t const signedAllowance =
+        mApp.getConfig().FLOOD_ARB_TX_BASE_ALLOWANCE;
+    if (signedAllowance >= 0)
+    {
+        uint32_t const allowance = static_cast<uint32_t>(signedAllowance);
+
+        // If arb tx damping is enabled, we only flood the first few arb txs
+        // touching an asset pair in any given ledger, exponentially reducing
+        // the odds of further arb tx broadcast on a per-asset-pair basis. This
+        // lets _some_ arbitrage occur (and retains price-based competition
+        // among arbitrageurs earlier in the queue) but avoids filling up
+        // ledgers with excessive (mostly failed) arb attempts.
+        auto arbPairs = findAllAssetPairsInvolvedInPaymentLoops(tx.mTx);
+        if (!arbPairs.empty())
+        {
+            mArbTxSeenCounter.inc();
+            uint32_t maxBroadcast{0};
+            std::vector<
+                UnorderedMap<AssetPair, uint32_t, AssetPairHash>::iterator>
+                hashMapIters;
+
+            // NB: it's essential to reserve() on the hashmap so that we
+            // can store iterators to positions in it _as we emplace them_
+            // in the loop that follows, without rehashing. Do not remove.
+            mArbitrageFloodDamping.reserve(mArbitrageFloodDamping.size() +
+                                           arbPairs.size());
+
+            for (auto const& key : arbPairs)
+            {
+                auto pair = mArbitrageFloodDamping.emplace(key, 0);
+                hashMapIters.emplace_back(pair.first);
+                maxBroadcast = std::max(maxBroadcast, pair.first->second);
+            }
+
+            // Admit while no pair on the path has hit the allowance.
+            allowTx = maxBroadcast < allowance;
+
+            // If any pair is over the allowance, dampen transmission randomly
+            // based on it.
+            if (!allowTx)
+            {
+                std::geometric_distribution<uint32_t> dist(
+                    mApp.getConfig().FLOOD_ARB_TX_DAMPING_FACTOR);
+                uint32_t k = maxBroadcast - allowance;
+                allowTx = dist(gRandomEngine) >= k;
+            }
+
+            // If we've decided to admit a tx, bump all pairs on the path.
+            if (allowTx)
+            {
+                for (auto i : hashMapIters)
+                {
+                    i->second++;
+                }
+            }
+            else
+            {
+                mArbTxDroppedCounter.inc();
+            }
+        }
     }
 #ifdef BUILD_TESTS
     if (mTxBroadcastedEvent)
@@ -741,10 +923,24 @@ TransactionQueue::broadcastTx(AccountState& state, TimestampedTx& tx)
         mTxBroadcastedEvent(tx.mTx);
     }
 #endif
+
+    // Mark the tx as effectively "broadcast" and update the per-account queue
+    // to count it as consumption from that balance, for proper overall queue
+    // accounting (whether or not we will actually broadcast it).
     tx.mBroadcasted = true;
     state.mBroadcastQueueOps -= tx.mTx->getNumOperations();
-    return mApp.getOverlayManager().broadcastMessage(
-        tx.mTx->toStellarMessage());
+
+    if (!allowTx)
+    {
+        // If we decide not to broadcast for real (due to damping) we return
+        // false to our caller so that they will not count this tx against the
+        // per-timeslice counters -- we want to allow the caller to try useful
+        // work from other sources.
+        return BroadcastStatus::BROADCAST_STATUS_SKIPPED;
+    }
+    return mApp.getOverlayManager().broadcastMessage(tx.mTx->toStellarMessage())
+               ? BroadcastStatus::BROADCAST_STATUS_SUCCESS
+               : BroadcastStatus::BROADCAST_STATUS_ALREADY;
 }
 
 struct TxQueueTracker
@@ -820,6 +1016,7 @@ TransactionQueue::broadcastSome()
         }
     }
 
+    std::vector<TransactionFrameBasePtr> banningTxs;
     while (opsToFlood != 0 && !iters.empty())
     {
         auto curTracker = iters.top();
@@ -835,22 +1032,30 @@ TransactionQueue::broadcastSome()
             // accumulate more flooding credit
             break;
         }
+        auto bStatus = broadcastTx(*curTracker.mAccountState, *cur);
+        if (bStatus == BroadcastStatus::BROADCAST_STATUS_SUCCESS)
+        {
+            auto ops = tx->getNumOperations();
+            opsToFlood -= ops;
+            totalOpsToFlood -= ops;
+        }
+        // when skipping, we ban the transaction and skip the remainder of the
+        // queue
+        if (bStatus == BroadcastStatus::BROADCAST_STATUS_SKIPPED)
+        {
+            banningTxs.emplace_back(tx);
+        }
         else
         {
-            if (broadcastTx(*curTracker.mAccountState, *cur))
-            {
-                auto ops = tx->getNumOperations();
-                opsToFlood -= ops;
-                totalOpsToFlood -= ops;
-            }
             cur++;
-        }
-        // if we're not done with this account, add the tracker back
-        if (curTracker.skipToFirstNotBroadcasted())
-        {
-            iters.push(curTracker);
+            // if we're not done with this account, add the tracker back
+            if (curTracker.skipToFirstNotBroadcasted())
+            {
+                iters.push(curTracker);
+            }
         }
     }
+    ban(banningTxs);
     // carry over remainder, up to MAX_OPS_PER_TX ops
     // reason is that if we add 1 next round, we can flood a "worst case fee
     // bump" tx
@@ -868,7 +1073,7 @@ TransactionQueue::broadcast(bool fromCallback)
     mWaiting = false;
 
     bool needsMore = false;
-    if (mApp.getConfig().FLOOD_TX_PERIOD_MS != 0 && !fromCallback)
+    if (!fromCallback)
     {
         // don't do anything right away, wait for the timer
         needsMore = true;
@@ -878,7 +1083,7 @@ TransactionQueue::broadcast(bool fromCallback)
         needsMore = broadcastSome();
     }
 
-    if (mApp.getConfig().FLOOD_TX_PERIOD_MS != 0 && needsMore)
+    if (needsMore)
     {
         mWaiting = true;
         mBroadcastTimer.expires_from_now(

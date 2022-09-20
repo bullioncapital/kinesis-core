@@ -12,6 +12,7 @@
 #include "main/Application.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
+#include "util/ProtocolVersion.h"
 #include "util/XDRStream.h"
 #include "util/types.h"
 #include <Tracy.hpp>
@@ -164,7 +165,8 @@ BucketLevel::prepare(Application& app, uint32_t currLedger,
                     : mCurr;
 
     auto shadowsBasedOnProtocol =
-        Bucket::getBucketVersion(snap) >= Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED
+        protocolVersionStartsFrom(Bucket::getBucketVersion(snap),
+                                  Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED)
             ? std::vector<std::shared_ptr<Bucket>>()
             : shadows;
     mNextCurr = FutureBucket(app, curr, snap, shadowsBasedOnProtocol,
@@ -636,12 +638,13 @@ BucketList::restartMerges(Application& app, uint32_t maxProtocolVersion,
             }
 
             auto version = Bucket::getBucketVersion(snap);
-            if (version < Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED)
+            if (protocolVersionIsBefore(version,
+                                        Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED))
             {
-                auto msg =
-                    fmt::format("Invalid state: bucketlist level {} has clear "
-                                "future bucket but version {} snap",
-                                i, version);
+                auto msg = fmt::format(
+                    FMT_STRING("Invalid state: bucketlist level {:d} has clear "
+                               "future bucket but version {:d} snap"),
+                    i, version);
                 throw std::runtime_error(msg);
             }
 

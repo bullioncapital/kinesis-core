@@ -19,7 +19,7 @@ CheckSingleLedgerHeaderWork::CheckSingleLedgerHeaderWork(
     Application& app, std::shared_ptr<HistoryArchive> archive,
     LedgerHeaderHistoryEntry const& expected)
     : Work(app,
-           fmt::format("check-single-ledger-header-{}",
+           fmt::format(FMT_STRING("check-single-ledger-header-{:d}"),
                        expected.header.ledgerSeq),
            BasicWork::RETRY_NEVER)
     , mArchive(archive)
@@ -29,8 +29,6 @@ CheckSingleLedgerHeaderWork::CheckSingleLedgerHeaderWork(
     , mCheckFailed(
           app.getMetrics().NewMeter({"history", "check", "failure"}, "event"))
 {
-    // LedgerSeq 0 is never valid.
-    releaseAssertOrThrow(expected.header.ledgerSeq != 0);
 }
 
 CheckSingleLedgerHeaderWork::~CheckSingleLedgerHeaderWork()
@@ -66,6 +64,11 @@ CheckSingleLedgerHeaderWork::doReset()
 BasicWork::State
 CheckSingleLedgerHeaderWork::doWork()
 {
+    if (mExpected.header.ledgerSeq == 0)
+    {
+        return State::WORK_SUCCESS;
+    }
+
     if (!mGetLedgerFileWork)
     {
         CLOG_INFO(History, "Downloading ledger checkpoint {} from archive {}",

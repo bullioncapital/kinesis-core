@@ -19,6 +19,7 @@
 #include "util/Fs.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
+#include "util/ProtocolVersion.h"
 #include <Tracy.hpp>
 #include <fmt/format.h>
 
@@ -137,7 +138,8 @@ HistoryArchiveState::load(std::string const& inFile)
     std::ifstream in(inFile);
     if (!in)
     {
-        throw std::runtime_error(fmt::format("Error opening file {}", inFile));
+        throw std::runtime_error(
+            fmt::format(FMT_STRING("Error opening file {}"), inFile));
     }
     in.exceptions(std::ios::badbit);
     cereal::JSONInputArchive ar(in);
@@ -356,7 +358,8 @@ HistoryArchiveState::containsValidBuckets(Application& app) const
             // No real buckets seen yet, move on
             continue;
         }
-        else if (prevSnapVersion >= Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED)
+        else if (protocolVersionStartsFrom(
+                     prevSnapVersion, Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED))
         {
             if (!level.next.isClear())
             {
@@ -389,8 +392,9 @@ HistoryArchiveState::prepareForPublish(Application& app)
 
         auto snap =
             app.getBucketManager().getBucketByHash(hexToBin256(prev.snap));
-        if (!level.next.isClear() && Bucket::getBucketVersion(snap) >=
-                                         Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED)
+        if (!level.next.isClear() &&
+            protocolVersionStartsFrom(Bucket::getBucketVersion(snap),
+                                      Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED))
         {
             level.next.clear();
         }
@@ -407,7 +411,7 @@ HistoryArchiveState::prepareForPublish(Application& app)
             // that it'd be somewhat convoluted _to_ materialize the true value
             // here, we're going to live with the approximate value for now.
             uint32_t maxProtocolVersion =
-                Config::CURRENT_LEDGER_PROTOCOL_VERSION;
+                app.getConfig().LEDGER_PROTOCOL_VERSION;
             level.next.makeLive(app, maxProtocolVersion, i);
         }
     }

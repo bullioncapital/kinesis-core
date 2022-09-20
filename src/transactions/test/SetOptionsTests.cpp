@@ -6,6 +6,7 @@
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnEntry.h"
 #include "lib/catch.hpp"
+#include "lib/util/stdrandom.h"
 #include "main/Application.h"
 #include "main/Config.h"
 #include "test/TestAccount.h"
@@ -322,7 +323,16 @@ TEST_CASE("set options", "[tx][setoptions]")
             auto signer2 = makeSigner(getAccount("S2"), 1);
 
             tooManySponsoring(*app, a1, a1.op(setOptions(setSigner(signer1))),
-                              a1.op(setOptions(setSigner(signer2))));
+                              a1.op(setOptions(setSigner(signer2))), 1);
+        }
+
+        SECTION("too many subentries")
+        {
+            auto signer1 = makeSigner(getAccount("S1"), 1);
+            auto signer2 = makeSigner(getAccount("S2"), 1);
+
+            tooManySubentries(*app, a1, setOptions(setSigner(signer1)),
+                              setOptions(setSigner(signer2)));
         }
 
         SECTION("delete signer that does not exist with sponsorships")
@@ -460,7 +470,7 @@ TEST_CASE("set options", "[tx][setoptions]")
                 std::vector<SecretKey> keys;
                 ops.emplace_back(root.op(setOptions(setSigner(signer))));
 
-                std::uniform_int_distribution<size_t> dist(0, 1);
+                stellar::uniform_int_distribution<size_t> dist(0, 1);
                 if (dist(gRandomEngine))
                 {
                     auto sk = SecretKey::pseudoRandomForTesting();
@@ -502,7 +512,7 @@ TEST_CASE("set options", "[tx][setoptions]")
             };
 
             for_versions_from(14, *app, [&]() {
-                std::uniform_int_distribution<size_t> dist(0, 2);
+                stellar::uniform_int_distribution<size_t> dist(0, 2);
 
                 // 67% change to add, 33% chance to remove
                 while (signers.size() < MAX_SIGNERS)

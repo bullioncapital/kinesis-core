@@ -47,6 +47,8 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
 
     auto root = TestAccount::createRoot(*app);
 
+    auto const native = makeNativeAsset();
+
     for_versions_from(14, *app, [&]() {
         SECTION("entry is not sponsored")
         {
@@ -111,7 +113,6 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
 
                 SECTION("claimable balances")
                 {
-                    auto native = makeNativeAsset();
                     auto a1 = root.create("a1", minBal(2));
 
                     auto balanceID =
@@ -252,7 +253,6 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
 
                 SECTION("claimable balances")
                 {
-                    auto native = makeNativeAsset();
                     auto a1 = root.create("a1", minBal(2));
 
                     auto balanceID =
@@ -382,7 +382,6 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
 
                 SECTION("claimable balance")
                 {
-                    auto native = makeNativeAsset();
                     auto a1 = root.create("a1", minBal(1));
 
                     auto tx1 = transactionFrameFromOps(
@@ -538,7 +537,6 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
 
                 SECTION("claimable balances")
                 {
-                    auto native = makeNativeAsset();
                     auto a1 = root.create("a1", minBal(0) + 1);
                     auto a2 = root.create("a2", minBal(2));
 
@@ -621,7 +619,6 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
                 SECTION("offer")
                 {
                     auto cur1 = makeAsset(root, "CUR1");
-                    auto native = makeNativeAsset();
                     auto a1 = root.create("a1", minBal(3));
                     auto a2 = root.create("a2", minBal(2));
 
@@ -803,7 +800,6 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
                 SECTION("offer")
                 {
                     auto cur1 = makeAsset(root, "CUR1");
-                    auto native = makeNativeAsset();
                     auto a1 = root.create("a1", minBal(3));
 
                     a1.changeTrust(cur1, INT64_MAX);
@@ -867,7 +863,6 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
 
                 SECTION("use wrong account in offer key")
                 {
-                    auto native = makeNativeAsset();
                     auto a2 = root.create("a2", minBal(3));
 
                     a2.changeTrust(cur1, INT64_MAX);
@@ -1173,7 +1168,6 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
 
     SECTION("too many sponsoring")
     {
-        auto native = makeNativeAsset();
         auto a1 = root.create("a1", minBal(3));
 
         SECTION("account")
@@ -1181,7 +1175,7 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
             auto a2 = root.create("a2", minBal(3));
             tooManySponsoring(*app, a2, a1,
                               a2.op(revokeSponsorship(accountKey(a2))),
-                              a1.op(revokeSponsorship(accountKey(a1))));
+                              a1.op(revokeSponsorship(accountKey(a1))), 2);
         }
 
         SECTION("signer")
@@ -1193,7 +1187,7 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
 
             tooManySponsoring(*app, a1,
                               a1.op(revokeSponsorship(a1, signer1.key)),
-                              a1.op(revokeSponsorship(a1, signer2.key)));
+                              a1.op(revokeSponsorship(a1, signer2.key)), 1);
         }
 
         SECTION("trustline")
@@ -1203,9 +1197,9 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
             a1.changeTrust(cur1, 1000);
             a1.changeTrust(cur2, 1000);
 
-            tooManySponsoring(*app, a1,
-                              a1.op(revokeSponsorship(trustlineKey(a1, cur2))),
-                              a1.op(revokeSponsorship(trustlineKey(a1, cur1))));
+            tooManySponsoring(
+                *app, a1, a1.op(revokeSponsorship(trustlineKey(a1, cur2))),
+                a1.op(revokeSponsorship(trustlineKey(a1, cur1))), 1);
         }
         SECTION("claimable balance")
         {
@@ -1214,7 +1208,38 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
 
             tooManySponsoring(
                 *app, a1, a1.op(revokeSponsorship(claimableBalanceKey(id1))),
-                a1.op(revokeSponsorship(claimableBalanceKey(id2))));
+                a1.op(revokeSponsorship(claimableBalanceKey(id2))), 1);
+        }
+        SECTION("pool share trustline")
+        {
+            auto cur1 = makeAsset(root, "CUR1");
+            auto cur2 = makeAsset(root, "CUR2");
+
+            auto shareNative1 = makeChangeTrustAssetPoolShare(
+                native, cur1, LIQUIDITY_POOL_FEE_V18);
+            auto share12 = makeChangeTrustAssetPoolShare(
+                cur1, cur2, LIQUIDITY_POOL_FEE_V18);
+
+            a1.changeTrust(cur1, 1);
+            a1.changeTrust(cur2, 1);
+
+            // a1 needs a higher balance for the pool share trustline reserves
+            root.pay(a1, minBal(2));
+
+            for_versions_from(18, *app, [&]() {
+                a1.changeTrust(share12, 1);
+                a1.changeTrust(shareNative1, 1);
+
+                auto pool12 = xdrSha256(share12.liquidityPool());
+                auto poolNative1 = xdrSha256(shareNative1.liquidityPool());
+
+                auto shareNativeKey = poolShareTrustLineKey(a1, poolNative1);
+                auto share12Key = poolShareTrustLineKey(a1, pool12);
+
+                tooManySponsoring(*app, a1,
+                                  a1.op(revokeSponsorship(shareNativeKey)),
+                                  a1.op(revokeSponsorship(share12Key)), 2);
+            });
         }
     }
 
@@ -1256,7 +1281,6 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
                 {});
 
             LedgerTxn ltx(app->getLedgerTxnRoot());
-            uint32_t ledgerVersion = ltx.loadHeader().current().ledgerVersion;
 
             REQUIRE(!tx->checkValid(ltx, 0, 0, 0));
             REQUIRE(getRevokeSponsorshipResultCode(tx, 0) ==
@@ -1303,6 +1327,13 @@ TEST_CASE("update sponsorship", "[tx][sponsorship]")
         {
             for_versions_from(15, *app,
                               [&]() { revoke(liquidityPoolKey(PoolID{})); });
+        }
+
+        SECTION("pool share trustline")
+        {
+            for_versions(15, 17, *app, [&]() {
+                revoke(poolShareTrustLineKey(a1, PoolID{}));
+            });
         }
     }
 }

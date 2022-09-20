@@ -8,6 +8,7 @@
 #include "ledger/LedgerTxnHeader.h"
 #include "ledger/TrustLineWrapper.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
 #include "util/XDROperators.h"
 #include <Tracy.hpp>
 
@@ -22,9 +23,10 @@ PathPaymentStrictSendOpFrame::PathPaymentStrictSendOpFrame(
 }
 
 bool
-PathPaymentStrictSendOpFrame::isVersionSupported(uint32_t protocolVersion) const
+PathPaymentStrictSendOpFrame::isOpSupported(LedgerHeader const& header) const
 {
-    return protocolVersion >= 12;
+    return protocolVersionStartsFrom(header.ledgerVersion,
+                                     ProtocolVersion::V_12);
 }
 
 bool
@@ -84,8 +86,8 @@ PathPaymentStrictSendOpFrame::doApply(AbstractLedgerTxn& ltx)
         // offersCrossed will never be bigger than INT64_MAX because
         // - the machine would have run out of memory
         // - the limit, which cannot exceed INT64_MAX, should be enforced
-        // so this subtraction is safe because MAX_OFFERS_TO_CROSS >= 0
-        int64_t maxOffersToCross = MAX_OFFERS_TO_CROSS - offersCrossed;
+        // so this subtraction is safe because getMaxOffersToCross() >= 0
+        int64_t maxOffersToCross = getMaxOffersToCross() - offersCrossed;
 
         int64_t amountSend = 0;
         int64_t amountRecv = 0;

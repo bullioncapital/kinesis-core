@@ -13,24 +13,18 @@
 #include "util/Logging.h"
 #include <Tracy.hpp>
 #include <fmt/format.h>
-#include <medida/meter.h>
-#include <medida/metrics_registry.h>
 
 namespace stellar
 {
 GetHistoryArchiveStateWork::GetHistoryArchiveStateWork(
     Application& app, uint32_t seq, std::shared_ptr<HistoryArchive> archive,
-    std::string mode, size_t maxRetries)
+    bool report, size_t maxRetries)
     : Work(app, "get-archive-state", maxRetries)
     , mSeq(seq)
     , mArchive(archive)
-    , mRetries(maxRetries)
     , mLocalFilename(
           HistoryArchiveState::localName(app, binToHex(randomBytes(8))))
-    , mGetHistoryArchiveStateSuccess(app.getMetrics().NewMeter(
-          {"history", "download-history-archive-state" + std::move(mode),
-           "success"},
-          "event"))
+    , mReportMetric(report)
 {
 }
 
@@ -90,8 +84,8 @@ GetHistoryArchiveStateWork::doWork()
     {
         auto name = getRemoteName();
         CLOG_INFO(History, "Downloading history archive state: {}", name);
-        mGetRemoteFile = addWork<GetRemoteFileWork>(name, mLocalFilename,
-                                                    mArchive, mRetries);
+        mGetRemoteFile = addWork<GetRemoteFileWork>(
+            name, mLocalFilename, mArchive, BasicWork::RETRY_NEVER);
         return State::WORK_RUNNING;
     }
 }
@@ -107,7 +101,10 @@ GetHistoryArchiveStateWork::doReset()
 void
 GetHistoryArchiveStateWork::onSuccess()
 {
-    mGetHistoryArchiveStateSuccess.Mark();
+    if (mReportMetric)
+    {
+        mApp.getCatchupManager().historyArchiveStatesDownloaded();
+    }
     Work::onSuccess();
 }
 
@@ -122,7 +119,7 @@ std::string
 GetHistoryArchiveStateWork::getStatus() const
 {
     std::string ledgerString = mSeq == 0 ? "current" : std::to_string(mSeq);
-    return fmt::format("Downloading state file {} for ledger {}",
+    return fmt::format(FMT_STRING("Downloading state file {} for ledger {}"),
                        getRemoteName(), ledgerString);
 }
 }

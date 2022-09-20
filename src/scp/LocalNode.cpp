@@ -94,7 +94,11 @@ LocalNode::computeWeight(uint64 m, uint64 total, uint64 threshold)
 {
     uint64 res;
     releaseAssert(threshold <= total);
-    bigDivide(res, m, threshold, total, ROUND_UP);
+    // Since threshold <= total, calculating res=m*threshold/total will always
+    // produce res <= m, and we do not need to handle the possibility of this
+    // call returning false (indicating overflow).
+    bool noOverflow = bigDivideUnsigned(res, m, threshold, total, ROUND_UP);
+    releaseAssert(noOverflow);
     return res;
 }
 

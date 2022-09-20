@@ -7,6 +7,7 @@
 #include "crypto/SecretKey.h"
 #include "crypto/ShortHash.h"
 #include "database/Database.h"
+#include "lib/util/stdrandom.h"
 #include "main/Application.h"
 #include "main/Config.h"
 #include "main/ErrorMessages.h"
@@ -673,6 +674,7 @@ OverlayManagerImpl::updateSizeCounters()
     mOverlayMetrics.mPendingPeersSize.set_count(getPendingPeersCount());
     mOverlayMetrics.mAuthenticatedPeersSize.set_count(
         getAuthenticatedPeersCount());
+    mOverlayMetrics.mFlowControlPercent.set_count(getFlowControlPercentage());
 }
 
 void
@@ -837,6 +839,24 @@ OverlayManagerImpl::getPendingPeersCount() const
                             mOutboundPeers.mPending.size());
 }
 
+int64_t
+OverlayManagerImpl::getFlowControlPercentage() const
+{
+    auto allPeers = getAuthenticatedPeers();
+    if (allPeers.empty())
+    {
+        return 0;
+    }
+
+    auto fcCount =
+        std::count_if(allPeers.begin(), allPeers.end(), [&](auto const& item) {
+            return item.second->isFlowControlled();
+        });
+
+    auto pct = static_cast<double>(fcCount) / allPeers.size() * 100;
+    return std::llround(pct);
+}
+
 int
 OverlayManagerImpl::getAuthenticatedPeersCount() const
 {
@@ -868,6 +888,12 @@ OverlayManagerImpl::isPreferred(Peer* peer) const
 
     CLOG_TRACE(Overlay, "Peer {} is not preferred", pstr);
     return false;
+}
+
+bool
+OverlayManagerImpl::isFloodMessage(StellarMessage const& msg)
+{
+    return msg.type() == SCP_MESSAGE || msg.type() == TRANSACTION;
 }
 
 std::vector<Peer::pointer>
@@ -917,7 +943,7 @@ OverlayManagerImpl::extractPeersFromMap(
 void
 OverlayManagerImpl::shufflePeerList(std::vector<Peer::pointer>& peerList)
 {
-    std::shuffle(peerList.begin(), peerList.end(), gRandomEngine);
+    stellar::shuffle(peerList.begin(), peerList.end(), gRandomEngine);
 }
 
 bool
@@ -1021,8 +1047,7 @@ OverlayManagerImpl::recordMessageMetric(StellarMessage const& stellarMsg,
     };
 
     bool flood = false;
-    if (stellarMsg.type() == TRANSACTION || stellarMsg.type() == SCP_MESSAGE ||
-        stellarMsg.type() == SURVEY_REQUEST ||
+    if (isFloodMessage(stellarMsg) || stellarMsg.type() == SURVEY_REQUEST ||
         stellarMsg.type() == SURVEY_RESPONSE)
     {
         flood = true;

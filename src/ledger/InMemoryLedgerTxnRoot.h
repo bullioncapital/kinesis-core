@@ -37,9 +37,10 @@ class InMemoryLedgerTxnRoot : public AbstractLedgerTxnParent
         bool bestOfferDebuggingEnabled
 #endif
     );
-    void addChild(AbstractLedgerTxn& child) override;
-    void commitChild(EntryIterator iter, LedgerTxnConsistency cons) override;
-    void rollbackChild() override;
+    void addChild(AbstractLedgerTxn& child, TransactionMode mode) override;
+    void commitChild(EntryIterator iter,
+                     LedgerTxnConsistency cons) noexcept override;
+    void rollbackChild() noexcept override;
 
     UnorderedMap<LedgerKey, LedgerEntry> getAllOffers() override;
     std::shared_ptr<LedgerEntry const>
@@ -77,6 +78,8 @@ class InMemoryLedgerTxnRoot : public AbstractLedgerTxnParent
     void dropLiquidityPools() override;
     double getPrefetchHitRate() const override;
     uint32_t prefetch(UnorderedSet<LedgerKey> const& keys) override;
+    void prepareNewObjects(size_t s) override;
+
 #ifdef BUILD_TESTS
     void resetForFuzzer() override;
 #endif // BUILD_TESTS

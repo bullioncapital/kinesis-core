@@ -70,8 +70,18 @@ class SCP
 
     Json::Value getJsonInfo(size_t limit, bool fullKeys = false);
 
+    // Enum used to categorize nodes for getJsonQuorumInfo.
+    enum class QuorumInfoNodeState
+    {
+        NO_INFO = 0,
+        AGREE = 1,
+        MISSING = 2,
+        DELAYED = 3,
+        DISAGREE = 4
+    };
+
     // summary: only return object counts
-    // index = 0 for returning information for all slots
+    // index = 0 for returning information for the latest known slot.
     Json::Value getJsonQuorumInfo(NodeID const& id, bool summary,
                                   bool fullKeys = false, uint64 index = 0);
 
@@ -122,6 +132,9 @@ class SCP
     // or nullptr if not found
     SCPEnvelope const* getLatestMessage(NodeID const& id);
 
+    bool isNewerNominationOrBallotSt(SCPStatement const& oldSt,
+                                     SCPStatement const& newSt);
+
     // returns messages that contributed to externalizing the slot
     // (or empty if the slot didn't externalize)
     std::vector<SCPEnvelope> getExternalizingState(uint64 slotIndex);
@@ -133,6 +146,13 @@ class SCP
     std::string envToStr(SCPEnvelope const& envelope,
                          bool fullKeys = false) const;
     std::string envToStr(SCPStatement const& st, bool fullKeys = false) const;
+
+  private:
+    // Calculate the state of the node for the given slot index.
+    QuorumInfoNodeState getState(NodeID const& node, uint64 slotIndex);
+
+    // The number of slots to check to calculate the state for getState.
+    int32 const NUM_SLOTS_TO_CHECK_FOR_REPORTING = 2;
 
   protected:
     std::shared_ptr<LocalNode> mLocalNode;

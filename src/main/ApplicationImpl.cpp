@@ -26,12 +26,14 @@
 #include "invariant/AccountSubEntriesCountIsValid.h"
 #include "invariant/BucketListIsConsistentWithDatabase.h"
 #include "invariant/ConservationOfLumens.h"
+#include "invariant/ConstantProductInvariant.h"
 #include "invariant/InvariantManager.h"
 #include "invariant/LedgerEntryIsValid.h"
 #include "invariant/LiabilitiesMatchOffers.h"
 #include "invariant/SponsorshipCountIsValid.h"
 #include "ledger/InMemoryLedgerTxn.h"
 #include "ledger/InMemoryLedgerTxnRoot.h"
+#include "ledger/LedgerHeaderUtils.h"
 #include "ledger/LedgerManager.h"
 #include "ledger/LedgerTxn.h"
 #include "main/ApplicationUtils.h"
@@ -85,8 +87,8 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
     , mStopping(false)
     , mStoppingTimer(*this)
     , mSelfCheckTimer(*this)
-    , mMetrics(std::make_unique<medida::MetricsRegistry>())
-    , mAppStateCurrent(mMetrics->NewCounter({"app", "state", "current"}))
+    , mMetrics(
+          std::make_unique<medida::MetricsRegistry>(cfg.HISTOGRAM_WINDOW_SIZE))
     , mPostOnMainThreadDelay(
           mMetrics->NewTimer({"app", "post-on-main-thread", "delay"}))
     , mPostOnBackgroundThreadDelay(
@@ -198,23 +200,24 @@ maybeRebuildLedger(Application& app, bool applyBuckets)
         }
 
         tx.commit();
-    }
 
-    // No transaction is needed. ApplyBucketsWork breaks the apply into many
-    // small chunks, each of which has its own transaction. If it fails at some
-    // point in the middle, then rebuildledger will not be cleared so this will
-    // run again on next start up.
-    if (applyBuckets)
-    {
-        LOG_INFO(DEFAULT_LOG, "Rebuilding ledger tables by applying buckets");
-        auto filter = [&toRebuild](LedgerEntryType t) {
-            return toRebuild.find(t) != toRebuild.end();
-        };
-        if (!applyBucketsForLCL(app, filter))
+        // No transaction is needed. ApplyBucketsWork breaks the apply into many
+        // small chunks, each of which has its own transaction. If it fails at
+        // some point in the middle, then rebuildledger will not be cleared so
+        // this will run again on next start up.
+        if (applyBuckets)
         {
-            throw std::runtime_error("Could not rebuild ledger tables");
+            LOG_INFO(DEFAULT_LOG,
+                     "Rebuilding ledger tables by applying buckets");
+            auto filter = [&toRebuild](LedgerEntryType t) {
+                return toRebuild.find(t) != toRebuild.end();
+            };
+            if (!applyBucketsForLCL(app, filter))
+            {
+                throw std::runtime_error("Could not rebuild ledger tables");
+            }
+            LOG_INFO(DEFAULT_LOG, "Successfully rebuilt ledger tables");
         }
-        LOG_INFO(DEFAULT_LOG, "Successfully rebuilt ledger tables");
     }
 
     for (auto let : toRebuild)
@@ -273,14 +276,16 @@ ApplicationImpl::initialize(bool createNewDB, bool forceRebuild)
             mConfig.BEST_OFFER_DEBUGGING_ENABLED
 #endif
         );
+
+        BucketListIsConsistentWithDatabase::registerInvariant(*this);
     }
 
-    BucketListIsConsistentWithDatabase::registerInvariant(*this);
     AccountSubEntriesCountIsValid::registerInvariant(*this);
     ConservationOfLumens::registerInvariant(*this);
     LedgerEntryIsValid::registerInvariant(*this);
     LiabilitiesMatchOffers::registerInvariant(*this);
     SponsorshipCountIsValid::registerInvariant(*this);
+    ConstantProductInvariant::registerInvariant(*this);
     enableInvariantsFromConfig();
 
     if (initNewDB)
@@ -435,6 +440,13 @@ ApplicationImpl::getJsonInfo()
     info["ledger"]["maxFee"] = (Json::UInt64)lcl.header.maxFee;
     info["ledger"]["baseReserve"] = lcl.header.baseReserve;
     info["ledger"]["maxTxSetSize"] = lcl.header.maxTxSetSize;
+
+    auto currentHeaderFlags = LedgerHeaderUtils::getFlags(lcl.header);
+    if (currentHeaderFlags != 0)
+    {
+        info["ledger"]["flags"] = currentHeaderFlags;
+    }
+
     info["ledger"]["age"] = (int)lm.secondsSinceLastLedgerClose();
     info["peers"]["pending_count"] = getOverlayManager().getPendingPeersCount();
     info["peers"]["authenticated_count"] =
@@ -488,7 +500,8 @@ void
 ApplicationImpl::reportInfo()
 {
     mLedgerManager->loadLastKnownLedger(nullptr);
-    LOG_INFO(DEFAULT_LOG, "info -> {}", getJsonInfo().toStyledString());
+    LOG_INFO(DEFAULT_LOG, "Reporting application info");
+    std::cout << getJsonInfo().toStyledString() << std::endl;
 }
 
 std::shared_ptr<BasicWork>
@@ -675,14 +688,7 @@ ApplicationImpl::start()
     }
 
     bool done = false;
-    mLedgerManager->loadLastKnownLedger([this,
-                                         &done](asio::error_code const& ec) {
-        if (ec)
-        {
-            throw std::runtime_error(
-                "Unable to restore last-known ledger state");
-        }
-
+    mLedgerManager->loadLastKnownLedger([this, &done]() {
         // restores Herder's state before starting overlay
         mHerder->start();
         // set known cursors before starting maintenance job
@@ -760,13 +766,7 @@ ApplicationImpl::gracefulStop()
 void
 ApplicationImpl::shutdownMainIOContext()
 {
-    if (!mVirtualClock.getIOContext().stopped())
-    {
-        // Drain all events; things are shutting down.
-        while (mVirtualClock.cancelAllEvents())
-            ;
-        mVirtualClock.getIOContext().stop();
-    }
+    mVirtualClock.shutdown();
 }
 
 void
@@ -775,11 +775,6 @@ ApplicationImpl::shutdownWorkScheduler()
     if (mWorkScheduler)
     {
         mWorkScheduler->shutdown();
-
-        while (mWorkScheduler->getState() != BasicWork::State::WORK_ABORTED)
-        {
-            mVirtualClock.crank();
-        }
     }
 }
 
@@ -843,13 +838,13 @@ ApplicationImpl::manualClose(std::optional<uint32_t> const& manualLedgerSeq,
                 throw std::runtime_error(fmt::format(
                     FMT_STRING(
                         "Standalone manual close failed to produce expected "
-                        "sequence number increment (expected {}; got {})"),
+                        "sequence number increment (expected {:d}; got {:d})"),
                     targetLedgerSeq, newLedgerSeq));
             }
 
             return fmt::format(
                 FMT_STRING("Manually closed ledger with sequence "
-                           "number {} and closeTime {}"),
+                           "number {:d} and closeTime {:d}"),
                 targetLedgerSeq,
                 getLedgerManager()
                     .getLastClosedLedgerHeader()
@@ -858,7 +853,7 @@ ApplicationImpl::manualClose(std::optional<uint32_t> const& manualLedgerSeq,
 
         return fmt::format(
             FMT_STRING("Manually triggered a ledger close with sequence "
-                       "number {}"),
+                       "number {:d}"),
             targetLedgerSeq);
     }
     else if (!mConfig.FORCE_SCP)
@@ -889,7 +884,7 @@ ApplicationImpl::targetManualCloseLedgerSeqNum(
     {
         throw std::invalid_argument(
             fmt::format(FMT_STRING("Manually closed ledger sequence number "
-                                   "({}) already at max ({})"),
+                                   "({:d}) already at max ({:d})"),
                         startLedgerSeq, maxLedgerSeq));
     }
 
@@ -900,17 +895,17 @@ ApplicationImpl::targetManualCloseLedgerSeqNum(
         if (*explicitlyProvidedSeqNum > maxLedgerSeq)
         {
             // The "scphistory" stores ledger sequence numbers as INTs.
-            throw std::invalid_argument(fmt::format(
-                FMT_STRING(
-                    "Manual close ledger sequence number {} beyond max ({})"),
-                *explicitlyProvidedSeqNum, maxLedgerSeq));
+            throw std::invalid_argument(
+                fmt::format(FMT_STRING("Manual close ledger sequence number "
+                                       "{:d} beyond max ({:d})"),
+                            *explicitlyProvidedSeqNum, maxLedgerSeq));
         }
 
         if (*explicitlyProvidedSeqNum <= startLedgerSeq)
         {
             throw std::invalid_argument(fmt::format(
-                FMT_STRING("Invalid manual close ledger sequence number {} "
-                           "(must exceed current sequence number {})"),
+                FMT_STRING("Invalid manual close ledger sequence number {:d} "
+                           "(must exceed current sequence number {:d})"),
                 *explicitlyProvidedSeqNum, startLedgerSeq));
         }
     }
@@ -949,8 +944,8 @@ ApplicationImpl::setManualCloseVirtualTime(
         if (*explicitlyProvidedCloseTime < nextCloseTime)
         {
             throw std::invalid_argument(
-                fmt::format(FMT_STRING("Manual close time {} too early (last "
-                                       "close time={}, now={})"),
+                fmt::format(FMT_STRING("Manual close time {:d} too early (last "
+                                       "close time={:d}, now={:d})"),
                             *explicitlyProvidedCloseTime, lastCloseTime, now));
         }
         nextCloseTime = *explicitlyProvidedCloseTime;
@@ -967,9 +962,9 @@ ApplicationImpl::setManualCloseVirtualTime(
 
     if (nextCloseTime > maxCloseTime)
     {
-        throw std::invalid_argument(
-            fmt::format(FMT_STRING("New close time {} would exceed max ({})"),
-                        nextCloseTime, maxCloseTime));
+        throw std::invalid_argument(fmt::format(
+            FMT_STRING("New close time {:d} would exceed max ({:d})"),
+            nextCloseTime, maxCloseTime));
     }
 
     getClock().setCurrentVirtualTime(VirtualClock::from_time_t(nextCloseTime));
@@ -1104,13 +1099,6 @@ ApplicationImpl::getMetrics()
 void
 ApplicationImpl::syncOwnMetrics()
 {
-    int64_t c = mAppStateCurrent.count();
-    int64_t n = static_cast<int64_t>(getState());
-    if (c != n)
-    {
-        mAppStateCurrent.set_count(n);
-    }
-
     // Flush crypto pure-global-cache stats. They don't belong
     // to a single app instance but first one to flush will claim
     // them.
@@ -1279,6 +1267,12 @@ ApplicationImpl::postOnMainThread(std::function<void()>&& f, std::string&& name,
     mVirtualClock.postAction(
         [this, f = std::move(f), isSlow]() {
             mPostOnMainThreadDelay.Update(isSlow.checkElapsedTime());
+            auto sleepFor =
+                this->getConfig().ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING;
+            if (sleepFor > std::chrono::microseconds::zero())
+            {
+                std::this_thread::sleep_for(sleepFor);
+            }
             f();
         },
         std::move(name), type);

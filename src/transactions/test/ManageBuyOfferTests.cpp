@@ -19,6 +19,8 @@
 #include "transactions/OperationFrame.h"
 #include "transactions/TransactionFrame.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
+#include "util/numeric128.h"
 #include "xdrpp/autocheck.h"
 
 using namespace stellar;
@@ -162,7 +164,8 @@ TEST_CASE("manage buy offer failure modes", "[tx][offers]")
 
                 SECTION("sell no issuer")
                 {
-                    if (ledgerVersion < 13)
+                    if (protocolVersionIsBefore(ledgerVersion,
+                                                ProtocolVersion::V_13))
                     {
                         REQUIRE_THROWS_AS(
                             a1.manageBuyOffer(0, cur1, native, Price{1, 1}, 1),
@@ -176,7 +179,8 @@ TEST_CASE("manage buy offer failure modes", "[tx][offers]")
 
                 SECTION("buy no issuer")
                 {
-                    if (ledgerVersion < 13)
+                    if (protocolVersionIsBefore(ledgerVersion,
+                                                ProtocolVersion::V_13))
                     {
                         REQUIRE_THROWS_AS(
                             a1.manageBuyOffer(0, native, cur1, Price{1, 1}, 1),
@@ -417,12 +421,14 @@ TEST_CASE("manage buy offer liabilities", "[tx][offers]")
             {
                 checkLiabilities(
                     "buy one for two", INT64_MAX, Price{2, 1},
-                    bigDivide(static_cast<uint64_t>(INT64_MAX), 2, ROUND_DOWN),
+                    bigDivideOrThrow128(static_cast<uint64_t>(INT64_MAX), 2,
+                                        ROUND_DOWN),
                     INT64_MAX - 1);
-                checkLiabilities("buy two for five", INT64_MAX, Price{5, 2},
-                                 bigDivide(static_cast<uint64_t>(INT64_MAX), 2,
-                                           5, ROUND_DOWN),
-                                 INT64_MAX - 2);
+                checkLiabilities(
+                    "buy two for five", INT64_MAX, Price{5, 2},
+                    bigDivideOrThrow(static_cast<uint64_t>(INT64_MAX), 2, 5,
+                                     ROUND_DOWN),
+                    INT64_MAX - 2);
             }
         }
 
@@ -540,28 +546,35 @@ TEST_CASE("manage buy offer matches manage sell offer when not executing",
         {
             SECTION("sell two for five")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 5}, 20) ==
-                        getManageSellOfferAmount(Price{5, 2}, 8));
+                // Manually sequence LHS == RHS because gcc and clang
+                // differ and the order-difference produces different meta.
+                auto x = getManageBuyOfferAmount(Price{2, 5}, 20);
+                auto y = getManageSellOfferAmount(Price{5, 2}, 8);
+                REQUIRE(x == y);
             }
             SECTION("sell one for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{1, 2}, 20) ==
-                        getManageSellOfferAmount(Price{2, 1}, 10));
+                auto x = getManageBuyOfferAmount(Price{1, 2}, 20);
+                auto y = getManageSellOfferAmount(Price{2, 1}, 10);
+                REQUIRE(x == y);
             }
             SECTION("sell one for one")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{1, 1}, 20) ==
-                        getManageSellOfferAmount(Price{1, 1}, 20));
+                auto x = getManageBuyOfferAmount(Price{1, 1}, 20);
+                auto y = getManageSellOfferAmount(Price{1, 1}, 20);
+                REQUIRE(x == y);
             }
             SECTION("sell two for one")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 1}, 20) ==
-                        getManageSellOfferAmount(Price{1, 2}, 40));
+                auto x = getManageBuyOfferAmount(Price{2, 1}, 20);
+                auto y = getManageSellOfferAmount(Price{1, 2}, 40);
+                REQUIRE(x == y);
             }
             SECTION("sell five for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{5, 2}, 20) ==
-                        getManageSellOfferAmount(Price{2, 5}, 50));
+                auto x = getManageBuyOfferAmount(Price{5, 2}, 20);
+                auto y = getManageSellOfferAmount(Price{2, 5}, 50);
+                REQUIRE(x == y);
             }
         }
 
@@ -569,23 +582,29 @@ TEST_CASE("manage buy offer matches manage sell offer when not executing",
         {
             SECTION("sell two for five")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 5}, 21) ==
-                        getManageSellOfferAmount(Price{5, 2}, 8));
+                // Manually sequence LHS == RHS because gcc and clang
+                // differ and the order-difference produces different meta.
+                auto x = getManageBuyOfferAmount(Price{2, 5}, 21);
+                auto y = getManageSellOfferAmount(Price{5, 2}, 8);
+                REQUIRE(x == y);
             }
             SECTION("sell one for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{1, 2}, 21) ==
-                        getManageSellOfferAmount(Price{2, 1}, 10));
+                auto x = getManageBuyOfferAmount(Price{1, 2}, 21);
+                auto y = getManageSellOfferAmount(Price{2, 1}, 10);
+                REQUIRE(x == y);
             }
             SECTION("sell two for one")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 1}, 21) ==
-                        getManageSellOfferAmount(Price{1, 2}, 42));
+                auto x = getManageBuyOfferAmount(Price{2, 1}, 21);
+                auto y = getManageSellOfferAmount(Price{1, 2}, 42);
+                REQUIRE(x == y);
             }
             SECTION("sell five for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{5, 2}, 21) ==
-                        getManageSellOfferAmount(Price{2, 5}, 53));
+                auto x = getManageBuyOfferAmount(Price{5, 2}, 21);
+                auto y = getManageSellOfferAmount(Price{2, 5}, 53);
+                REQUIRE(x == y);
             }
         }
     });
@@ -680,52 +699,65 @@ TEST_CASE("manage buy offer matches manage sell offer when executing partially",
         {
             SECTION("sell two for five")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 5}, 200) ==
-                        getManageSellOfferAmount(Price{5, 2}, 80));
+                // Manually sequence LHS == RHS because gcc and clang
+                // differ and the order-difference produces different meta.
+                auto x = getManageBuyOfferAmount(Price{2, 5}, 200);
+                auto y = getManageSellOfferAmount(Price{5, 2}, 80);
+                REQUIRE(x == y);
             }
             SECTION("sell one for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{1, 2}, 200) ==
-                        getManageSellOfferAmount(Price{2, 1}, 100));
+                auto x = getManageBuyOfferAmount(Price{1, 2}, 200);
+                auto y = getManageSellOfferAmount(Price{2, 1}, 100);
+                REQUIRE(x == y);
             }
             SECTION("sell one for one")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{1, 1}, 200) ==
-                        getManageSellOfferAmount(Price{1, 1}, 200));
+                auto x = getManageBuyOfferAmount(Price{1, 1}, 200);
+                auto y = getManageSellOfferAmount(Price{1, 1}, 200);
+                REQUIRE(x == y);
             }
             SECTION("sell two for one")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 1}, 200) ==
-                        getManageSellOfferAmount(Price{1, 2}, 400));
+                auto x = getManageBuyOfferAmount(Price{2, 1}, 200);
+                auto y = getManageSellOfferAmount(Price{1, 2}, 400);
+                REQUIRE(x == y);
             }
             SECTION("sell five for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{5, 2}, 200) ==
-                        getManageSellOfferAmount(Price{2, 5}, 500));
+                auto x = getManageBuyOfferAmount(Price{5, 2}, 200);
+                auto y = getManageSellOfferAmount(Price{2, 5}, 500);
+                REQUIRE(x == y);
             }
         }
 
         SECTION("with rounding")
         {
+            // Manually sequence LHS == RHS because gcc and clang
+            // differ and the order-difference produces different meta.
             SECTION("sell two for five")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 5}, 201) ==
-                        getManageSellOfferAmount(Price{5, 2}, 80));
+                auto x = getManageBuyOfferAmount(Price{2, 5}, 201);
+                auto y = getManageSellOfferAmount(Price{5, 2}, 80);
+                REQUIRE(x == y);
             }
             SECTION("sell one for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{1, 2}, 201) ==
-                        getManageSellOfferAmount(Price{2, 1}, 100));
+                auto x = getManageBuyOfferAmount(Price{1, 2}, 201);
+                auto y = getManageSellOfferAmount(Price{2, 1}, 100);
+                REQUIRE(x == y);
             }
             SECTION("sell two for one")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 1}, 201) ==
-                        getManageSellOfferAmount(Price{1, 2}, 402));
+                auto x = getManageBuyOfferAmount(Price{2, 1}, 201);
+                auto y = getManageSellOfferAmount(Price{1, 2}, 402);
+                REQUIRE(x == y);
             }
             SECTION("sell five for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{5, 2}, 201) ==
-                        getManageSellOfferAmount(Price{2, 5}, 503));
+                auto x = getManageBuyOfferAmount(Price{5, 2}, 201);
+                auto y = getManageSellOfferAmount(Price{2, 5}, 503);
+                REQUIRE(x == y);
             }
         }
     });
@@ -820,28 +852,35 @@ TEST_CASE("manage buy offer matches manage sell offer when executing entirely",
         {
             SECTION("sell two for five")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 5}, 20) ==
-                        getManageSellOfferAmount(Price{5, 2}, 8));
+                // Manually sequence LHS == RHS because gcc and clang
+                // differ and the order-difference produces different meta.
+                auto x = getManageBuyOfferAmount(Price{2, 5}, 20);
+                auto y = getManageSellOfferAmount(Price{5, 2}, 8);
+                REQUIRE(x == y);
             }
             SECTION("sell one for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{1, 2}, 20) ==
-                        getManageSellOfferAmount(Price{2, 1}, 10));
+                auto x = getManageBuyOfferAmount(Price{1, 2}, 20);
+                auto y = getManageSellOfferAmount(Price{2, 1}, 10);
+                REQUIRE(x == y);
             }
             SECTION("sell one for one")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{1, 1}, 20) ==
-                        getManageSellOfferAmount(Price{1, 1}, 20));
+                auto x = getManageBuyOfferAmount(Price{1, 1}, 20);
+                auto y = getManageSellOfferAmount(Price{1, 1}, 20);
+                REQUIRE(x == y);
             }
             SECTION("sell two for one")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 1}, 20) ==
-                        getManageSellOfferAmount(Price{1, 2}, 40));
+                auto x = getManageBuyOfferAmount(Price{2, 1}, 20);
+                auto y = getManageSellOfferAmount(Price{1, 2}, 40);
+                REQUIRE(x == y);
             }
             SECTION("sell five for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{5, 2}, 20) ==
-                        getManageSellOfferAmount(Price{2, 5}, 50));
+                auto x = getManageBuyOfferAmount(Price{5, 2}, 20);
+                auto y = getManageSellOfferAmount(Price{2, 5}, 50);
+                REQUIRE(x == y);
             }
         }
 
@@ -849,23 +888,29 @@ TEST_CASE("manage buy offer matches manage sell offer when executing entirely",
         {
             SECTION("sell two for five")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 5}, 21) ==
-                        getManageSellOfferAmount(Price{5, 2}, 8));
+                // Manually sequence LHS == RHS because gcc and clang
+                // differ and the order-difference produces different meta.
+                auto x = getManageBuyOfferAmount(Price{2, 5}, 21);
+                auto y = getManageSellOfferAmount(Price{5, 2}, 8);
+                REQUIRE(x == y);
             }
             SECTION("sell one for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{1, 2}, 21) ==
-                        getManageSellOfferAmount(Price{2, 1}, 10));
+                auto x = getManageBuyOfferAmount(Price{1, 2}, 21);
+                auto y = getManageSellOfferAmount(Price{2, 1}, 10);
+                REQUIRE(x == y);
             }
             SECTION("sell two for one")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{2, 1}, 21) ==
-                        getManageSellOfferAmount(Price{1, 2}, 42));
+                auto x = getManageBuyOfferAmount(Price{2, 1}, 21);
+                auto y = getManageSellOfferAmount(Price{1, 2}, 42);
+                REQUIRE(x == y);
             }
             SECTION("sell five for two")
             {
-                REQUIRE(getManageBuyOfferAmount(Price{5, 2}, 21) ==
-                        getManageSellOfferAmount(Price{2, 5}, 53));
+                auto x = getManageBuyOfferAmount(Price{5, 2}, 21);
+                auto y = getManageSellOfferAmount(Price{2, 5}, 53);
+                REQUIRE(x == y);
             }
         }
     });
