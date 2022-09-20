@@ -210,15 +210,6 @@ makeBasePercentageFeeUpgrade(int basePercentageFee)
 
 LedgerUpgrade
 makeTxCountUpgrade(int txCount)
-
-{
-    auto result = LedgerUpgrade{LEDGER_UPGRADE_BASE_PERCENTAGE_FEE};
-    result.newBasePercentageFee() = basePercentageFee;
-    return result;
-}
-
-LedgerUpgrade
-makeTxCountUpgrade(int txCount)
 {
     auto result = LedgerUpgrade{LEDGER_UPGRADE_MAX_TX_SET_SIZE};
     result.newMaxTxSetSize() = txCount;
