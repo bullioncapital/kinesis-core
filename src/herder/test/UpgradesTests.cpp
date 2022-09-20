@@ -210,6 +210,15 @@ makeBasePercentageFeeUpgrade(int basePercentageFee)
 
 LedgerUpgrade
 makeTxCountUpgrade(int txCount)
+
+{
+    auto result = LedgerUpgrade{LEDGER_UPGRADE_BASE_PERCENTAGE_FEE};
+    result.newBasePercentageFee() = basePercentageFee;
+    return result;
+}
+
+LedgerUpgrade
+makeTxCountUpgrade(int txCount)
 {
     auto result = LedgerUpgrade{LEDGER_UPGRADE_MAX_TX_SET_SIZE};
     result.newMaxTxSetSize() = txCount;
@@ -2365,15 +2374,15 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     "reserve": {
         "has": false
     },
-    "flags": {
-        has": false
-    }
     "percentagefee": {
         "has": false,
         "value": 45
     },
     "maxfee": {
         "has": false
+    }
+    "flags": {
+        has": false
     }
 })";
     Upgrades::UpgradeParameters up;
