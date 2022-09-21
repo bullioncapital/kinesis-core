@@ -30,6 +30,7 @@ Use the following command to run test inside docker built in previous section.
 
 ```bash
 export TAG=kinesis-core:local
+docker build -t $TAG . -f docker/Dockerfile.kinesis --target buildstage
 docker run --rm -it --entrypoint bash -v $PWD/_output/:/output $TAG
 # in the container
 ./runTests.sh testReport.xml
