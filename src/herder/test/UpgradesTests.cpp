@@ -2664,12 +2664,8 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     "maxfee": {
         "has": false
     },
-    "percentagefee": {
-        "has": false,
-        "value": 45
-    },
-    "maxfee": {
-        "has": false
+    "flags": {
+        has": false
     }
 })";
 
