@@ -2368,14 +2368,14 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
     },
     "flags": {
         has": false
-    }
+    },
     "percentagefee": {
         "has": false,
         "value": 45
     },
     "maxfee": {
         "has": false
-    },
+    }
 })";
     Upgrades::UpgradeParameters up;
     up.fromJson(in);
