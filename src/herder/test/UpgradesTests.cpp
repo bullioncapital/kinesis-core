@@ -2373,7 +2373,7 @@ TEST_CASE("upgrade from cpp14 serialized data", "[upgrades]")
         "has": false
     },
     "flags": {
-        has": false
+        "has": false
     }
 })";
     Upgrades::UpgradeParameters up;
