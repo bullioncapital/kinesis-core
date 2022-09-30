@@ -1,73 +1,28 @@
 ARG DISTRO=focal
-ARG CORE_BUILDER_IMAGE=core-builder:local2
+ARG CORE_BUILDER_IMAGE=charug/test:builder_l2
 
 ##########################################################################################################
 # # Build stage, includes everything needed to build.
 FROM ${CORE_BUILDER_IMAGE} as buildstage
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Set up locale
-RUN echo "LC_ALL=en_US.UTF-8" >> /etc/environment && \
-  echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
-  echo "LANG=en_US.UTF-8" > /etc/locale.conf && \
-  locale-gen "en_US.UTF-8"
-
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
-
-# enable postgres connection
-COPY pg_hba.conf /etc/postgresql/12/main/
+COPY docker/execute /execute.sh
 COPY . /stellar-core
-WORKDIR /stellar-core
 
-RUN git submodule init && git submodule update
+#enable-tests 
+RUN chmod +x execute.sh && \
+    ./execute.sh enable-tests
 
-ENV CC=clang-10
-ENV CXX=clang++-10
-ENV CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
-ENV CXXFLAGS='-w -O3 -g1 -fno-omit-frame-pointer -D_KINESIS'
-ENV CONFIGURE_FLAGS=''
-
-RUN ./autogen.sh
-RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
-RUN sh -c 'make -j $(nproc)'
-#RUN make -j2
-RUN make install
-
-##########################################################################################################
-# # Build release, includes everything needed to release.
+# #########################################################################################################
+# Build release, includes everything needed to release.
 FROM ${CORE_BUILDER_IMAGE} as buildrelease
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Set up locale
-RUN echo "LC_ALL=en_US.UTF-8" >> /etc/environment && \
-  echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
-  echo "LANG=en_US.UTF-8" > /etc/locale.conf && \
-  locale-gen "en_US.UTF-8"
-
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
-
-# enable postgres connection
-COPY pg_hba.conf /etc/postgresql/12/main/
+COPY docker/execute /execute.sh
 COPY . /stellar-core
-WORKDIR /stellar-core
 
-RUN git submodule init && git submodule update
-
-ENV CC=clang-10
-ENV CXX=clang++-10
-ENV CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
-ENV CXXFLAGS='-w -O3 -g1 -fno-omit-frame-pointer -D_KINESIS'
-ENV CONFIGURE_FLAGS='--disable-tests'
-
-RUN ./autogen.sh
-RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
-#RUN sh -c 'make -j $(nproc)'
-#RUN make -j2
-#RUN make install
+RUN chmod +x execute.sh && \
+    ./execute.sh 
 
 ##########################################################################################################
 # replace stellar-core
@@ -84,9 +39,10 @@ RUN ./setup.sh
 
 # We need to repeat ARG here to make it available inside build context
 # See https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
-#install stellar-core
 ARG DISTRO=focal
 ARG STELLAR_CORE_VERSION=18.5.0-877.d387c6a71.focal
+
+#install stellar-core
 RUN wget -qO - https://apt.stellar.org/SDF.asc | apt-key add -
 RUN echo "deb https://apt.stellar.org ${DISTRO} unstable" | tee -a /etc/apt/sources.list.d/SDF-unstable.list
 RUN apt-get update && apt-get install -y stellar-core=${STELLAR_CORE_VERSION}
@@ -97,6 +53,4 @@ RUN apt-get update && apt-get upgrade -y
 # utils
 RUN apt-get install jq -y && apt-get autoclean
 
-##########################################################################################################
-#ARG FINALSTAGE
-COPY --from=buildrelease /usr/local/bin/stellar-CORE_BUILDER_IMAGE /usr/bin/stellar-core
+COPY --from=buildrelease /usr/local/bin/stellar-core /usr/bin/stellar-core
