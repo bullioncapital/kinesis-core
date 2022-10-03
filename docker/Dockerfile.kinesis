@@ -1,28 +1,26 @@
 ARG DISTRO=focal
-ARG CORE_BUILDER_IMAGE=charug/test:builder_l2
+ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:latest
 
 ##########################################################################################################
 # # Build stage, includes everything needed to build.
 FROM ${CORE_BUILDER_IMAGE} as buildstage
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY docker/execute /execute.sh
+COPY docker/ci-kinesis  /ci-kinesis.sh
 COPY . /stellar-core
 
 #enable-tests 
-RUN chmod +x execute.sh && \
-    ./execute.sh enable-tests
+RUN  ./ci-kinesis.sh enable-tests
 
-# #########################################################################################################
+#########################################################################################################
 # Build release, includes everything needed to release.
 FROM ${CORE_BUILDER_IMAGE} as buildrelease
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY docker/execute /execute.sh
+COPY docker/ci-kinesis  /ci-kinesis.sh
 COPY . /stellar-core
 
-RUN chmod +x execute.sh && \
-    ./execute.sh 
+RUN  ./ci-kinesis.sh 
 
 ##########################################################################################################
 # replace stellar-core

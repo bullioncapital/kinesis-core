@@ -1,11 +1,13 @@
-#!bin/bash
+#!/usr/bin/env bash
 
-# Release build is without 'test' subcommand; To build with 'test, pass 'enable-tests' argument 
+# Release build is without 'test' subcommand; To build with 'test', pass 'enable-tests' argument 
 
 ENABLE_TESTS=0
 
-cmd=$1
-case $cmd in 
+CMD=$1
+NPROC=${2:-2}  # default is 2 cores
+
+case $CMD in 
     "enable-tests")
         ENABLE_TESTS=1
         ;;
@@ -47,7 +49,7 @@ build() {
 
     ./autogen.sh
     ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
-    make -j2
+    make -j${NPROC}
     make install
 }
 
