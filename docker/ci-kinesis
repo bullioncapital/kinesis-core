@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+# Release build is without 'test' subcommand; To build with 'test', pass 'enable-tests' argument 
+
+ENABLE_TESTS=0
+
+CMD=$1
+NPROC=${2:-2}  # default is 2 cores
+
+case $CMD in 
+    "enable-tests")
+        ENABLE_TESTS=1
+        ;;
+    
+    *)
+        ;;
+esac
+
+# Set up locale
+setenv() {
+    echo "LC_ALL=en_US.UTF-8" >> /etc/environment && \
+    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
+    echo "LANG=en_US.UTF-8" > /etc/locale.conf && \
+    locale-gen "en_US.UTF-8"
+
+    export LANG=en_US.UTF-8
+    export LANGUAGE=en_US:en
+    export LC_ALL=en_US.UTF-8
+}
+
+build() {
+    set -e
+    pushd stellar-core
+    git submodule init && git submodule update
+
+    export CC=clang-10
+    export CXX=clang++-10
+    export CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
+    export CXXFLAGS='-w -O3 -g1 -fno-omit-frame-pointer -D_KINESIS'
+
+    if [ $ENABLE_TESTS -eq 1 ] ; then
+        echo " Tests Status : enabled"
+        export CONFIGURE_FLAGS=''
+        cp pg_hba.conf /etc/postgresql/12/main/
+    else 
+        echo " Tests Status : disabled"
+        export CONFIGURE_FLAGS='--disable-tests'
+    fi
+
+    ./autogen.sh
+    ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
+    make -j${NPROC}
+    make install
+}
+
+
+
+setenv
+build
