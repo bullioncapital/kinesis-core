@@ -6,21 +6,20 @@ ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:latest
 FROM ${CORE_BUILDER_IMAGE} as buildstage
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY docker/ci-kinesis  /ci-kinesis.sh
+ARG NPROC=2
 COPY . /stellar-core
+RUN  /stellar-core/docker/ci-kinesis enable-tests ${NPROC}
 
-#enable-tests 
-RUN  ./ci-kinesis.sh enable-tests
+WORKDIR /stellar-core
 
 #########################################################################################################
 # Build release, includes everything needed to release.
 FROM ${CORE_BUILDER_IMAGE} as buildrelease
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY docker/ci-kinesis  /ci-kinesis.sh
+ARG NPROC=2
 COPY . /stellar-core
-
-RUN  ./ci-kinesis.sh 
+RUN  /stellar-core/docker/ci-kinesis release ${NPROC}
 
 ##########################################################################################################
 # replace stellar-core
@@ -47,8 +46,7 @@ RUN apt-get update && apt-get install -y stellar-core=${STELLAR_CORE_VERSION}
 
 WORKDIR "/etc/stellar"
 
-RUN apt-get update && apt-get upgrade -y
-# utils
-RUN apt-get install jq -y && apt-get autoclean
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install jq -y && apt-get autoclean
 
 COPY --from=buildrelease /usr/local/bin/stellar-core /usr/bin/stellar-core

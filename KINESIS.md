@@ -38,7 +38,7 @@ Use the following command to build a local docker image:
 
 ```bash
 export TAG=kinesis-core:local
-docker build -t $TAG . -f docker/Dockerfile.kinesis
+docker build --build-arg NPROC=$(nproc) -t $TAG . -f docker/Dockerfile.kinesis
 ```
 
 ## Run Tests
