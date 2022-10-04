@@ -30,20 +30,19 @@ setenv() {
 
 build() {
     set -e
-    pushd stellar-core
-    git submodule init && git submodule update
-
     export CC=clang-10
     export CXX=clang++-10
-    export CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
-    export CXXFLAGS='-w -O3 -g1 -fno-omit-frame-pointer -D_KINESIS'
 
     if [ $ENABLE_TESTS -eq 1 ] ; then
-        echo " Tests Status : enabled"
+        echo " Build with debug & test suites"
+        export CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
+        export CXXFLAGS='-w -O3 -g1 -fno-omit-frame-pointer -D_KINESIS'
         export CONFIGURE_FLAGS=''
         cp pg_hba.conf /etc/postgresql/12/main/
     else 
-        echo " Tests Status : disabled"
+        echo " Build for relase"
+        export CFLAGS='-O3 -fno-omit-frame-pointer'
+        export CXXFLAGS='-O3 -s -fno-omit-frame-pointer -DNDEBUG -D_KINESIS'
         export CONFIGURE_FLAGS='--disable-tests'
     fi
 
