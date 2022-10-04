@@ -43,3 +43,35 @@ docker run --rm -it --entrypoint bash -v $PWD/_output/:/output $TAG
 ```
 
 You can also execute `./runTests.sh` from VSCode devcontainer, BUT make sure you first build the source code using `make -j $(nproc)`.
+
+## Running and Updating TxMeta Checks
+
+The units tests can be run into two special modes that has the TxMeta of each transaction executed. These two can increase the confidence that a change to kinesis-core does not alter the semantics of any transaction. The two modes are:
+
+  * `--record-test-tx-meta <dirname>` which records TxMeta hashes into `<dirname>`
+  * `--check-test-tx-meta <dirname>` which checks TxMeta hashes against `<dirname>`
+  
+You can run the `--check-test-tx-meta` mode against a pair of captured baseline directories stored in the repository, called `test-tx-meta-baseline-current` (for the current protocol) and `text-tx-meta-baseline-next` (for the next protocol). 
+Use the following command to run the tests with `--check-test-tx-meta` inside the docker container mentioned in previous section:
+
+```bash
+# in the container
+./stellar-core test [tx] --all-versions --rng-seed 12345 --check-test-tx-meta test-tx-meta-baseline-current -o testReport.xml
+#for a build with only the current protocol enabled, and:
+
+./stellar-core test [tx] --all-versions --rng-seed 12345 --check-test-tx-meta test-tx-meta-baseline-next -o testReport.xml
+#for a build configured with `--enable-next-protocol-version-unsafe-for-production`.
+```
+
+If you make _intentional_ changes to the semantics of any transactions, or add any new transactions that need to have their hashes recorded, you can re-record the baseline using a command like:
+
+```bash
+# in the container
+./stellar-core test [tx] --all-versions --rng-seed 12345 --record-test-tx-meta test-tx-meta-baseline-current -o testReport.xml
+#for a build with only the current protocol enabled, and:
+
+./stellar-core test [tx] --all-versions --rng-seed 12345 --record-test-tx-meta test-tx-meta-baseline-next -o testReport.xml
+#for a build configured with `--enable-next-protocol-version-unsafe-for-production`.
+```
+
+These commands will rewrite the baseline files, which are human-readable JSON files. You should then inspect to see that only the transactions you expected to see change did so. If so, commit the changes as a new set of baselines for future tests.
