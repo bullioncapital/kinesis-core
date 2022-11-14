@@ -596,14 +596,14 @@ When the node is done catching up, its state will change to
 ```
 
 ## Logging
-Stellar-core sends logs to standard output and `stellar-core.log` by default, 
+Stellar-core sends logs to standard error and `stellar-core.log` by default,
 configurable as `LOG_FILE_PATH`.
 
  Log messages are classified by progressive _priority levels_:
   `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR` and `FATAL`.
    The logging system only emits those messages at or above its configured logging level.
 
-Log messages at different priority levels can be color-coded on standard output
+Log messages at different priority levels can be color-coded on standard error
 by setting `LOG_COLOR=true` in the config file. By default they are not color-coded.
 
 The log level can be controlled by configuration, the `-ll` command-line flag 
@@ -707,6 +707,14 @@ This list is the result of both inbound connections from other peers and outboun
         {
            "address" : "54.161.82.181:11625",
            "elapsed" : 6,
+           "flow_control" : {
+               "local_capacity" : {
+                  "flood" : 500,
+                  "reading" : 600
+               },
+               "peer_capacity" : 100,
+               "state" : "enabled"
+            },
            "id" : "sdf1",
            "olver" : 5,
            "ver" : "v9.1.0"
@@ -716,6 +724,14 @@ This list is the result of both inbound connections from other peers and outboun
        {
           "address" : "54.211.174.177:11625",
           "elapsed" : 2303,
+          "flow_control" : {
+             "local_capacity" : {
+                "flood" : 500,
+                "reading" : 600
+             },
+             "peer_capacity" : 100,
+             "state" : "enabled"
+          },
           "id" : "sdf2",
           "olver" : 5,
           "ver" : "v9.1.0"
@@ -723,6 +739,14 @@ This list is the result of both inbound connections from other peers and outboun
        {
           "address" : "54.160.175.7:11625",
           "elapsed" : 14082,
+          "flow_control" : {
+             "local_capacity" : {
+                "flood" : 500,
+                "reading" : 600
+             },
+             "peer_capacity" : 100,
+             "state" : "enabled"
+          },
           "id" : "sdf3",
           "olver" : 5,
           "ver" : "v9.1.0"
@@ -877,12 +901,12 @@ This output has two main sections: `qset` and `transitive`. The former describes
 
 Entries to watch for in the `qset` section -- describing the node and its quorum set -- are:
 
-  * `agree` : the number of nodes in the quorum set that agree with this instance.
-  * `delayed` : the nodes that are participating to consensus but seem to be behind.
-  * `disagree`: the nodes that were participating but disagreed with this instance.
+  * `agree` : the number of nodes in the quorum set that seem to be up and running as expected. The local node has no reason to believe that this node is `delayed`, `disagree` or `missing`. Note that `agree` has nothing to do with SCP terms such as "accept" or "confirming".
+  * `delayed` : the nodes that seem up but behind.
+  * `disagree`: the nodes that seem up but disagree with this instance.
   * `fail_at` : the number of failed nodes that *would* cause this instance to halt.
   * `fail_with`: an example of such potential failure.
-  * `missing` : the nodes that were missing during this consensus round.
+  * `missing` : the nodes that seem down.
   * `value` : the quorum set used by this node (`t` is the threshold expressed as a number of nodes).
 
 In the example above, 6 nodes are functioning properly, one is down (`stronghold1`), and

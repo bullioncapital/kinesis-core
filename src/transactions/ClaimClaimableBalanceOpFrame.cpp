@@ -10,6 +10,7 @@
 #include "ledger/TrustLineWrapper.h"
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
 
 namespace stellar
 {
@@ -28,9 +29,10 @@ ClaimClaimableBalanceOpFrame::getThresholdLevel() const
 }
 
 bool
-ClaimClaimableBalanceOpFrame::isVersionSupported(uint32_t protocolVersion) const
+ClaimClaimableBalanceOpFrame::isOpSupported(LedgerHeader const& header) const
 {
-    return protocolVersion >= 14;
+    return protocolVersionStartsFrom(header.ledgerVersion,
+                                     ProtocolVersion::V_14);
 }
 
 bool

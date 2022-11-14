@@ -6,6 +6,7 @@
 
 #include "crypto/SecretKey.h"
 #include "herder/TxSetFrame.h"
+#include "ledger/LedgerTxn.h"
 #include "transactions/TransactionFrame.h"
 #include "util/HashOfHash.h"
 #include "util/Timer.h"
@@ -121,6 +122,9 @@ class TransactionQueue
                               uint32 banDepth, uint32 poolLedgerMultiplier);
     ~TransactionQueue();
 
+    static std::vector<AssetPair>
+    findAllAssetPairsInvolvedInPaymentLoops(TransactionFrameBasePtr tx);
+
     AddResult tryAdd(TransactionFrameBasePtr tx);
     void removeApplied(Transactions const& txs);
     void ban(Transactions const& txs);
@@ -179,6 +183,8 @@ class TransactionQueue
     // counters
     std::vector<medida::Counter*> mSizeByAge;
     medida::Counter& mBannedTransactionsCounter;
+    medida::Counter& mArbTxSeenCounter;
+    medida::Counter& mArbTxDroppedCounter;
     medida::Timer& mTransactionsDelay;
 
     UnorderedSet<OperationType> mFilteredTypes;
@@ -192,7 +198,13 @@ class TransactionQueue
     bool broadcastSome();
     void broadcast(bool fromCallback);
     // broadcasts a single transaction
-    bool broadcastTx(AccountState& state, TimestampedTx& tx);
+    enum class BroadcastStatus
+    {
+        BROADCAST_STATUS_ALREADY,
+        BROADCAST_STATUS_SUCCESS,
+        BROADCAST_STATUS_SKIPPED
+    };
+    BroadcastStatus broadcastTx(AccountState& state, TimestampedTx& tx);
 
     AddResult canAdd(TransactionFrameBasePtr tx,
                      AccountStates::iterator& stateIter,
@@ -210,6 +222,7 @@ class TransactionQueue
     bool isFiltered(TransactionFrameBasePtr tx) const;
 
     std::unique_ptr<TxQueueLimiter> mTxQueueLimiter;
+    UnorderedMap<AssetPair, uint32_t, AssetPairHash> mArbitrageFloodDamping;
 
     size_t mBroadcastSeed;
 

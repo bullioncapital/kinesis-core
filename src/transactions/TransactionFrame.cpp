@@ -28,6 +28,7 @@
 #include "util/Decoder.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
+#include "util/ProtocolVersion.h"
 #include "util/XDROperators.h"
 #include "util/XDRStream.h"
 #include "util/XDRCereal.h"
@@ -145,6 +146,14 @@ TransactionFrame::getNumOperations() const
                : static_cast<uint32_t>(mEnvelope.v1().tx.operations.size());
 }
 
+std::vector<Operation> const&
+TransactionFrame::getRawOperations() const
+{
+    return mEnvelope.type() == ENVELOPE_TYPE_TX_V0
+               ? mEnvelope.v0().tx.operations
+               : mEnvelope.v1().tx.operations;
+}
+
 int64_t
 TransactionFrame::getFeeBid() const
 {
@@ -213,7 +222,9 @@ int64_t
 TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
                          bool applying) const
 {
-    if (header.ledgerVersion >= 11 || !applying)
+    if (protocolVersionStartsFrom(header.ledgerVersion,
+                                  ProtocolVersion::V_11) ||
+        !applying)
     {
        int64_t adjustedFee =
             baseFee * std::max<int64_t>(1, getNumOperations());
@@ -283,7 +294,8 @@ TransactionFrame::loadSourceAccount(AbstractLedgerTxn& ltx,
 {
     ZoneScoped;
     auto res = loadAccount(ltx, header, getSourceID());
-    if (header.current().ledgerVersion < 8)
+    if (protocolVersionIsBefore(header.current().ledgerVersion,
+                                ProtocolVersion::V_8))
     {
         // this is buggy caching that existed in old versions of the protocol
         if (res)
@@ -305,7 +317,9 @@ TransactionFrame::loadAccount(AbstractLedgerTxn& ltx,
                               AccountID const& accountID)
 {
     ZoneScoped;
-    if (header.current().ledgerVersion < 8 && mCachedAccount &&
+    if (protocolVersionIsBefore(header.current().ledgerVersion,
+                                ProtocolVersion::V_8) &&
+        mCachedAccount &&
         mCachedAccount->ledgerEntry().data.account().accountID == accountID)
     {
         // this is buggy caching that existed in old versions of the protocol
@@ -412,9 +426,11 @@ TransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx, bool chargeFee,
     //    (stay true regardless of other side effects)
     auto header = ltx.loadHeader();
     uint32_t ledgerVersion = header.current().ledgerVersion;
-    if ((ledgerVersion < 13 && (mEnvelope.type() == ENVELOPE_TYPE_TX ||
-                                hasMuxedAccount(mEnvelope))) ||
-        (ledgerVersion >= 13 && mEnvelope.type() == ENVELOPE_TYPE_TX_V0))
+    if ((protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_13) &&
+         (mEnvelope.type() == ENVELOPE_TYPE_TX ||
+          hasMuxedAccount(mEnvelope))) ||
+        (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_13) &&
+         mEnvelope.type() == ENVELOPE_TYPE_TX_V0))
     {
         getResult().result.code(txNOT_SUPPORTED);
         return false;
@@ -462,7 +478,8 @@ TransactionFrame::processSeqNum(AbstractLedgerTxn& ltx)
 {
     ZoneScoped;
     auto header = ltx.loadHeader();
-    if (header.current().ledgerVersion >= 10)
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_10))
     {
         auto sourceAccount = loadSourceAccount(ltx, header);
         if (sourceAccount.current().data.account().seqNum > getSeqNum())
@@ -481,19 +498,21 @@ TransactionFrame::processSignatures(ValidationType cv,
     ZoneScoped;
     bool maybeValid = (cv == ValidationType::kMaybeValid);
     uint32_t ledgerVersion = ltxOuter.loadHeader().current().ledgerVersion;
-    if (ledgerVersion < 10)
+    if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_10))
     {
         return maybeValid;
     }
 
     // check if we need to fast fail and use the original error code
-    if (ledgerVersion >= 13 && !maybeValid)
+    if (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_13) &&
+        !maybeValid)
     {
         removeOneTimeSignerFromAllSourceAccounts(ltxOuter);
         return false;
     }
     // older versions of the protocol only fast fail in a subset of cases
-    if (ledgerVersion < 13 && cv < ValidationType::kInvalidPostAuth)
+    if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_13) &&
+        cv < ValidationType::kInvalidPostAuth)
     {
         return false;
     }
@@ -565,7 +584,9 @@ TransactionFrame::commonValid(SignatureChecker& signatureChecker,
 
     // in older versions, the account's sequence number is updated when taking
     // fees
-    if (header.current().ledgerVersion >= 10 || !applying)
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_10) ||
+        !applying)
     {
         if (current == 0)
         {
@@ -593,9 +614,11 @@ TransactionFrame::commonValid(SignatureChecker& signatureChecker,
     // if we are in applying mode fee was already deduced from signing account
     // balance, if not, we need to check if after that deduction this account
     // will still have minimum balance
-    uint32_t feeToPay = (applying && (header.current().ledgerVersion > 8))
-                            ? 0
-                            : static_cast<uint32_t>(getFeeBid());
+    uint32_t feeToPay =
+        (applying && protocolVersionStartsFrom(header.current().ledgerVersion,
+                                               ProtocolVersion::V_9))
+            ? 0
+            : static_cast<uint32_t>(getFeeBid());
     // don't let the account go below the reserve after accounting for
     // liabilities
     if (chargeFee && getAvailableBalance(header, sourceAccount) < feeToPay)
@@ -636,7 +659,8 @@ TransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx, int64_t baseFee)
         header.current().feePool += fee;
     }
     // in v10 we update sequence numbers during apply
-    if (header.current().ledgerVersion <= 9)
+    if (protocolVersionIsBefore(header.current().ledgerVersion,
+                                ProtocolVersion::V_10))
     {
         if (acc.seqNum + 1 != getSeqNum())
         {
@@ -791,6 +815,9 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                                   TransactionMeta& outerMeta)
 {
     ZoneScoped;
+    auto& internalErrorCounter = app.getMetrics().NewCounter(
+        {"ledger", "transaction", "internal-error"});
+    bool reportInternalErrOnException = true;
     try
     {
         bool success = true;
@@ -801,7 +828,12 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
         // shield outer scope of any side effects with LedgerTxn
         LedgerTxn ltxTx(ltx);
         uint32_t ledgerVersion = ltxTx.loadHeader().current().ledgerVersion;
-
+        // We do not want to increase the internal-error metric count for older
+        // ledger versions. The minimum ledger version for which we start
+        // internal-error counting is defined in the app config.
+        reportInternalErrOnException =
+            ledgerVersion >=
+            app.getConfig().LEDGER_PROTOCOL_MIN_VERSION_INTERNAL_ERROR_REPORT;
         auto& opTimer =
             app.getMetrics().NewTimer({"ledger", "operation", "apply"});
         for (auto& op : mOperations)
@@ -824,7 +856,8 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                 newMeta.v2().operations.emplace_back(ltxOp.getChanges());
             }
 
-            if (txRes || ledgerVersion < 14)
+            if (txRes ||
+                protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_14))
             {
                 ltxOp.commit();
             }
@@ -832,7 +865,7 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
 
         if (success)
         {
-            if (ledgerVersion < 10)
+            if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_10))
             {
                 if (!signatureChecker.checkAllSignaturesUsed())
                 {
@@ -849,7 +882,9 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                 newMeta.v2().txChangesAfter = ltxAfter.getChanges();
                 ltxAfter.commit();
             }
-            else if (ledgerVersion >= 14 && ltxTx.hasSponsorshipEntry())
+            else if (protocolVersionStartsFrom(ledgerVersion,
+                                               ProtocolVersion::V_14) &&
+                     ltxTx.hasSponsorshipEntry())
             {
                 getResult().result.code(txBAD_SPONSORSHIP);
                 return false;
@@ -877,22 +912,55 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
     }
     catch (std::exception& e)
     {
-        CLOG_ERROR(Tx, "Exception while applying operations ({}, {}): {}",
-                   xdr_to_string(getFullHash(), "fullHash"),
-                   xdr_to_string(getContentsHash(), "contentsHash"), e.what());
+        if (reportInternalErrOnException)
+        {
+            CLOG_ERROR(Tx, "Exception while applying operations ({}, {}): {}",
+                       xdr_to_string(getFullHash(), "fullHash"),
+                       xdr_to_string(getContentsHash(), "contentsHash"),
+                       e.what());
+        }
+        else
+        {
+            CLOG_INFO(Tx,
+                      "Exception occurred on outdated protocol version "
+                      "while applying operations ({}, {}): {}",
+                      xdr_to_string(getFullHash(), "fullHash"),
+                      xdr_to_string(getContentsHash(), "contentsHash"),
+                      e.what());
+        }
     }
     catch (...)
     {
-        CLOG_ERROR(Tx, "Unknown exception while applying operations ({}, {})",
-                   xdr_to_string(getFullHash(), "fullHash"),
-                   xdr_to_string(getContentsHash(), "contentsHash"));
+        if (reportInternalErrOnException)
+        {
+            CLOG_ERROR(Tx,
+                       "Unknown exception while applying operations ({}, {})",
+                       xdr_to_string(getFullHash(), "fullHash"),
+                       xdr_to_string(getContentsHash(), "contentsHash"));
+        }
+        else
+        {
+            CLOG_INFO(Tx,
+                      "Unknown exception on outdated protocol version "
+                      "while applying operations ({}, {})",
+                      xdr_to_string(getFullHash(), "fullHash"),
+                      xdr_to_string(getContentsHash(), "contentsHash"));
+        }
+    }
+    if (app.getConfig().HALT_ON_INTERNAL_TRANSACTION_ERROR)
+    {
+        printErrorAndAbort("Encountered an exception while applying "
+                           "operations, see logs for details.");
     }
     // This is only reachable if an exception is thrown
     getResult().result.code(txINTERNAL_ERROR);
 
-    auto& internalErrorCounter = app.getMetrics().NewCounter(
-        {"ledger", "transaction", "internal-error"});
-    internalErrorCounter.inc();
+    // We only increase the internal-error metric count if the ledger is a newer
+    // version.
+    if (reportInternalErrOnException)
+    {
+        internalErrorCounter.inc();
+    }
 
     // operations and txChangesAfter should already be empty at this point
     outerMeta.v2().operations.clear();

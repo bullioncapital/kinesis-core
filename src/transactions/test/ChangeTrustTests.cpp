@@ -30,7 +30,8 @@ TEST_CASE("change trust", "[tx][changetrust]")
 
     // set up world
     auto root = TestAccount::createRoot(*app);
-    auto const minBalance2 = app->getLedgerManager().getLastMinBalance(2);
+    auto const& lm = app->getLedgerManager();
+    auto const minBalance2 = lm.getLastMinBalance(2);
     auto gateway = root.create("gw", minBalance2);
     Asset idr = makeAsset(gateway, "IDR");
 
@@ -263,7 +264,73 @@ TEST_CASE("change trust", "[tx][changetrust]")
         createModifyAndRemoveSponsoredEntry(
             *app, acc2, changeTrust(idr, 1000), changeTrust(idr, 999),
             changeTrust(idr, 1001), changeTrust(idr, 0),
-            trustlineKey(acc2, idr));
+            trustlineKey(acc2, idr), 14);
+    }
+
+    SECTION("too many")
+    {
+        auto acc1 =
+            root.create("acc1", app->getLedgerManager().getLastMinBalance(0));
+        auto usd = makeAsset(gateway, "USD");
+
+        SECTION("too many sponsoring")
+        {
+            tooManySponsoring(*app, acc1, acc1.op(changeTrust(idr, 1)),
+                              acc1.op(changeTrust(usd, 1)), 1);
+        }
+        SECTION("too many subentries")
+        {
+            tooManySubentries(*app, acc1, changeTrust(idr, 1),
+                              changeTrust(usd, 1));
+        }
+    }
+
+    SECTION("create and delete trustline in same tx")
+    {
+        for_versions_from(13, *app, [&] {
+            auto tx = transactionFrameFromOps(
+                app->getNetworkID(), root,
+                {root.op(changeTrust(idr, 100)), root.op(changeTrust(idr, 0))},
+                {});
+
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            TransactionMeta txm(2);
+            REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+            REQUIRE(tx->apply(*app, ltx, txm));
+        });
+    }
+}
+
+TEST_CASE("change trust pool share trustline",
+          "[tx][changetrust][liquiditypool]")
+{
+    Config const& cfg = getTestConfig();
+
+    VirtualClock clock;
+    auto app = createTestApplication(clock, cfg);
+
+    // set up world
+    auto root = TestAccount::createRoot(*app);
+    auto const& lm = app->getLedgerManager();
+    auto const minBalance2 = lm.getLastMinBalance(2);
+    auto gateway = root.create("gw", minBalance2);
+    Asset idr = makeAsset(gateway, "IDR");
+
+    SECTION("pool trustline sponsorship")
+    {
+        auto usd = makeAsset(gateway, "USD");
+        auto idrUsd =
+            makeChangeTrustAssetPoolShare(idr, usd, LIQUIDITY_POOL_FEE_V18);
+
+        auto acc1 =
+            root.create("a1", app->getLedgerManager().getLastMinBalance(3));
+        acc1.changeTrust(idr, 10);
+        acc1.changeTrust(usd, 10);
+
+        createModifyAndRemoveSponsoredEntry(
+            *app, acc1, changeTrust(idrUsd, 1000), changeTrust(idrUsd, 999),
+            changeTrust(idrUsd, 1001), changeTrust(idrUsd, 0),
+            trustlineKey(acc1, changeTrustAssetToTrustLineAsset(idrUsd)), 18);
     }
 
     SECTION("pool trustline")
@@ -274,8 +341,6 @@ TEST_CASE("change trust", "[tx][changetrust]")
             return acc.current().data.account().numSubEntries;
         };
 
-        auto const minBalance4 = app->getLedgerManager().getLastMinBalance(4);
-
         auto poolShareTest = [&](Asset const& assetA, Asset const& assetB,
                                  bool startWithPool) {
             auto poolShareAsset = makeChangeTrustAssetPoolShare(
@@ -283,7 +348,9 @@ TEST_CASE("change trust", "[tx][changetrust]")
 
             if (startWithPool)
             {
-                auto acc1 = root.create("a1", minBalance4);
+                auto acc1 = root.create(
+                    "a1",
+                    app->getLedgerManager().getLastMinBalance(4) + 3 * 100);
                 if (assetA.type() != ASSET_TYPE_NATIVE)
                 {
                     acc1.changeTrust(assetA, 10);
@@ -339,11 +406,10 @@ TEST_CASE("change trust", "[tx][changetrust]")
 
             // this should create a LiquidityPoolEntry, and modify
             // liquidityPoolUseCount on the asset trustlines
-            // auto prePoolNumSubEntries = getNumSubEntries(root);
+            auto prePoolNumSubEntries = getNumSubEntries(root);
             root.changeTrust(poolShareAsset, 10);
 
-            // TODO: This line requires the update to SponsorshipUtils
-            // REQUIRE(getNumSubEntries(root) - prePoolNumSubEntries == 2);
+            REQUIRE(getNumSubEntries(root) - prePoolNumSubEntries == 2);
 
             auto poolShareTlAsset =
                 changeTrustAssetToTrustLineAsset(poolShareAsset);
@@ -418,12 +484,36 @@ TEST_CASE("change trust", "[tx][changetrust]")
                 root.changeTrust(poolAZ, 0);
             }
 
+            // try to reduce limit of pool share trust line below the balance
+            if (hasTrustA)
+            {
+                gateway.allowTrust(assetA, root);
+                gateway.pay(root, assetA, 10);
+            }
+            if (hasTrustB)
+            {
+                gateway.allowTrust(assetB, root);
+                gateway.pay(root, assetB, 10);
+            }
+
+            auto poolID = xdrSha256(poolShareAsset.liquidityPool());
+            root.liquidityPoolDeposit(poolID, 10, 10, Price{1, 1}, Price{1, 1});
+
+            REQUIRE_THROWS_AS(root.changeTrust(poolShareAsset, 9),
+                              ex_CHANGE_TRUST_INVALID_LIMIT);
+            REQUIRE_THROWS_AS(root.changeTrust(poolShareAsset, 0),
+                              ex_CHANGE_TRUST_INVALID_LIMIT);
+
+            // increase the limit
+            root.changeTrust(poolShareAsset, 11);
+            root.liquidityPoolWithdraw(poolID, 10, 10, 10);
+
             // delete the pool sharetrust line
+            auto postPoolNumSubEntries = getNumSubEntries(root);
             root.changeTrust(poolShareAsset, 0);
             REQUIRE(!root.hasTrustLine(poolShareTlAsset));
 
-            // TODO: This line requires the update to SponsorshipUtils
-            // REQUIRE(getNumSubEntries(root) == prePoolNumSubEntries);
+            REQUIRE(getNumSubEntries(root) == postPoolNumSubEntries - 2);
 
             if (hasTrustA)
             {
@@ -448,10 +538,12 @@ TEST_CASE("change trust", "[tx][changetrust]")
             // now the asset trustlines can be deleted
             if (hasTrustA)
             {
+                root.pay(gateway, assetA, 10);
                 root.changeTrust(assetA, 0);
             }
             if (hasTrustB)
             {
+                root.pay(gateway, assetB, 10);
                 root.changeTrust(assetB, 0);
             }
         };
@@ -549,6 +641,266 @@ TEST_CASE("change trust", "[tx][changetrust]")
             {
                 poolShareTest(makeAsset(root, "IDR"), makeAsset(root, "USD"),
                               true);
+            }
+            SECTION("too many")
+            {
+                auto acc1 = root.create(
+                    "acc1", app->getLedgerManager().getLastMinBalance(3));
+                auto native = makeNativeAsset();
+                auto shareNative1 = makeChangeTrustAssetPoolShare(
+                    native, idr, LIQUIDITY_POOL_FEE_V18);
+
+                acc1.changeTrust(idr, 1);
+                acc1.changeTrust(usd, 1);
+
+                SECTION("too many sponsoring")
+                {
+                    tooManySponsoring(*app, acc1,
+                                      acc1.op(changeTrust(idrUsd, 1)),
+                                      acc1.op(changeTrust(shareNative1, 1)), 2);
+                }
+                SECTION("too many subentries")
+                {
+                    tooManySubentries(*app, acc1, changeTrust(idrUsd, 1),
+                                      changeTrust(shareNative1, 1));
+                }
+            }
+            SECTION("low reserve")
+            {
+                auto acc1 = root.create("acc1", lm.getLastMinBalance(3));
+
+                acc1.changeTrust(idr, 10);
+                acc1.changeTrust(usd, 10);
+
+                REQUIRE_THROWS_AS(acc1.changeTrust(idrUsd, 10),
+                                  ex_CHANGE_TRUST_LOW_RESERVE);
+
+                root.pay(acc1, lm.getLastMinBalance(0));
+                acc1.changeTrust(idrUsd, 10);
+            }
+            SECTION("sponsored pool share trustline where sponsor is issuer of "
+                    "both assets")
+            {
+                auto acc1 = root.create("acc1", lm.getLastMinBalance(4));
+
+                // gateway is the issuer of usd and idr
+                acc1.changeTrust(idr, 10);
+                acc1.changeTrust(usd, 10);
+
+                // get rid of available balance so acc1 needs a sponsor for new
+                // entries
+                acc1.pay(root, acc1.getAvailableBalance() - 100);
+
+                {
+                    auto tx = transactionFrameFromOps(
+                        app->getNetworkID(), gateway,
+                        {gateway.op(beginSponsoringFutureReserves(acc1)),
+                         acc1.op(changeTrust(idrUsd, 10)),
+                         acc1.op(endSponsoringFutureReserves())},
+                        {acc1});
+
+                    LedgerTxn ltx(app->getLedgerTxnRoot());
+                    TransactionMeta txm(2);
+                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    REQUIRE(tx->apply(*app, ltx, txm));
+                    REQUIRE(tx->getResultCode() == txSUCCESS);
+                    ltx.commit();
+                }
+
+                auto tlAsset = changeTrustAssetToTrustLineAsset(idrUsd);
+                REQUIRE(acc1.hasTrustLine(tlAsset));
+                {
+                    LedgerTxn ltx(app->getLedgerTxnRoot());
+                    checkSponsorship(ltx, trustlineKey(acc1, tlAsset), 1,
+                                     &gateway.getPublicKey());
+                    checkSponsorship(ltx, acc1, 0, nullptr, 4, 2, 0, 2);
+                    checkSponsorship(ltx, gateway, 0, nullptr, 0, 2, 2, 0);
+                }
+
+                // give gateway enough fees for three operations
+                root.pay(gateway, 300);
+
+                SECTION("try to revoke the sponsorship but fail")
+                {
+                    auto tx = transactionFrameFromOps(
+                        app->getNetworkID(), gateway,
+                        {gateway.op(
+                            revokeSponsorship(trustlineKey(acc1, tlAsset)))},
+                        {});
+
+                    LedgerTxn ltx(app->getLedgerTxnRoot());
+                    TransactionMeta txm(2);
+                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    REQUIRE(!tx->apply(*app, ltx, txm));
+                    REQUIRE(tx->getResultCode() == txFAILED);
+
+                    auto const& opRes = tx->getResult().result.results()[0];
+                    REQUIRE(opRes.tr().revokeSponsorshipResult().code() ==
+                            REVOKE_SPONSORSHIP_LOW_RESERVE);
+                }
+
+                SECTION("try to transfer the sponsorship but fail")
+                {
+                    auto acc2 = root.create(
+                        "acc2", app->getLedgerManager().getLastMinBalance(1));
+
+                    auto tx = transactionFrameFromOps(
+                        app->getNetworkID(), gateway,
+                        {acc2.op(beginSponsoringFutureReserves(gateway)),
+                         gateway.op(
+                             revokeSponsorship(trustlineKey(acc1, tlAsset))),
+                         gateway.op(endSponsoringFutureReserves())},
+                        {acc2});
+
+                    LedgerTxn ltx(app->getLedgerTxnRoot());
+                    TransactionMeta txm(2);
+                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    REQUIRE(!tx->apply(*app, ltx, txm));
+                    REQUIRE(tx->getResultCode() == txFAILED);
+
+                    auto const& opRes = tx->getResult().result.results()[1];
+                    REQUIRE(opRes.tr().revokeSponsorshipResult().code() ==
+                            REVOKE_SPONSORSHIP_LOW_RESERVE);
+                }
+
+                SECTION("give owner enough reserves to take on the pool share "
+                        "trustline")
+                {
+                    root.pay(acc1,
+                             app->getLedgerManager().getLastMinBalance(0));
+
+                    auto tx = transactionFrameFromOps(
+                        app->getNetworkID(), gateway,
+                        {gateway.op(
+                            revokeSponsorship(trustlineKey(acc1, tlAsset)))},
+                        {});
+
+                    LedgerTxn ltx(app->getLedgerTxnRoot());
+                    TransactionMeta txm(2);
+                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    REQUIRE(tx->apply(*app, ltx, txm));
+                    REQUIRE(tx->getResultCode() == txSUCCESS);
+                }
+
+                SECTION(
+                    "give account enough reserves to transfer the sponsorship")
+                {
+                    auto acc2 = root.create(
+                        "acc2", app->getLedgerManager().getLastMinBalance(2));
+
+                    auto tx = transactionFrameFromOps(
+                        app->getNetworkID(), gateway,
+                        {acc2.op(beginSponsoringFutureReserves(gateway)),
+                         gateway.op(
+                             revokeSponsorship(trustlineKey(acc1, tlAsset))),
+                         gateway.op(endSponsoringFutureReserves())},
+                        {acc2});
+
+                    LedgerTxn ltx(app->getLedgerTxnRoot());
+                    TransactionMeta txm(2);
+                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    REQUIRE(tx->apply(*app, ltx, txm));
+                    REQUIRE(tx->getResultCode() == txSUCCESS);
+                }
+            }
+
+            SECTION("below reserve")
+            {
+                auto increaseReserve = [&]() {
+                    // double the reserve
+                    auto newReserve = lm.getLastReserve() * 2;
+                    REQUIRE(
+                        executeUpgrade(*app, makeBaseReserveUpgrade(newReserve))
+                            .baseReserve == newReserve);
+                };
+
+                auto acc1 = root.create("acc1", lm.getLastMinBalance(5));
+
+                auto deletePoolTl = [&]() {
+                    // delete the pool share trustline. acc1 can't pay the fee
+                    // so use root
+                    auto tx = transactionFrameFromOps(
+                        app->getNetworkID(), root,
+                        {acc1.op(changeTrust(idrUsd, 0))}, {acc1});
+
+                    LedgerTxn ltx(app->getLedgerTxnRoot());
+                    TransactionMeta txm(2);
+                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    REQUIRE(tx->apply(*app, ltx, txm));
+                    ltx.commit();
+                };
+
+                SECTION("delete pool share trustline while below the reserve")
+                {
+                    acc1.changeTrust(idr, 1);
+                    acc1.changeTrust(usd, 1);
+                    acc1.changeTrust(idrUsd, 1);
+
+                    // get rid of rest of available native balance
+                    acc1.pay(root, acc1.getAvailableBalance() - 100);
+
+                    REQUIRE(acc1.getAvailableBalance() == 0);
+
+                    increaseReserve();
+
+                    // acc1 is responsible for 6 reserves (2 for the account, 2
+                    // for the asset trustlines, and 2 for the pool share
+                    // trustlines)
+                    REQUIRE(acc1.getAvailableBalance() == -600000000);
+
+                    deletePoolTl();
+
+                    REQUIRE(acc1.getAvailableBalance() == -200000000);
+                }
+
+                SECTION("delete sponsored pool share trustline while below the "
+                        "reserve")
+                {
+                    acc1.changeTrust(idr, 1);
+                    acc1.changeTrust(usd, 1);
+
+                    auto sponsoringAcc =
+                        root.create("sponsoringAcc", lm.getLastMinBalance(5));
+
+                    {
+                        auto tx = transactionFrameFromOps(
+                            app->getNetworkID(), sponsoringAcc,
+                            {sponsoringAcc.op(
+                                 beginSponsoringFutureReserves(acc1)),
+                             acc1.op(changeTrust(idrUsd, 1)),
+                             acc1.op(endSponsoringFutureReserves())},
+                            {acc1});
+
+                        LedgerTxn ltx(app->getLedgerTxnRoot());
+                        TransactionMeta txm(2);
+                        REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                        REQUIRE(tx->apply(*app, ltx, txm));
+                        ltx.commit();
+                    }
+
+                    // get rid of rest of available native balance
+                    acc1.pay(root, acc1.getAvailableBalance() - 100);
+                    sponsoringAcc.pay(
+                        root, sponsoringAcc.getAvailableBalance() - 100);
+
+                    REQUIRE(acc1.getAvailableBalance() == 0);
+                    REQUIRE(sponsoringAcc.getAvailableBalance() == 0);
+
+                    increaseReserve();
+
+                    // acc1 is responsible for 4 reserves (2 for the account and
+                    // 2 for the asset trustlines)
+                    REQUIRE(acc1.getAvailableBalance() == -400000000);
+
+                    /// sponsoringAcc is responsible for 4 reserves (2 for the
+                    /// account and 2 for the pool share trustline)
+                    REQUIRE(sponsoringAcc.getAvailableBalance() == -400000000);
+
+                    deletePoolTl();
+
+                    REQUIRE(acc1.getAvailableBalance() == -400000000);
+                    REQUIRE(sponsoringAcc.getAvailableBalance() == 0);
+                }
             }
         });
     }

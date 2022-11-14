@@ -10,11 +10,12 @@
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/LedgerTxnHeader.h"
 #include "ledger/TrustLineWrapper.h"
-#include "lib/util/uint128_t.h"
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
+#include "util/ProtocolVersion.h"
+#include "util/numeric128.h"
 #include <Tracy.hpp>
 
 struct ExchangedQuantities
@@ -138,7 +139,7 @@ exchangeV2(int64_t wheatReceived, Price price, int64_t maxWheatReceive,
     result.numSheepSend = std::min(result.numSheepSend, maxSheepSend);
     // bias towards seller (this cannot overflow at this point)
     result.numWheatReceived =
-        bigDivide(result.numSheepSend, price.d, price.n, ROUND_DOWN);
+        bigDivideOrThrow(result.numSheepSend, price.d, price.n, ROUND_DOWN);
 
     return result;
 }
@@ -646,32 +647,36 @@ exchangeV10WithoutPriceErrorThresholds(Price price, int64_t maxWheatSend,
     {
         if (round == RoundingType::PATH_PAYMENT_STRICT_SEND)
         {
-            wheatReceive = bigDivide(sheepValue, price.n, ROUND_DOWN);
+            wheatReceive = bigDivideOrThrow128(sheepValue, price.n, ROUND_DOWN);
             sheepSend = std::min({maxSheepSend, maxSheepReceive});
         }
         else if (price.n > price.d || // Wheat is more valuable
                  round == RoundingType::PATH_PAYMENT_STRICT_RECEIVE)
         {
-            wheatReceive = bigDivide(sheepValue, price.n, ROUND_DOWN);
-            sheepSend = bigDivide(wheatReceive, price.n, price.d, ROUND_UP);
+            wheatReceive = bigDivideOrThrow128(sheepValue, price.n, ROUND_DOWN);
+            sheepSend =
+                bigDivideOrThrow(wheatReceive, price.n, price.d, ROUND_UP);
         }
         else // Sheep is more valuable
         {
-            sheepSend = bigDivide(sheepValue, price.d, ROUND_DOWN);
-            wheatReceive = bigDivide(sheepSend, price.d, price.n, ROUND_DOWN);
+            sheepSend = bigDivideOrThrow128(sheepValue, price.d, ROUND_DOWN);
+            wheatReceive =
+                bigDivideOrThrow(sheepSend, price.d, price.n, ROUND_DOWN);
         }
     }
     else
     {
         if (price.n > price.d) // Wheat is more valuable
         {
-            wheatReceive = bigDivide(wheatValue, price.n, ROUND_DOWN);
-            sheepSend = bigDivide(wheatReceive, price.n, price.d, ROUND_DOWN);
+            wheatReceive = bigDivideOrThrow128(wheatValue, price.n, ROUND_DOWN);
+            sheepSend =
+                bigDivideOrThrow(wheatReceive, price.n, price.d, ROUND_DOWN);
         }
         else // Sheep is more valuable
         {
-            sheepSend = bigDivide(wheatValue, price.d, ROUND_DOWN);
-            wheatReceive = bigDivide(sheepSend, price.d, price.n, ROUND_UP);
+            sheepSend = bigDivideOrThrow128(wheatValue, price.d, ROUND_DOWN);
+            wheatReceive =
+                bigDivideOrThrow(sheepSend, price.d, price.n, ROUND_UP);
         }
     }
 
@@ -944,11 +949,13 @@ performExchange(LedgerTxnHeader const& header,
     releaseAssertOrThrow(numWheatReceived >= 0);
 
     newAmount = numWheatReceived;
-    auto exchangeResult = header.current().ledgerVersion < 3
-                              ? exchangeV2(numWheatReceived, price,
-                                           maxWheatReceived, maxSheepSend)
-                              : exchangeV3(numWheatReceived, price,
-                                           maxWheatReceived, maxSheepSend);
+    auto exchangeResult =
+        protocolVersionIsBefore(header.current().ledgerVersion,
+                                ProtocolVersion::V_3)
+            ? exchangeV2(numWheatReceived, price, maxWheatReceived,
+                         maxSheepSend)
+            : exchangeV3(numWheatReceived, price, maxWheatReceived,
+                         maxSheepSend);
 
     numWheatReceived = exchangeResult.numWheatReceived;
     numSheepSend = exchangeResult.numSheepSend;
@@ -1244,29 +1251,96 @@ exchangeWithPool(int64_t reservesToPool, int64_t maxSendToPool, int64_t& toPool,
         throw std::runtime_error("Liquidity pool fee out of range");
     }
 
+    if (reservesToPool <= 0 || reservesFromPool <= 0)
+    {
+        // This should never happen, but the following code makes positivity
+        // assumptions about these values.
+        throw std::runtime_error("non-positive reserve in exchangeWithPool");
+    }
+
     switch (round)
     {
     case RoundingType::PATH_PAYMENT_STRICT_SEND:
     {
+        // PathPaymentStrictSend always allows INT64_MAX to be received at
+        // every hop, and exchange with a pool always happens as a unit
+        // (compare against the order book where multiple offers might execute
+        // in a hop).
+        if (maxReceiveFromPool != INT64_MAX)
+        {
+            throw std::runtime_error("strict send with bounded receive?");
+        }
+        // We can't receive more from the pool then it has reserves.
+        maxReceiveFromPool = reservesFromPool;
+
+        // We have to send this amount exactly, and we can't do it if that would
+        // overflow reserves.
         if (maxSendToPool > INT64_MAX - reservesToPool)
         {
             return false;
         }
         toPool = maxSendToPool;
 
+        // This can't overflow:
+        // - 0 <  reservesToPool <= INT64_MAX
+        // - 0 <= toPool <= INT64_MAX
+        // - 0 <  maxBps - feeBps <= maxBps <= 10000
+        //
+        // from which it follows that
+        //
+        // denominator
+        //  = maxBps * reservesToPool + (maxBps - feeBps) * toPool
+        // <= 10000 * INT64_MAX + 10000 * INT64_MAX
+        // <  UINT128_MAX
         uint128_t denominator = bigMultiply(maxBps, reservesToPool) +
                                 bigMultiply(maxBps - feeBps, toPool);
+
         bool res = hugeDivide(fromPool, maxBps - feeBps,
                               bigMultiply(reservesFromPool, toPool),
                               denominator, ROUND_DOWN);
-        if (res)
+
+        // To be defensive, we need a bound on fromPool. First, note that
+        //
+        // denominator
+        //  = maxBps * reservesToPool + (maxBps - feeBps) * toPool
+        // >= (maxBps - feeBps) * toPool
+        //
+        // Using this result, we can evaluate
+        //
+        // fromPool
+        //  = floor[(maxBps - feeBps) * reservesFromPool * toPool / denominator]
+        // <= (maxBps - feeBps) * reservesFromPool * toPool / denominator
+        // <= reservesFromPool
+        if (res && fromPool > maxReceiveFromPool)
         {
-            fromPool = std::min(fromPool, maxReceiveFromPool);
+            // This should never happen, see the above proof.
+            throw std::runtime_error("received too much from pool");
         }
-        return res;
+        if (res && fromPool < 0)
+        {
+            // This should never happen
+            throw std::runtime_error("fromPool is negative");
+        }
+
+        // Fail if the division overflows, or if we are receiving 0. It is
+        // possible to receive 0 due to the ROUND_DOWN.
+        return res && fromPool != 0;
     }
     case RoundingType::PATH_PAYMENT_STRICT_RECEIVE:
     {
+        // PathPaymentStrictReceive always allows INT64_MAX to be sent at every
+        // hop, and exchange with a pool always happens as a unit (compare
+        // against the order book where multiple offers might execute in a hop).
+        if (maxSendToPool != INT64_MAX)
+        {
+            throw std::runtime_error("strict receive with bounded send?");
+        }
+        // We can't send more to the pool then it has space for additional
+        // reserves.
+        maxSendToPool = INT64_MAX - reservesToPool;
+
+        // We have to receive this amount exactly, and we can't do it if that
+        // would deplete reserves entirely.
         if (maxReceiveFromPool >= reservesFromPool)
         {
             return false;
@@ -1277,11 +1351,16 @@ exchangeWithPool(int64_t reservesToPool, int64_t maxSendToPool, int64_t& toPool,
             toPool, maxBps, bigMultiply(reservesToPool, fromPool),
             bigMultiply(reservesFromPool - fromPool, maxBps - feeBps),
             ROUND_UP);
-        if (res)
+
+        if (res && toPool < 0)
         {
-            toPool = std::min(toPool, maxSendToPool);
+            // This should never happen
+            throw std::runtime_error("toPool is negative");
         }
-        return res;
+
+        // Fail if the division overflows, or if we would be sending too much to
+        // the pool.
+        return res && toPool <= maxSendToPool;
     }
     default:
         throw std::runtime_error("Invalid rounding type");
@@ -1308,9 +1387,14 @@ exchangeWithPool(AbstractLedgerTxn& ltxOuter, Asset const& toPoolAsset,
 {
     LedgerTxn ltx(ltxOuter);
 
-    if (ltx.loadHeader().current().ledgerVersion < 18)
+    if (protocolVersionIsBefore(ltx.loadHeader().current().ledgerVersion,
+                                ProtocolVersion::V_18))
     {
         // Only exchange with pools starting at protocol version 18
+        return false;
+    }
+    if (isPoolTradingDisabled(ltx.loadHeader().current()))
+    {
         return false;
     }
     if (round == RoundingType::NORMAL)
@@ -1322,6 +1406,8 @@ exchangeWithPool(AbstractLedgerTxn& ltxOuter, Asset const& toPoolAsset,
     {
         // offerTrail is going to be too long after exchanging with the
         // liquidity pool
+        // note that this condition can only happen in path payment when
+        // performing subsequent hops
         return false;
     }
 
@@ -1338,6 +1424,17 @@ exchangeWithPool(AbstractLedgerTxn& ltxOuter, Asset const& toPoolAsset,
         return lp.current().data.liquidityPool().body.constantProduct();
     };
 
+    if (cp().reserveA <= 0 || cp().reserveB <= 0)
+    {
+        // It is possible to have reserveA = reserveB = 0, specifically when a
+        // pool share trust line exists but no deposits have been made. It
+        // should not be possible to have either
+        //      reserveA = 0 && reserveB != 0
+        //      reserveA < 0 || reserveB < 0
+        // but for safety we disallow trading with the pool in those cases.
+        return false;
+    }
+
     bool res = false;
     if (toPoolAsset == cp().params.assetA &&
         fromPoolAsset == cp().params.assetB)
@@ -1347,8 +1444,11 @@ exchangeWithPool(AbstractLedgerTxn& ltxOuter, Asset const& toPoolAsset,
                                feeBps, round);
         if (res)
         {
-            cp().reserveA += toPool;
-            cp().reserveB -= fromPool;
+            if (!addBalance(cp().reserveA, toPool) ||
+                !addBalance(cp().reserveB, -fromPool))
+            {
+                throw std::runtime_error("could not update reserves");
+            }
         }
     }
     else if (fromPoolAsset == cp().params.assetA &&
@@ -1359,8 +1459,11 @@ exchangeWithPool(AbstractLedgerTxn& ltxOuter, Asset const& toPoolAsset,
                                feeBps, round);
         if (res)
         {
-            cp().reserveA -= fromPool;
-            cp().reserveB += toPool;
+            if (!addBalance(cp().reserveA, -fromPool) ||
+                !addBalance(cp().reserveB, toPool))
+            {
+                throw std::runtime_error("could not update reserves");
+            }
         }
     }
     else
@@ -1398,6 +1501,16 @@ convertWithOffers(
     wheatReceived = 0;
 
     bool needMore = (maxWheatReceive > 0 && maxSheepSend > 0);
+    if (needMore && maxOffersToCross == 0 &&
+        protocolVersionStartsFrom(ltxOuter.loadHeader().current().ledgerVersion,
+                                  ProtocolVersion::V_18))
+    {
+        // offerTrail is going to be too long, fast fail
+        // note that this condition can only happen in path payment when
+        // performing subsequent hops
+        return ConvertResult::eCrossedTooMany;
+    }
+
     while (needMore)
     {
         LedgerTxn ltx(ltxOuter);
@@ -1421,9 +1534,19 @@ convertWithOffers(
             wheatOffer.current().ext.v1().sponsoringID.activate() = sponsorID;
         }
 
-        if (filter && filter(wheatOffer) == OfferFilterResult::eStop)
+        if (filter)
         {
-            return ConvertResult::eFilterStop;
+            switch (filter(wheatOffer))
+            {
+            case OfferFilterResult::eKeep:
+                break;
+            case OfferFilterResult::eStopBadPrice:
+                return ConvertResult::eFilterStopBadPrice;
+            case OfferFilterResult::eStopCrossSelf:
+                return ConvertResult::eFilterStopCrossSelf;
+            default:
+                throw std::runtime_error("unexpected filter result");
+            }
         }
 
         // Note: maxOffersToCross == INT64_MAX before protocol version 11
@@ -1435,7 +1558,8 @@ convertWithOffers(
         int64_t numWheatReceived;
         int64_t numSheepSend;
         CrossOfferResult cor;
-        if (ltx.loadHeader().current().ledgerVersion >= 10)
+        if (protocolVersionStartsFrom(ltx.loadHeader().current().ledgerVersion,
+                                      ProtocolVersion::V_10))
         {
             bool wheatStays;
             cor = crossOfferV10(ltx, wheatOffer, maxWheatReceive,
@@ -1477,7 +1601,9 @@ convertWithOffers(
             return ConvertResult::ePartial;
         }
     }
-    if ((ltxOuter.loadHeader().current().ledgerVersion < 10) || !needMore)
+    if (protocolVersionIsBefore(ltxOuter.loadHeader().current().ledgerVersion,
+                                ProtocolVersion::V_10) ||
+        !needMore)
     {
         return ConvertResult::eOK;
     }

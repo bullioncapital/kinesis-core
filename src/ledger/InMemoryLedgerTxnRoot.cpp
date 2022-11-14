@@ -27,19 +27,19 @@ InMemoryLedgerTxnRoot::InMemoryLedgerTxnRoot(
 }
 
 void
-InMemoryLedgerTxnRoot::addChild(AbstractLedgerTxn& child)
+InMemoryLedgerTxnRoot::addChild(AbstractLedgerTxn& child, TransactionMode mode)
 {
 }
 
 void
 InMemoryLedgerTxnRoot::commitChild(EntryIterator iter,
-                                   LedgerTxnConsistency cons)
+                                   LedgerTxnConsistency cons) noexcept
 {
-    throw std::runtime_error("committing to stub InMemoryLedgerTxnRoot");
+    printErrorAndAbort("committing to stub InMemoryLedgerTxnRoot");
 }
 
 void
-InMemoryLedgerTxnRoot::rollbackChild()
+InMemoryLedgerTxnRoot::rollbackChild() noexcept
 {
 }
 
@@ -154,6 +154,10 @@ uint32_t
 InMemoryLedgerTxnRoot::prefetch(UnorderedSet<LedgerKey> const& keys)
 {
     return 0;
+}
+
+void InMemoryLedgerTxnRoot::prepareNewObjects(size_t)
+{
 }
 
 #ifdef BUILD_TESTS

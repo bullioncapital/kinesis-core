@@ -9,6 +9,7 @@
 #include "ledger/TrustLineWrapper.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
+#include "util/ProtocolVersion.h"
 #include "util/XDROperators.h"
 
 namespace stellar
@@ -50,7 +51,7 @@ PathPaymentOpFrameBase::checkIssuer(AbstractLedgerTxn& ltx, Asset const& asset)
     if (asset.type() != ASSET_TYPE_NATIVE)
     {
         uint32_t ledgerVersion = ltx.loadHeader().current().ledgerVersion;
-        if (ledgerVersion < 13 &&
+        if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_13) &&
             !stellar::loadAccountWithoutRecord(ltx, getIssuer(asset)))
         {
             setResultNoIssuer(asset);
@@ -81,8 +82,7 @@ PathPaymentOpFrameBase::convert(AbstractLedgerTxn& ltx,
             if (offer.sellerID == getSourceID())
             {
                 // we are crossing our own offer
-                setResultOfferCrossSelf();
-                return OfferFilterResult::eStop;
+                return OfferFilterResult::eStopCrossSelf;
             }
             return OfferFilterResult::eKeep;
         },
@@ -95,7 +95,8 @@ PathPaymentOpFrameBase::convert(AbstractLedgerTxn& ltx,
 
     switch (r)
     {
-    case ConvertResult::eFilterStop:
+    case ConvertResult::eFilterStopCrossSelf:
+        setResultOfferCrossSelf();
         return false;
     case ConvertResult::eOK:
         if (checkTransfer(maxSend, amountSend, maxRecv, amountRecv))
@@ -109,6 +110,8 @@ PathPaymentOpFrameBase::convert(AbstractLedgerTxn& ltx,
     case ConvertResult::eCrossedTooMany:
         mResult.code(opEXCEEDED_WORK_LIMIT);
         return false;
+    default:
+        throw std::runtime_error("unexpected convert result");
     }
 
     return true;
@@ -139,7 +142,8 @@ PathPaymentOpFrameBase::updateSourceBalance(AbstractLedgerTxn& ltx,
     {
         auto header = ltx.loadHeader();
         LedgerTxnEntry sourceAccount;
-        if (header.current().ledgerVersion > 7)
+        if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                      ProtocolVersion::V_8))
         {
             sourceAccount = stellar::loadAccount(ltx, getSourceID());
             if (!sourceAccount)
@@ -210,7 +214,9 @@ PathPaymentOpFrameBase::updateDestBalance(AbstractLedgerTxn& ltx,
         auto destination = stellar::loadAccount(ltx, destID);
         if (!addBalance(ltx.loadHeader(), destination, amount))
         {
-            if (ltx.loadHeader().current().ledgerVersion >= 11)
+            if (protocolVersionStartsFrom(
+                    ltx.loadHeader().current().ledgerVersion,
+                    ProtocolVersion::V_11))
             {
                 setResultLineFull();
             }

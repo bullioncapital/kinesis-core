@@ -73,6 +73,8 @@ class HerderImpl : public Herder
 
     void start() override;
 
+    void lastClosedLedgerIncreased() override;
+
     SCP& getSCP();
     HerderSCPDriver&
     getHerderSCPDriver()
@@ -100,10 +102,18 @@ class HerderImpl : public Herder
                                    const SCPQuorumSet& qset,
                                    TxSetFrame txset) override;
 
-    void
-    externalizeValue(std::shared_ptr<TxSetFrame> txSet, uint32_t ledgerSeq,
-                     uint64_t closeTime,
-                     xdr::xvector<UpgradeType, 6> const& upgrades) override;
+    void externalizeValue(std::shared_ptr<TxSetFrame> txSet, uint32_t ledgerSeq,
+                          uint64_t closeTime,
+                          xdr::xvector<UpgradeType, 6> const& upgrades,
+                          std::optional<SecretKey> skToSignValue) override;
+
+    VirtualTimer const&
+    getTriggerTimer() const override
+    {
+        return mTriggerTimer;
+    }
+
+    uint32_t mTriggerNextLedgerSeq{0};
 #endif
     void sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer) override;
 
@@ -117,6 +127,11 @@ class HerderImpl : public Herder
     void processSCPQueue();
 
     uint32 getMinLedgerSeqToAskPeers() const override;
+
+    uint32_t getMinLedgerSeqToRemember() const override;
+
+    bool isNewerNominationOrBallotSt(SCPStatement const& oldSt,
+                                     SCPStatement const& newSt) override;
 
     SequenceNumber getMaxSeqInPendingTxs(AccountID const&) override;
 
@@ -173,15 +188,15 @@ class HerderImpl : public Herder
     ctValidityOffset(uint64_t ct, std::chrono::milliseconds maxCtOffset =
                                       std::chrono::milliseconds::zero());
 
-    void ledgerClosed(bool synchronous);
-
-    void maybeTriggerNextLedger(bool synchronous);
+    void setupTriggerNextLedger();
 
     void startOutOfSyncTimer();
     void outOfSyncRecovery();
     void broadcast(SCPEnvelope const& e);
 
     void processSCPQueueUpToIndex(uint64 slotIndex);
+    void safelyProcessSCPQueue(bool synchronous);
+    void newSlotExternalized(bool synchronous, StellarValue const& value);
 
     TransactionQueue mTransactionQueue;
 
@@ -281,8 +296,6 @@ class HerderImpl : public Herder
         }
     };
     QuorumMapIntersectionState mLastQuorumMapIntersectionState;
-
-    uint32_t getMinLedgerSeqToRemember() const;
 
     State mState;
     void setState(State st);

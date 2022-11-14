@@ -106,6 +106,40 @@ Slot::getLatestMessage(NodeID const& id) const
     return m;
 }
 
+bool
+Slot::isNewerNominationOrBallotSt(SCPStatement const& oldSt,
+                                  SCPStatement const& newSt)
+{
+    bool oldNomination =
+        oldSt.pledges.type() == SCPStatementType::SCP_ST_NOMINATE;
+    bool newNomination =
+        newSt.pledges.type() == SCPStatementType::SCP_ST_NOMINATE;
+
+    if (oldNomination != newNomination)
+    {
+        return false;
+    }
+
+    bool replace = false;
+    if (oldNomination)
+    {
+        if (NominationProtocol::isNewerStatement(oldSt.pledges.nominate(),
+                                                 newSt.pledges.nominate()))
+        {
+            replace = true;
+        }
+    }
+    else
+    {
+        if (BallotProtocol::isNewerStatement(oldSt, newSt))
+        {
+            replace = true;
+        }
+    }
+
+    return replace;
+}
+
 std::vector<SCPEnvelope>
 Slot::getExternalizingState() const
 {
@@ -335,6 +369,17 @@ Slot::getJsonInfo(bool fullKeys)
     ret["ballotProtocol"] = mBallotProtocol.getJsonInfo();
 
     return ret;
+}
+
+SCP::QuorumInfoNodeState
+Slot::getState(NodeID const& node, bool selfAlreadyMovedOn)
+{
+    auto b = mBallotProtocol.getState(node, selfAlreadyMovedOn);
+    if (b != SCP::QuorumInfoNodeState::NO_INFO)
+    {
+        return b;
+    }
+    return mNominationProtocol.getState(node, selfAlreadyMovedOn);
 }
 
 Json::Value

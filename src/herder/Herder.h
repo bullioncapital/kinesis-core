@@ -106,6 +106,8 @@ class Herder
     // restores Herder's state from disk
     virtual void start() = 0;
 
+    virtual void lastClosedLedgerIncreased() = 0;
+
     // Setup Herder's state to fully participate in consensus
     virtual void setTrackingSCPState(uint64_t index, StellarValue const& value,
                                      bool isTrackingNetwork) = 0;
@@ -133,7 +135,10 @@ class Herder
     virtual void
     externalizeValue(std::shared_ptr<TxSetFrame> txSet, uint32_t ledgerSeq,
                      uint64_t closeTime,
-                     xdr::xvector<UpgradeType, 6> const& upgrades) = 0;
+                     xdr::xvector<UpgradeType, 6> const& upgrades,
+                     std::optional<SecretKey> skToSignValue = std::nullopt) = 0;
+
+    virtual VirtualTimer const& getTriggerTimer() const = 0;
 #endif
     // a peer needs our SCP state
     virtual void sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer) = 0;
@@ -142,6 +147,10 @@ class Herder
 
     // return the smallest ledger number we need messages for when asking peers
     virtual uint32 getMinLedgerSeqToAskPeers() const = 0;
+    virtual uint32 getMinLedgerSeqToRemember() const = 0;
+
+    virtual bool isNewerNominationOrBallotSt(SCPStatement const& oldSt,
+                                             SCPStatement const& newSt) = 0;
 
     // Return the maximum sequence number for any tx (or 0 if none) from a given
     // sender in the pending or recent tx sets.

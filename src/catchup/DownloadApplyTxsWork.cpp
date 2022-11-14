@@ -3,6 +3,8 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "catchup/DownloadApplyTxsWork.h"
+#include "bucket/BucketList.h"
+#include "bucket/BucketManager.h"
 #include "catchup/ApplyCheckpointWork.h"
 #include "history/FileTransferInfo.h"
 #include "history/HistoryManager.h"
@@ -10,6 +12,8 @@
 #include "ledger/LedgerManager.h"
 #include "work/ConditionalWork.h"
 #include "work/WorkSequence.h"
+#include "work/WorkWithCallback.h"
+
 #include <Tracy.hpp>
 #include <fmt/format.h>
 
@@ -76,12 +80,25 @@ DownloadApplyTxsWork::yieldMoreWork()
 
     std::vector<std::shared_ptr<BasicWork>> seq{getAndUnzip};
 
+    auto maybeWaitForMerges = [](Application& app) {
+        if (app.getConfig().CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING)
+        {
+            auto& bl = app.getBucketManager().getBucketList();
+            bl.resolveAnyReadyFutures();
+            return bl.futuresAllResolved();
+        }
+        else
+        {
+            return true;
+        }
+    };
+
     if (mLastYieldedWork)
     {
         auto prev = mLastYieldedWork;
         bool pqFellBehind = false;
-        auto predicate = [prev, pqFellBehind, waitForPublish = mWaitForPublish](
-                             Application& app) mutable {
+        auto predicate = [prev, pqFellBehind, waitForPublish = mWaitForPublish,
+                          maybeWaitForMerges](Application& app) mutable {
             if (!prev)
             {
                 throw std::runtime_error("Download and apply txs: related Work "
@@ -110,15 +127,35 @@ DownloadApplyTxsWork::yieldMoreWork()
                 }
                 res = !pqFellBehind;
             }
-            return res;
+            return res && maybeWaitForMerges(app);
         };
         seq.push_back(std::make_shared<ConditionalWork>(
             mApp, "conditional-" + apply->getName(), predicate, apply));
     }
     else
     {
-        seq.push_back(apply);
+        seq.push_back(std::make_shared<ConditionalWork>(
+            mApp, "wait-merges" + apply->getName(), maybeWaitForMerges, apply));
     }
+
+    seq.push_back(std::make_shared<WorkWithCallback>(
+        mApp, "delete-transactions-" + std::to_string(mCheckpointToQueue),
+        [ft](Application& app) {
+            try
+            {
+                std::filesystem::remove(
+                    std::filesystem::path(ft.localPath_nogz()));
+                CLOG_DEBUG(History, "Deleted transactions {}",
+                           ft.localPath_nogz());
+                return true;
+            }
+            catch (std::filesystem::filesystem_error const& e)
+            {
+                CLOG_ERROR(History, "Could not delete transactions {}: {}",
+                           ft.localPath_nogz(), e.what());
+                return false;
+            }
+        }));
 
     auto nextWork = std::make_shared<WorkSequence>(
         mApp, "download-apply-" + std::to_string(mCheckpointToQueue), seq,
@@ -169,9 +206,10 @@ DownloadApplyTxsWork::getStatus() const
     auto checkpointsApplied = checkpointsStarted - getNumWorksInBatch();
 
     auto totalCheckpoints = (last - first) / hm.getCheckpointFrequency() + 1;
-    return fmt::format("Download & apply checkpoints: num checkpoints left to "
-                       "apply:{} ({}% done)",
-                       totalCheckpoints - checkpointsApplied,
-                       100 * checkpointsApplied / totalCheckpoints);
+    return fmt::format(
+        FMT_STRING("Download & apply checkpoints: num checkpoints left to "
+                   "apply:{:d} ({:d}% done)"),
+        totalCheckpoints - checkpointsApplied,
+        100 * checkpointsApplied / totalCheckpoints);
 }
 }

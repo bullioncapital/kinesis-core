@@ -37,26 +37,15 @@ ApplyBufferedLedgersWork::onRun()
         }
     }
 
-    auto& cm = mApp.getCatchupManager();
-    if (!cm.hasBufferedLedger())
+    std::optional<LedgerCloseData> maybeLcd =
+        mApp.getCatchupManager().maybeGetNextBufferedLedgerToApply();
+
+    if (!maybeLcd)
     {
+        CLOG_INFO(History, "No more buffered ledgers to apply");
         return State::WORK_SUCCESS;
     }
-
-    LedgerCloseData lcd = cm.getFirstBufferedLedger();
-
-    auto& lm = mApp.getLedgerManager();
-    uint32_t expectedLedger = lm.getLastClosedLedgerNum() + 1;
-    // check for a gap
-    if (lcd.getLedgerSeq() != expectedLedger)
-    {
-        cm.logAndUpdateCatchupStatus(false);
-        CLOG_WARNING(History, "Expected buffered ledger={}, actual={}",
-                     expectedLedger, lcd.getLedgerSeq());
-        return State::WORK_FAILURE;
-    }
-
-    cm.popBufferedLedger();
+    auto const& lcd = maybeLcd.value();
 
     CLOG_INFO(History,
               "Scheduling buffered ledger-close: [seq={}, prev={}, txs={}, "
@@ -78,8 +67,9 @@ ApplyBufferedLedgersWork::onRun()
 
     mConditionalWork = std::make_shared<ConditionalWork>(
         mApp,
-        fmt::format("apply-buffered-ledger-conditional ledger({})",
-                    lcd.getLedgerSeq()),
+        fmt::format(
+            FMT_STRING("apply-buffered-ledger-conditional ledger({:d})"),
+            lcd.getLedgerSeq()),
         predicate, applyLedger, std::chrono::milliseconds(500));
 
     mConditionalWork->startWork(wakeSelfUpCallback());
@@ -90,7 +80,7 @@ ApplyBufferedLedgersWork::onRun()
 std::string
 ApplyBufferedLedgersWork::getStatus() const
 {
-    return fmt::format("Applying buffered ledgers: {}",
+    return fmt::format(FMT_STRING("Applying buffered ledgers: {}"),
                        mConditionalWork ? mConditionalWork->getStatus()
                                         : BasicWork::getStatus());
 }

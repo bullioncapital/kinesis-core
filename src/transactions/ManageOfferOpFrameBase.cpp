@@ -11,6 +11,7 @@
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
+#include "util/ProtocolVersion.h"
 #include <Tracy.hpp>
 
 namespace stellar
@@ -45,7 +46,7 @@ ManageOfferOpFrameBase::checkOfferValid(AbstractLedgerTxn& ltxOuter)
     if (mSheep.type() != ASSET_TYPE_NATIVE)
     {
         auto sheepLineA = loadTrustLine(ltx, getSourceID(), mSheep);
-        if (ledgerVersion < 13)
+        if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_13))
         {
             auto issuer = stellar::loadAccount(ltx, getIssuer(mSheep));
             if (!issuer)
@@ -76,7 +77,7 @@ ManageOfferOpFrameBase::checkOfferValid(AbstractLedgerTxn& ltxOuter)
     {
         auto wheatLineA = loadTrustLine(ltx, getSourceID(), mWheat);
 
-        if (ledgerVersion < 13)
+        if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_13))
         {
             auto issuer = stellar::loadAccount(ltx, getIssuer(mWheat));
             if (!issuer)
@@ -112,9 +113,11 @@ ManageOfferOpFrameBase::computeOfferExchangeParameters(
     auto sourceAccount = loadSourceAccount(ltx, header);
 
     auto ledgerVersion = header.current().ledgerVersion;
-    if (ledgerVersion < 14 && creatingNewOffer &&
-        (ledgerVersion >= 10 ||
-         (mSheep.type() == ASSET_TYPE_NATIVE && ledgerVersion > 8)))
+    if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_14) &&
+        creatingNewOffer &&
+        (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_10) ||
+         (mSheep.type() == ASSET_TYPE_NATIVE &&
+          protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_9))))
     {
         // we need to compute maxAmountOfSheepCanSell based on the
         // updated reserve to avoid selling too many and falling
@@ -145,7 +148,7 @@ ManageOfferOpFrameBase::computeOfferExchangeParameters(
 
     maxWheatReceive = canBuyAtMost(header, sourceAccount, mWheat, wheatLineA);
     maxSheepSend = canSellAtMost(header, sourceAccount, mSheep, sheepLineA);
-    if (ledgerVersion >= 10)
+    if (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_10))
     {
         // Note that maxWheatReceive = max(0, availableLimit). But why do we
         // work with availableLimit?
@@ -243,7 +246,8 @@ ManageOfferOpFrameBase::doApply(AbstractLedgerTxn& ltxOuter)
         // the assets are updated (including the edge case that the buying and
         // selling assets are swapped).
         auto header = ltx.loadHeader();
-        if (header.current().ledgerVersion >= 10)
+        if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                      ProtocolVersion::V_10))
         {
             releaseLiabilities(ltx, header, sellSheepOffer);
         }
@@ -272,7 +276,8 @@ ManageOfferOpFrameBase::doApply(AbstractLedgerTxn& ltxOuter)
         flags = passive ? PASSIVE_FLAG : 0;
 
         auto header = ltx.loadHeader();
-        if (header.current().ledgerVersion >= 14)
+        if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                      ProtocolVersion::V_14))
         {
             // WARNING: no offer is actually created here. Instead, we are just
             // establishing the numSubEntries and sponsorship changes.
@@ -327,10 +332,11 @@ ManageOfferOpFrameBase::doApply(AbstractLedgerTxn& ltxOuter)
         }
 
         int64_t maxOffersToCross = INT64_MAX;
-        if (ltx.loadHeader().current().ledgerVersion >=
-            FIRST_PROTOCOL_SUPPORTING_OPERATION_LIMITS)
+        if (protocolVersionStartsFrom(
+                ltx.loadHeader().current().ledgerVersion,
+                FIRST_PROTOCOL_SUPPORTING_OPERATION_LIMITS))
         {
-            maxOffersToCross = MAX_OFFERS_TO_CROSS;
+            maxOffersToCross = getMaxOffersToCross();
         }
 
         int64_t sheepSent, wheatReceived;
@@ -345,17 +351,17 @@ ManageOfferOpFrameBase::doApply(AbstractLedgerTxn& ltxOuter)
                 if ((passive && (o.price >= maxWheatPrice)) ||
                     (o.price > maxWheatPrice))
                 {
-                    return OfferFilterResult::eStop;
+                    return OfferFilterResult::eStopBadPrice;
                 }
                 if (o.sellerID == getSourceID())
                 {
                     // we are crossing our own offer
-                    setResultCrossSelf();
-                    return OfferFilterResult::eStop;
+                    return OfferFilterResult::eStopCrossSelf;
                 }
                 return OfferFilterResult::eKeep;
             },
             offerTrail, maxOffersToCross);
+
         releaseAssertOrThrow(sheepSent >= 0);
 
         bool sheepStays;
@@ -367,13 +373,12 @@ ManageOfferOpFrameBase::doApply(AbstractLedgerTxn& ltxOuter)
         case ConvertResult::ePartial:
             sheepStays = true;
             break;
-        case ConvertResult::eFilterStop:
-            if (!isResultSuccess())
-            {
-                return false;
-            }
+        case ConvertResult::eFilterStopBadPrice:
             sheepStays = true;
             break;
+        case ConvertResult::eFilterStopCrossSelf:
+            setResultCrossSelf();
+            return false;
         case ConvertResult::eCrossedTooMany:
             mResult.code(opEXCEEDED_WORK_LIMIT);
             return false;
@@ -429,7 +434,8 @@ ManageOfferOpFrameBase::doApply(AbstractLedgerTxn& ltxOuter)
             }
         }
 
-        if (header.current().ledgerVersion >= 10)
+        if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                      ProtocolVersion::V_10))
         {
             if (sheepStays)
             {
@@ -465,7 +471,8 @@ ManageOfferOpFrameBase::doApply(AbstractLedgerTxn& ltxOuter)
         auto newOffer = buildOffer(amount, flags, extension);
         if (creatingNewOffer)
         {
-            if (header.current().ledgerVersion < 14)
+            if (protocolVersionIsBefore(header.current().ledgerVersion,
+                                        ProtocolVersion::V_14))
             {
                 // make sure we don't allow us to add offers when we don't have
                 // the minbalance (should never happen at this stage in v9+)
@@ -507,7 +514,8 @@ ManageOfferOpFrameBase::doApply(AbstractLedgerTxn& ltxOuter)
         getSuccessResult().offer.offer() =
             sellSheepOffer.current().data.offer();
 
-        if (header.current().ledgerVersion >= 10)
+        if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                      ProtocolVersion::V_10))
         {
             acquireLiabilities(ltx, header, sellSheepOffer);
         }
@@ -516,7 +524,9 @@ ManageOfferOpFrameBase::doApply(AbstractLedgerTxn& ltxOuter)
     {
         getSuccessResult().offer.effect(MANAGE_OFFER_DELETED);
 
-        if (!creatingNewOffer || header.current().ledgerVersion >= 14)
+        if (!creatingNewOffer ||
+            protocolVersionStartsFrom(header.current().ledgerVersion,
+                                      ProtocolVersion::V_14))
         {
             auto sourceAccount = loadSourceAccount(ltx, header);
             auto le = buildOffer(0, 0, extension);
@@ -577,12 +587,12 @@ ManageOfferOpFrameBase::doCheckValid(uint32_t ledgerVersion)
 
     if (mOfferID == 0 && isDeleteOffer())
     {
-        if (ledgerVersion >= 11)
+        if (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_11))
         {
             setResultMalformed();
             return false;
         }
-        else if (ledgerVersion >= 3)
+        else if (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_3))
         {
             setResultNotFound();
             return false;
@@ -590,7 +600,8 @@ ManageOfferOpFrameBase::doCheckValid(uint32_t ledgerVersion)
         // Note: This was not invalid before version 3
     }
 
-    if (ledgerVersion >= 15 && mOfferID < 0)
+    if (protocolVersionStartsFrom(ledgerVersion, ProtocolVersion::V_15) &&
+        mOfferID < 0)
     {
         setResultMalformed();
         return false;

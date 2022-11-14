@@ -14,6 +14,7 @@
 #include "main/Application.h"
 #include "main/ApplicationUtils.h"
 #include "main/Config.h"
+#include "main/Diagnostics.h"
 #include "main/ErrorMessages.h"
 #include "main/PersistentState.h"
 #include "main/StellarCoreVersion.h"
@@ -218,7 +219,7 @@ compactParser(bool& compact)
 clara::Opt
 base64Parser(bool& base64)
 {
-    return clara::Opt{base64}["--base64"]("use base64");
+    return clara::Opt{base64}["--base64"]("batch process base64 encoded input");
 }
 
 clara::Opt
@@ -274,10 +275,11 @@ configurationParser(CommandLine::ConfigOption& configOption)
 {
     return logLevelParser(configOption.mLogLevel) |
            metricsParser(configOption.mMetrics) |
-           clara::Opt{configOption.mConfigFile, "FILE-NAME"}["--conf"](
-               fmt::format("specify a config file ('{0}' for STDIN, default "
-                           "'stellar-core.cfg')",
-                           Config::STDIN_SPECIAL_NAME));
+           clara::Opt{configOption.mConfigFile,
+                      "FILE-NAME"}["--conf"](fmt::format(
+               FMT_STRING("specify a config file ('{}' for STDIN, default "
+                          "'stellar-core.cfg')"),
+               Config::STDIN_SPECIAL_NAME));
 }
 
 clara::Opt
@@ -475,10 +477,9 @@ CommandLine::ConfigOption::getConfig(bool logToFile) const
     auto configFile =
         mConfigFile.empty() ? std::string{"stellar-core.cfg"} : mConfigFile;
 
-    LOG_INFO(DEFAULT_LOG, "Config from {}", configFile);
-
     // yes you really have to do this 3 times
     Logging::setLogLevel(mLogLevel, nullptr);
+    LOG_INFO(DEFAULT_LOG, "Config from {}", configFile);
     config.load(configFile);
 
     Logging::setFmt(KeyUtils::toShortString(config.NODE_SEED.getPublicKey()));
@@ -604,6 +605,23 @@ CommandLine::writeToStream(std::string const& exeName, std::ostream& os) const
         os << row << std::endl;
     }
 }
+}
+
+int
+diagBucketStats(CommandLineArgs const& args)
+{
+    std::string bucketFile;
+    bool aggAccountStats = false;
+
+    return runWithHelp(
+        args,
+        {fileNameParser(bucketFile),
+         clara::Opt{aggAccountStats}["--aggregate-account-stats"](
+             "aggregate entries on a per account basis")},
+        [&] {
+            diagnostics::bucketStats(bucketFile, aggAccountStats);
+            return 0;
+        });
 }
 
 int
@@ -833,7 +851,6 @@ runWriteVerifiedCheckpointHashes(CommandLineArgs const& args)
             app->start();
             auto const& lm = app->getLedgerManager();
             auto const& hm = app->getHistoryManager();
-            auto const& cm = app->getCatchupManager();
             auto& io = clock.getIOContext();
             asio::io_context::work mainWork(io);
             LedgerNumHashPair authPair;
@@ -869,13 +886,6 @@ runWriteVerifiedCheckpointHashes(CommandLineArgs const& args)
                 {
                     auto const& lhe = lm.getLastClosedLedgerHeader();
                     tryCheckpoint(lhe.header.ledgerSeq, lhe.hash);
-                }
-                else if (cm.hasBufferedLedger())
-                {
-                    auto const& lcd = cm.getLastBufferedLedger();
-                    uint32_t seq = lcd.getLedgerSeq() - 1;
-                    Hash hash = lcd.getTxSet()->previousLedgerHash();
-                    tryCheckpoint(seq, hash);
                 }
             }
             if (authPair.second)
@@ -1101,7 +1111,8 @@ runPrintXdr(CommandLineArgs const& args)
     auto rawMode = false;
 
     auto fileTypeOpt = clara::Opt(fileType, "FILE-TYPE")["--filetype"](
-        "[auto|ledgerheader|meta|result|resultpair|tx|txfee]");
+        "[auto|asset|ledgerentry|ledgerheader|meta|result|resultpair|tx|"
+        "txfee]");
 
     return runWithHelp(args,
                        {fileNameParser(xdr), fileTypeOpt, base64Parser(base64),
@@ -1503,12 +1514,22 @@ runSimulateBuckets(CommandLineArgs const& args)
                 hdrIn.open(ft.localPath_nogz());
                 LedgerHeaderHistoryEntry curr;
                 // Read the last LedgerHeaderHistoryEntry to use as LCL
-                while (hdrIn && hdrIn.readOne(curr))
-                    ;
+                try
+                {
+                    while (hdrIn && hdrIn.readOne(curr))
+                        ;
+                }
+                catch (xdr::xdr_bad_message_size&)
+                {
+                    LOG_ERROR(DEFAULT_LOG,
+                              "Failed to read LedgerHeaderHistoryEntry. "
+                              "Version upgrade is likely required");
+                    return 1;
+                }
 
                 LOG_INFO(DEFAULT_LOG, "Assuming state for ledger {}",
                          curr.header.ledgerSeq);
-                app->getLedgerManager().setLastClosedLedger(curr);
+                app->getLedgerManager().setLastClosedLedger(curr, true);
                 app->getBucketManager().forgetUnreferencedBuckets();
             }
 
@@ -1608,6 +1629,8 @@ handleCommandLine(int argc, char* const* argv)
          {"verify-checkpoints", "write verified checkpoint ledger hashes",
           runWriteVerifiedCheckpointHashes},
          {"convert-id", "displays ID in all known forms", runConvertId},
+         {"diag-bucket-stats", "reports statistics on the content of a bucket",
+          diagBucketStats},
          {"dump-xdr", "dump an XDR file, for debugging", runDumpXDR},
          {"encode-asset", "Print an encoded asset in base 64 for debugging",
           runEncodeAsset},
@@ -1667,7 +1690,8 @@ handleCommandLine(int argc, char* const* argv)
     bool didDefaultToHelp = command->name() != adjustedCommandLine.first;
 
     auto exeName = "stellar-core";
-    auto commandName = fmt::format("{0} {1}", exeName, command->name());
+    auto commandName =
+        fmt::format(FMT_STRING("{0} {1}"), exeName, command->name());
     auto args = CommandLineArgs{exeName, commandName, command->description(),
                                 adjustedCommandLine.second};
     if (command->name() == "run" || command->name() == "fuzz")

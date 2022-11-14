@@ -30,16 +30,18 @@ Maintainer::start()
     {
         // compare number of ledgers deleted per maintenance cycle with actual
         // number
-        int64 ledgersPerMaintenancePeriod = bigDivide(
+        int64 ledgersPerMaintenancePeriod = bigDivideOrThrow(
             c.AUTOMATIC_MAINTENANCE_PERIOD.count(), 1,
             c.getExpectedLedgerCloseTime().count(), Rounding::ROUND_UP);
         if (c.AUTOMATIC_MAINTENANCE_COUNT <= ledgersPerMaintenancePeriod)
         {
-            LOG_WARNING(DEFAULT_LOG, "{}",
-                        fmt::format("Maintenance may not be able to keep up: "
-                                    "AUTOMATIC_MAINTENANCE_COUNT={} <= {}",
-                                    c.AUTOMATIC_MAINTENANCE_COUNT,
-                                    ledgersPerMaintenancePeriod));
+            LOG_WARNING(
+                DEFAULT_LOG, "{}",
+                fmt::format(
+                    FMT_STRING("Maintenance may not be able to keep up: "
+                               "AUTOMATIC_MAINTENANCE_COUNT={:d} <= {:d}"),
+                    c.AUTOMATIC_MAINTENANCE_COUNT,
+                    ledgersPerMaintenancePeriod));
         }
         scheduleMaintenance();
     }

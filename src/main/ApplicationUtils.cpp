@@ -35,6 +35,8 @@
 namespace stellar
 {
 
+const std::string MINIMAL_DB_NAME = "minimal.db";
+
 bool
 canRebuildInMemoryLedgerFromBuckets(uint32_t startAtLedger, uint32_t lcl)
 {
@@ -46,6 +48,14 @@ canRebuildInMemoryLedgerFromBuckets(uint32_t startAtLedger, uint32_t lcl)
     bool isGenesis = lcl == LedgerManager::GENESIS_LEDGER_SEQ;
     return !isGenesis && startAtLedger >= lcl &&
            startAtLedger - lcl <= RESTORE_STATE_LEDGER_WINDOW;
+}
+
+std::filesystem::path
+minimalDbPath(Config const& cfg)
+{
+    std::filesystem::path dpath(cfg.BUCKET_DIR_PATH);
+    dpath /= MINIMAL_DB_NAME;
+    return dpath;
 }
 
 void
@@ -64,12 +74,13 @@ setupMinimalDBForInMemoryMode(Config const& cfg, uint32_t startAtLedger)
 
     auto cfgToCheckDB = cfg;
     cfgToCheckDB.METADATA_OUTPUT_STREAM = "";
-    try
+
+    if (std::filesystem::exists(minimalDbPath(cfg)))
     {
         app = Application::create(clock, cfgToCheckDB, /* newDB */ false);
         found = true;
     }
-    catch (std::runtime_error const&)
+    else
     {
         LOG_INFO(DEFAULT_LOG, "Minimal database not found, creating one...");
         app = Application::create(clock, cfgToCheckDB, /* newDB */ true);
@@ -84,11 +95,23 @@ setupMinimalDBForInMemoryMode(Config const& cfg, uint32_t startAtLedger)
     if (found)
     {
         LOG_INFO(DEFAULT_LOG, "Found the existing minimal database");
-        app->getLedgerManager().loadLastKnownLedger(nullptr);
-        auto lcl = app->getLedgerManager().getLastClosedLedgerNum();
-        LOG_INFO(DEFAULT_LOG, "Current in-memory state, got LCL: {}", lcl);
 
-        if (!canRebuildInMemoryLedgerFromBuckets(startAtLedger, lcl))
+        // DB state might be set to 0 if core previously exited while rebuilding
+        // state. In this case, we want to rebuild the DB from scratch
+        bool rebuildDB =
+            app->getLedgerManager().getLastClosedLedgerHAS().currentLedger <
+            LedgerManager::GENESIS_LEDGER_SEQ;
+
+        if (!rebuildDB)
+        {
+            app->getLedgerManager().loadLastKnownLedger(nullptr);
+            auto lcl = app->getLedgerManager().getLastClosedLedgerNum();
+            LOG_INFO(DEFAULT_LOG, "Current in-memory state, got LCL: {}", lcl);
+            rebuildDB =
+                !canRebuildInMemoryLedgerFromBuckets(startAtLedger, lcl);
+        }
+
+        if (rebuildDB)
         {
             LOG_INFO(DEFAULT_LOG, "Cannot restore the in-memory state, "
                                   "rebuilding the state from scratch");
@@ -144,17 +167,39 @@ setupApp(Config& cfg, VirtualClock& clock, uint32_t startAtLedger,
                           startAtHash, lclHashStr);
                 return nullptr;
             }
-            if (!applyBucketsForLCL(*app))
+
+            auto has = app->getLedgerManager().getLastClosedLedgerHAS();
+
+            // Collect bucket references to pass to catchup _before_ starting
+            // the app, which may trigger garbage collection
+            std::set<std::shared_ptr<Bucket>> retained;
+            for (auto const& b : has.allBuckets())
             {
-                return nullptr;
+                auto bPtr =
+                    app->getBucketManager().getBucketByHash(hexToBin256(b));
+                releaseAssert(bPtr);
+                retained.insert(bPtr);
             }
+
+            // Start the app with LCL set to 0
+            app->getLedgerManager().setupInMemoryStateRebuild();
+            app->start();
+
+            // Set Herder to track the actual LCL
+            app->getHerder().setTrackingSCPState(lcl.header.ledgerSeq,
+                                                 lcl.header.scpValue, true);
+
+            // Schedule the catchup work that will rebuild state
+            auto cc = CatchupConfiguration(has, lcl);
+            app->getLedgerManager().startCatchup(cc, /* archive */ nullptr,
+                                                 retained);
         }
         else
         {
             LedgerNumHashPair pair;
             pair.first = startAtLedger;
             pair.second = std::optional<Hash>(hexToBin256(startAtHash));
-            auto mode = CatchupConfiguration::Mode::OFFLINE_COMPLETE;
+            auto mode = CatchupConfiguration::Mode::OFFLINE_BASIC;
             Json::Value catchupInfo;
             int res =
                 catchup(app, CatchupConfiguration{pair, 0, mode}, catchupInfo,
@@ -194,19 +239,11 @@ runApp(Application::pointer app)
         return 1;
     }
 
-    try
+    auto& io = app->getClock().getIOContext();
+    asio::io_context::work mainWork(io);
+    while (!io.stopped())
     {
-        auto& io = app->getClock().getIOContext();
-        asio::io_context::work mainWork(io);
-        while (!io.stopped())
-        {
-            app->getClock().crank();
-        }
-    }
-    catch (std::exception const& e)
-    {
-        LOG_FATAL(DEFAULT_LOG, "Got an exception: {}", e.what());
-        throw; // propagate exception (core dump, etc)
+        app->getClock().crank();
     }
     return 0;
 }
@@ -219,7 +256,7 @@ applyBucketsForLCL(Application& app,
     auto lclHash =
         app.getPersistentState().getState(PersistentState::kLastClosedLedger);
 
-    auto maxProtocolVersion = Config::CURRENT_LEDGER_PROTOCOL_VERSION;
+    auto maxProtocolVersion = app.getConfig().LEDGER_PROTOCOL_VERSION;
     auto currentLedger =
         LedgerHeaderUtils::loadByHash(app.getDatabase(), hexToBin256(lclHash));
     if (currentLedger)
@@ -565,7 +602,7 @@ catchup(Application::pointer app, CatchupConfiguration cc,
 
     try
     {
-        app->getLedgerManager().startCatchup(cc, archive);
+        app->getLedgerManager().startCatchup(cc, archive, {});
     }
     catch (std::invalid_argument const&)
     {
@@ -662,6 +699,7 @@ publish(Application::pointer app)
 std::string
 minimalDBForInMemoryMode(Config const& cfg)
 {
-    return fmt::format("sqlite3://{}/minimal.db", cfg.BUCKET_DIR_PATH);
+    return fmt::format(FMT_STRING("sqlite3://{}"),
+                       minimalDbPath(cfg).generic_string());
 }
 }

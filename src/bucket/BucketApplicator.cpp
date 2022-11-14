@@ -5,6 +5,7 @@
 #include "util/asio.h"
 #include "bucket/BucketApplicator.h"
 #include "bucket/Bucket.h"
+#include "bucket/BucketList.h"
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnEntry.h"
 #include "main/Application.h"
@@ -17,10 +18,14 @@ namespace stellar
 
 BucketApplicator::BucketApplicator(Application& app,
                                    uint32_t maxProtocolVersion,
-                                   std::shared_ptr<const Bucket> bucket,
+                                   uint32_t minProtocolVersionSeen,
+                                   uint32_t level,
+                                   std::shared_ptr<Bucket const> bucket,
                                    std::function<bool(LedgerEntryType)> filter)
     : mApp(app)
     , mMaxProtocolVersion(maxProtocolVersion)
+    , mMinProtocolVersionSeen(minProtocolVersionSeen)
+    , mLevel(level)
     , mBucketIter(bucket)
     , mEntryTypeFilter(filter)
 {
@@ -28,7 +33,8 @@ BucketApplicator::BucketApplicator(Application& app,
     if (protocolVersion > mMaxProtocolVersion)
     {
         throw std::runtime_error(fmt::format(
-            "bucket protocol version {} exceeds maxProtocolVersion {}",
+            FMT_STRING(
+                "bucket protocol version {:d} exceeds maxProtocolVersion {:d}"),
             protocolVersion, mMaxProtocolVersion));
     }
 }
@@ -73,7 +79,24 @@ BucketApplicator::advance(BucketApplicator::Counters& counters)
     size_t count = 0;
 
     auto& root = mApp.getLedgerTxnRoot();
-    LedgerTxn ltx(root, false);
+    AbstractLedgerTxn* ltx;
+    std::unique_ptr<LedgerTxn> innerLtx;
+
+    // when running in memory mode, make changes to the in memory ledger
+    // directly instead of creating a temporary inner LedgerTxn
+    // as "advance" commits changes during each step this does not introduce any
+    // new failure mode
+    if (mApp.getConfig().MODE_USES_IN_MEMORY_LEDGER)
+    {
+        ltx = static_cast<AbstractLedgerTxn*>(&root);
+    }
+    else
+    {
+        innerLtx = std::make_unique<LedgerTxn>(root, false);
+        ltx = innerLtx.get();
+        ltx->prepareNewObjects(LEDGER_ENTRY_BATCH_COMMIT_SIZE);
+    }
+
     for (; mBucketIter; ++mBucketIter)
     {
         BucketEntry const& e = *mBucketIter;
@@ -85,20 +108,75 @@ BucketApplicator::advance(BucketApplicator::Counters& counters)
 
             if (e.type() == LIVEENTRY || e.type() == INITENTRY)
             {
-                ltx.createOrUpdateWithoutLoading(e.liveEntry());
+                // The last level can have live entries, but at that point we
+                // know that they are actually init entries because the earliest
+                // state of all entries is init, so we mark them as such here
+                if (mLevel == BucketList::kNumLevels - 1 &&
+                    e.type() == LIVEENTRY)
+                {
+                    ltx->createWithoutLoading(e.liveEntry());
+                }
+                else if (
+                    protocolVersionIsBefore(
+                        mMinProtocolVersionSeen,
+                        Bucket::
+                            FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY))
+                {
+                    // Prior to protocol 11, INITENTRY didn't exist, so we need
+                    // to check ltx to see if this is an update or a create
+                    auto key = InternalLedgerEntry(e.liveEntry()).toKey();
+                    if (ltx->getNewestVersion(key))
+                    {
+                        ltx->updateWithoutLoading(e.liveEntry());
+                    }
+                    else
+                    {
+                        ltx->createWithoutLoading(e.liveEntry());
+                    }
+                }
+                else
+                {
+                    if (e.type() == LIVEENTRY)
+                    {
+                        ltx->updateWithoutLoading(e.liveEntry());
+                    }
+                    else
+                    {
+                        ltx->createWithoutLoading(e.liveEntry());
+                    }
+                }
             }
             else
             {
-                ltx.eraseWithoutLoading(e.deadEntry());
+                if (protocolVersionIsBefore(
+                        mMinProtocolVersionSeen,
+                        Bucket::
+                            FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY))
+                {
+                    // Prior to protocol 11, DEAD entries could exist
+                    // without LIVE entries in between
+                    if (ltx->getNewestVersion(e.deadEntry()))
+                    {
+                        ltx->eraseWithoutLoading(e.deadEntry());
+                    }
+                }
+                else
+                {
+                    ltx->eraseWithoutLoading(e.deadEntry());
+                }
             }
 
             if ((++count > LEDGER_ENTRY_BATCH_COMMIT_SIZE))
             {
+                ++mBucketIter;
                 break;
             }
         }
     }
-    ltx.commit();
+    if (innerLtx)
+    {
+        ltx->commit();
+    }
 
     mCount += count;
     return count;

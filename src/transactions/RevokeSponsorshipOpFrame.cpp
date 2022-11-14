@@ -8,6 +8,7 @@
 #include "ledger/LedgerTxnEntry.h"
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
 
 namespace stellar
 {
@@ -21,9 +22,10 @@ RevokeSponsorshipOpFrame::RevokeSponsorshipOpFrame(Operation const& op,
 }
 
 bool
-RevokeSponsorshipOpFrame::isVersionSupported(uint32_t protocolVersion) const
+RevokeSponsorshipOpFrame::isOpSupported(LedgerHeader const& header) const
 {
-    return protocolVersion >= 14;
+    return protocolVersionStartsFrom(header.ledgerVersion,
+                                     ProtocolVersion::V_14);
 }
 
 static AccountID const&
@@ -419,7 +421,7 @@ RevokeSponsorshipOpFrame::doCheckValid(uint32_t ledgerVersion)
         case DATA:
         {
             auto const& name = lk.data().dataName;
-            if ((name.size() < 1) || !isString32Valid(name))
+            if ((name.size() < 1) || !isStringValid(name))
             {
                 innerResult().code(REVOKE_SPONSORSHIP_MALFORMED);
                 return false;

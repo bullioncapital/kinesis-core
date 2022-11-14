@@ -15,7 +15,7 @@ class ManageBuyOfferOpFrame : public ManageOfferOpFrameBase
 {
     ManageBuyOfferOp const& mManageBuyOffer;
 
-    bool isVersionSupported(uint32_t protocolVersion) const override;
+    bool isOpSupported(LedgerHeader const& header) const override;
 
     ManageBuyOfferResult&
     innerResult()
@@ -39,7 +39,6 @@ class ManageBuyOfferOpFrame : public ManageOfferOpFrameBase
     void getExchangeParametersBeforeV10(int64_t& maxSheepSend,
                                         int64_t& maxWheatReceive) override;
 
-    bool isResultSuccess() override;
     ManageOfferSuccessResult& getSuccessResult() override;
 
     void setResultSuccess() override;

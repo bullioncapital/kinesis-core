@@ -10,20 +10,44 @@
 #include "catchup/CatchupManager.h"
 #include "crypto/Hex.h"
 #include "crypto/SecretKey.h"
-#include "history/HistoryArchive.h"
 #include "historywork/Progress.h"
 #include "invariant/InvariantManager.h"
+#include "ledger/LedgerManager.h"
 #include "ledger/LedgerTxn.h"
 #include "main/Application.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
 #include <Tracy.hpp>
 #include <fmt/format.h>
-#include <medida/meter.h>
-#include <medida/metrics_registry.h>
 
 namespace stellar
 {
+
+class TempLedgerVersionSetter : NonMovableOrCopyable
+{
+    Application& mApp;
+    uint32 mOldVersion;
+
+    void
+    setVersion(uint32 ver)
+    {
+        LedgerTxn ltx(mApp.getLedgerTxnRoot());
+        auto header = ltx.loadHeader();
+        mOldVersion = header.current().ledgerVersion;
+        header.current().ledgerVersion = ver;
+        ltx.commit();
+    }
+
+  public:
+    TempLedgerVersionSetter(Application& app, uint32 newVersion) : mApp(app)
+    {
+        setVersion(newVersion);
+    }
+    ~TempLedgerVersionSetter()
+    {
+        setVersion(mOldVersion);
+    }
+};
 
 ApplyBucketsWork::ApplyBucketsWork(
     Application& app,
@@ -38,12 +62,6 @@ ApplyBucketsWork::ApplyBucketsWork(
     , mTotalSize(0)
     , mLevel(BucketList::kNumLevels - 1)
     , mMaxProtocolVersion(maxProtocolVersion)
-    , mBucketApplyStart(app.getMetrics().NewMeter(
-          {"history", "bucket-apply", "start"}, "event"))
-    , mBucketApplySuccess(app.getMetrics().NewMeter(
-          {"history", "bucket-apply", "success"}, "event"))
-    , mBucketApplyFailure(app.getMetrics().NewMeter(
-          {"history", "bucket-apply", "failure"}, "event"))
     , mCounters(app.getClock().now())
 {
 }
@@ -87,6 +105,7 @@ ApplyBucketsWork::onReset()
     mAppliedSize = 0;
     mLastAppliedSizeMb = 0;
     mLastPos = 0;
+    mMinProtocolVersionSeen = UINT32_MAX;
 
     if (!isAborting())
     {
@@ -95,15 +114,18 @@ ApplyBucketsWork::onReset()
         // when applying buckets from genesis the root account already exists.
         if (mEntryTypeFilter(ACCOUNT))
         {
-            SecretKey skey = SecretKey::fromSeed(mApp.getNetworkID());
-
-            LedgerTxn ltx(mApp.getLedgerTxnRoot());
-            auto rootAcc = loadAccount(ltx, skey.getPublicKey());
-            if (rootAcc)
+            TempLedgerVersionSetter tlvs(mApp, mMaxProtocolVersion);
             {
-                rootAcc.erase();
+                SecretKey skey = SecretKey::fromSeed(mApp.getNetworkID());
+
+                LedgerTxn ltx(mApp.getLedgerTxnRoot());
+                auto rootAcc = loadAccount(ltx, skey.getPublicKey());
+                if (rootAcc)
+                {
+                    rootAcc.erase();
+                }
+                ltx.commit();
             }
-            ltx.commit();
         }
 
         auto addBucket = [this](std::shared_ptr<Bucket const> const& bucket) {
@@ -119,10 +141,20 @@ ApplyBucketsWork::onReset()
             addBucket(getBucket(hsb.snap));
             addBucket(getBucket(hsb.curr));
         }
+        // estimate the number of ledger entries contained in those buckets
+        // use accounts as a rough approximator as to overestimate a bit
+        // (default BucketEntry contains a default AccountEntry)
+        size_t const estimatedLedgerEntrySize =
+            xdr::xdr_traits<BucketEntry>::serial_size(BucketEntry{});
+        size_t const totalLECount = mTotalSize / estimatedLedgerEntrySize;
+        CLOG_INFO(History, "ApplyBuckets estimated {} ledger entries",
+                  totalLECount);
+        mApp.getLedgerTxnRoot().prepareNewObjects(totalLECount);
     }
 
     mLevel = BucketList::kNumLevels - 1;
     mApplying = false;
+    mDelayChecked = false;
 
     mSnapBucket.reset();
     mCurrBucket.reset();
@@ -146,22 +178,26 @@ ApplyBucketsWork::startLevel()
     if (mApplying || applySnap)
     {
         mSnapBucket = getBucket(i.snap);
+        mMinProtocolVersionSeen = std::min(
+            mMinProtocolVersionSeen, Bucket::getBucketVersion(mSnapBucket));
         mSnapApplicator = std::make_unique<BucketApplicator>(
-            mApp, mMaxProtocolVersion, mSnapBucket, mEntryTypeFilter);
+            mApp, mMaxProtocolVersion, mMinProtocolVersionSeen, mLevel,
+            mSnapBucket, mEntryTypeFilter);
         CLOG_DEBUG(History, "ApplyBuckets : starting level[{}].snap = {}",
                    mLevel, i.snap);
         mApplying = true;
-        mBucketApplyStart.Mark();
     }
     if (mApplying || applyCurr)
     {
         mCurrBucket = getBucket(i.curr);
+        mMinProtocolVersionSeen = std::min(
+            mMinProtocolVersionSeen, Bucket::getBucketVersion(mCurrBucket));
         mCurrApplicator = std::make_unique<BucketApplicator>(
-            mApp, mMaxProtocolVersion, mCurrBucket, mEntryTypeFilter);
+            mApp, mMaxProtocolVersion, mMinProtocolVersionSeen, mLevel,
+            mCurrBucket, mEntryTypeFilter);
         CLOG_DEBUG(History, "ApplyBuckets : starting level[{}].curr = {}",
                    mLevel, i.curr);
         mApplying = true;
-        mBucketApplyStart.Mark();
     }
 }
 
@@ -169,6 +205,20 @@ BasicWork::State
 ApplyBucketsWork::onRun()
 {
     ZoneScoped;
+
+    if (mApp.getLedgerManager().rebuildingInMemoryState() && !mDelayChecked)
+    {
+        mDelayChecked = true;
+        auto delay =
+            mApp.getConfig().ARTIFICIALLY_DELAY_BUCKET_APPLICATION_FOR_TESTING;
+        if (delay != std::chrono::seconds::zero())
+        {
+            CLOG_INFO(History, "Delay bucket application by {} seconds",
+                      delay.count());
+            setupWaitingCallback(delay);
+            return State::WORK_WAITING;
+        }
+    }
 
     // Check if we're at the beginning of the new level
     if (isLevelComplete())
@@ -184,6 +234,7 @@ ApplyBucketsWork::onRun()
     //    if there is nothing to be applied.
     if (mSnapApplicator)
     {
+        TempLedgerVersionSetter tlvs(mApp, mMaxProtocolVersion);
         if (*mSnapApplicator)
         {
             advance("snap", *mSnapApplicator);
@@ -194,10 +245,11 @@ ApplyBucketsWork::onRun()
             mEntryTypeFilter);
         mSnapApplicator.reset();
         mSnapBucket.reset();
-        mBucketApplySuccess.Mark();
+        mApp.getCatchupManager().bucketsApplied();
     }
     if (mCurrApplicator)
     {
+        TempLedgerVersionSetter tlvs(mApp, mMaxProtocolVersion);
         if (*mCurrApplicator)
         {
             advance("curr", *mCurrApplicator);
@@ -208,7 +260,7 @@ ApplyBucketsWork::onRun()
             mEntryTypeFilter);
         mCurrApplicator.reset();
         mCurrBucket.reset();
-        mBucketApplySuccess.Mark();
+        mApp.getCatchupManager().bucketsApplied();
     }
 
     if (mLevel != 0)
@@ -273,22 +325,12 @@ ApplyBucketsWork::isLevelComplete()
     return !(mApplying) || !(mSnapApplicator || mCurrApplicator);
 }
 
-void
-ApplyBucketsWork::onFailureRaise()
-{
-    mBucketApplyFailure.Mark();
-}
-
-void
-ApplyBucketsWork::onFailureRetry()
-{
-    mBucketApplyFailure.Mark();
-}
-
 std::string
 ApplyBucketsWork::getStatus() const
 {
-    return fmt::format("Applying buckets {}%. Currently on level {}",
-                       (100 * mAppliedSize / mTotalSize), mLevel);
+    auto size = mTotalSize == 0 ? 0 : (100 * mAppliedSize / mTotalSize);
+    return fmt::format(
+        FMT_STRING("Applying buckets {:d}%. Currently on level {:d}"), size,
+        mLevel);
 }
 }

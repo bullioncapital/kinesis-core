@@ -1,49 +1,48 @@
-ARG STELLAR_CORE_IMAGE=stellar/stellar-core:17
-ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:3c1361f
+ARG DISTRO=focal
+ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:latest
 
-# Build stage, includes everything needed to build.
+##########################################################################################################
+# # Build stage, includes everything needed to build.
 FROM ${CORE_BUILDER_IMAGE} as buildstage
 ENV DEBIAN_FRONTEND=noninteractive
 
-ENV USERNAME=postgres
-RUN echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
-    && chmod 0440 /etc/sudoers.d/$USERNAME
+ARG NPROC=2
+ARG BUILD="enable-tests"
 
-# Set up locale
-RUN echo "LC_ALL=en_US.UTF-8" >> /etc/environment && \
-    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
-    echo "LANG=en_US.UTF-8" > /etc/locale.conf && \
-    locale-gen "en_US.UTF-8"
-
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
-
-USER $USERNAME
 COPY . /stellar-core
+
 WORKDIR /stellar-core
-
-RUN sudo chown -R $USERNAME /stellar-core
 RUN git submodule init && git submodule update
+RUN  ./docker/ci-kinesis "${BUILD}" ${NPROC}
 
-ENV CC=clang-10
-ENV CXX=clang++-10
-ENV CFLAGS='-O3 -g0 -fno-omit-frame-pointer'
-ENV CXXFLAGS='-w -O3 -g0 -D_KINESIS'
-ENV CONFIGURE_FLAGS=''
-
-RUN ./autogen.sh
-RUN ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
-RUN make -j2
-RUN sudo make install
-
-WORKDIR /stellar-core/src
-
+##########################################################################################################
 # replace stellar-core
-FROM ${STELLAR_CORE_IMAGE}
+FROM ubuntu:${DISTRO}
 
-RUN apt-get update && apt-get upgrade -y
-# utils
-RUN apt-get install jq -y && apt-get autoclean
+EXPOSE 11625
+EXPOSE 11626
+
+VOLUME /data
+VOLUME /postgresql-unix-sockets
+
+ADD docker/setup /setup.sh
+RUN ./setup.sh
+
+# We need to repeat ARG here to make it available inside build context
+# See https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
+ARG DISTRO=focal
+ARG STELLAR_CORE_VERSION=18.5.0-877.d387c6a71.focal
+
+#install stellar-core
+RUN wget -qO - https://apt.stellar.org/SDF.asc | apt-key add -
+RUN echo "deb https://apt.stellar.org ${DISTRO} unstable" | tee -a /etc/apt/sources.list.d/SDF-unstable.list
+RUN apt-get update && apt-get install -y stellar-core=${STELLAR_CORE_VERSION}
+
+WORKDIR "/etc/stellar"
+
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install jq -y && apt-get autoclean
 
 COPY --from=buildstage /usr/local/bin/stellar-core /usr/bin/stellar-core
+
+ENTRYPOINT ["stellar-core"]

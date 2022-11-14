@@ -12,6 +12,7 @@
 #include "transactions/simulation/TxSimManageBuyOfferOpFrame.h"
 #include "transactions/simulation/TxSimManageSellOfferOpFrame.h"
 #include "transactions/simulation/TxSimMergeOpFrame.h"
+#include "util/ProtocolVersion.h"
 
 namespace stellar
 {
@@ -38,6 +39,12 @@ TxSimTransactionFrame::makeOperation(Operation const& op, OperationResult& res,
         mSimulationResult.result.code() == txFAILED)
     {
         resultFromArchive = mSimulationResult.result.results()[index];
+    }
+    else if (mSimulationResult.result.code() == txFEE_BUMP_INNER_SUCCESS ||
+             mSimulationResult.result.code() == txFEE_BUMP_INNER_FAILED)
+    {
+        resultFromArchive = mSimulationResult.result.innerResultPair()
+                                .result.result.results()[index];
     }
 
     switch (ops[index].body.type())
@@ -118,7 +125,8 @@ TxSimTransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx, int64_t baseFee)
         header.current().feePool += fee;
     }
     // in v10 we update sequence numbers during apply
-    if (header.current().ledgerVersion <= 9)
+    if (protocolVersionIsBefore(header.current().ledgerVersion,
+                                ProtocolVersion::V_10))
     {
         acc.seqNum = getSeqNum();
     }
@@ -128,7 +136,8 @@ void
 TxSimTransactionFrame::processSeqNum(AbstractLedgerTxn& ltx)
 {
     auto header = ltx.loadHeader();
-    if (header.current().ledgerVersion >= 10)
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_10))
     {
         auto sourceAccount = loadSourceAccount(ltx, header);
         sourceAccount.current().data.account().seqNum = getSeqNum();

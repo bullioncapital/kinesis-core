@@ -7,6 +7,7 @@
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnEntry.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
 
 namespace stellar
 {
@@ -20,10 +21,11 @@ BeginSponsoringFutureReservesOpFrame::BeginSponsoringFutureReservesOpFrame(
 }
 
 bool
-BeginSponsoringFutureReservesOpFrame::isVersionSupported(
-    uint32_t protocolVersion) const
+BeginSponsoringFutureReservesOpFrame::isOpSupported(
+    LedgerHeader const& header) const
 {
-    return protocolVersion >= 14;
+    return protocolVersionStartsFrom(header.ledgerVersion,
+                                     ProtocolVersion::V_14);
 }
 
 void

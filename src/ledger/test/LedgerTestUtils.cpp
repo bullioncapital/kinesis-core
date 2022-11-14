@@ -190,8 +190,25 @@ makeValid(TrustLineEntry& tl)
     }
     tl.limit = std::abs(tl.limit);
     clampLow<int64>(1, tl.limit);
-    tl.asset.type(ASSET_TYPE_CREDIT_ALPHANUM4);
-    strToAssetCode(tl.asset.alphaNum4().assetCode, "USD");
+
+    switch (tl.asset.type())
+    {
+    case ASSET_TYPE_NATIVE:
+        // ASSET_TYPE_NATIVE is not a valid trustline asset type, so change the
+        // type to a valid one
+        tl.asset.type(ASSET_TYPE_CREDIT_ALPHANUM4);
+        strToAssetCode(tl.asset.alphaNum4().assetCode, "USD");
+        break;
+    case ASSET_TYPE_CREDIT_ALPHANUM4:
+        strToAssetCode(tl.asset.alphaNum4().assetCode, "USD");
+        break;
+    case ASSET_TYPE_CREDIT_ALPHANUM12:
+        strToAssetCode(tl.asset.alphaNum12().assetCode, "USD12");
+        break;
+    default:
+        break;
+    }
+
     clampHigh<int64_t>(tl.limit, tl.balance);
     tl.flags = tl.flags & MASK_TRUSTLINE_FLAGS_V17;
 
@@ -247,10 +264,6 @@ makeValid(ClaimableBalanceEntry& c)
     c.asset.type(ASSET_TYPE_CREDIT_ALPHANUM4);
     strToAssetCode(c.asset.alphaNum4().assetCode, "CAD");
 
-    if (Config::CURRENT_LEDGER_PROTOCOL_VERSION < 17)
-    {
-        c.ext.v(0);
-    }
     if (c.ext.v() == 1)
     {
         c.ext.v1().flags = MASK_CLAIMABLE_BALANCE_FLAGS;
@@ -430,6 +443,19 @@ generateValidAccountEntries(size_t n)
 {
     static auto vecgen = autocheck::list_of(validAccountEntryGenerator);
     return vecgen(n);
+}
+
+TrustLineEntry
+generateNonPoolShareValidTrustLineEntry(size_t b)
+{
+    auto tl = validTrustLineEntryGenerator(b);
+    if (tl.asset.type() == ASSET_TYPE_POOL_SHARE)
+    {
+        tl.asset.type(ASSET_TYPE_CREDIT_ALPHANUM4);
+        strToAssetCode(tl.asset.alphaNum4().assetCode, "USD");
+    }
+
+    return tl;
 }
 
 TrustLineEntry

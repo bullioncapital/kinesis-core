@@ -3,7 +3,9 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "lib/catch.hpp"
+#include "lib/util/stdrandom.h"
 #include "medida/histogram.h"
+#include "medida/stats/ckms_sample.h"
 #include "medida/stats/sliding_window_sample.h"
 #include "medida/stats/snapshot.h"
 #include "util/Logging.h"
@@ -13,6 +15,7 @@
 #include <iostream>
 #include <random>
 #include <sstream>
+#include <thread>
 
 // These tests just check that medida's math is roughly sensible.
 namespace
@@ -20,7 +23,7 @@ namespace
 
 using uniform_dbl = std::uniform_real_distribution<double>;
 using gamma_dbl = std::gamma_distribution<double>;
-using uniform_u64 = std::uniform_int_distribution<uint64_t>;
+using uniform_u64 = stellar::uniform_int_distribution<uint64_t>;
 
 // how much data to keep in memory when comparing datasets
 static std::chrono::seconds const sampleCutoff(60 * 5);
@@ -526,4 +529,79 @@ TEST_CASE("sums of nanoseconds do not overflow", "[medida_math]")
         REQUIRE(hist.mean() >= 0);
         REQUIRE(hist.std_dev() >= 0);
     }
+}
+
+template <typename Dist, typename... Args>
+void
+testCKMSSample(int const count, Args... args)
+{
+    auto const windowSize = std::chrono::seconds(1);
+    medida::Histogram hist{medida::SamplingInterface::kCKMS, windowSize};
+
+    double const error = 0.001;
+    auto const percentiles = {0.5, 0.75, 0.9, 0.99};
+
+    std::vector<int64_t> values;
+    values.reserve(count);
+    Dist dist(std::forward<Args>(args)...);
+    for (int i = 0; i < count; i++)
+    {
+        auto x = static_cast<int64_t>(dist(stellar::gRandomEngine));
+        values.push_back(x);
+        hist.Update(x);
+    }
+
+    {
+        // We haven't moved to the next time window.
+        // Therefore, all values must be 0.
+        auto s = hist.GetSnapshot();
+        for (auto const q : percentiles)
+        {
+            auto got = s.getValue(q);
+            REQUIRE(got == 0);
+        }
+    }
+
+    // There is no easy way to fast-forward time in Medida.
+    // We need to wait for 1 second so that the window with `count`
+    // samples are in the previous window, not in the current window.
+    std::this_thread::sleep_for(windowSize);
+    {
+        // Now all the samples we added are in the previous window
+        // which CKMSSample reports.
+        std::sort(values.begin(), values.end());
+        auto s = hist.GetSnapshot();
+        for (auto const q : percentiles)
+        {
+            auto lowerbound = values[int((1 - error) * q * count)];
+            auto upperbound = values[int((1 + error) * q * count)];
+            auto got = s.getValue(q);
+            REQUIRE(lowerbound <= got);
+            REQUIRE(got <= upperbound);
+        }
+    }
+
+    std::this_thread::sleep_for(windowSize);
+
+    {
+        // Now all the samples are two windows ago.
+        // In other words, they must have been thrown out.
+        auto s = hist.GetSnapshot();
+        for (auto const q : percentiles)
+        {
+            auto got = s.getValue(q);
+            REQUIRE(got == 0);
+        }
+    }
+}
+
+TEST_CASE("CKMSSample uniform distribution", "[medida_math]")
+{
+    testCKMSSample<uniform_u64>(10000, 0, 1000000000ull);
+}
+
+TEST_CASE("CKMSSample gamma distribution", "[medida_math]")
+{
+    testCKMSSample<gamma_dbl>(10000, 4, 100);
+    testCKMSSample<gamma_dbl>(20000, 20, 20);
 }

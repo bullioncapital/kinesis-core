@@ -18,11 +18,13 @@
 #include "bucket/BucketTests.h"
 #include "ledger/test/LedgerTestUtils.h"
 #include "lib/catch.hpp"
+#include "lib/util/stdrandom.h"
 #include "main/Application.h"
 #include "main/Config.h"
 #include "test/TestUtils.h"
 #include "test/test.h"
 #include "util/Math.h"
+#include "util/ProtocolVersion.h"
 #include "util/Timer.h"
 #include "xdrpp/autocheck.h"
 
@@ -241,8 +243,9 @@ TEST_CASE("bucket list shadowing pre/post proto 12", "[bucket][bucketlist]")
                     bool hasBob =
                         (curr->containsBucketIdentity(BucketEntryBob) ||
                          snap->containsBucketIdentity(BucketEntryBob));
-                    if (app->getConfig().LEDGER_PROTOCOL_VERSION <
-                            Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED ||
+                    if (protocolVersionIsBefore(
+                            app->getConfig().LEDGER_PROTOCOL_VERSION,
+                            Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED) ||
                         j > 5)
                     {
                         CHECK(!hasAlice);
@@ -387,8 +390,9 @@ TEST_CASE("bucket tombstones mutually-annihilate init entries",
             auto const& lev = bl.getLevel(k);
             auto currSz = countEntries(lev.getCurr());
             auto snapSz = countEntries(lev.getSnap());
-            if (cfg.LEDGER_PROTOCOL_VERSION >=
-                Bucket::FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY)
+            if (protocolVersionStartsFrom(
+                    cfg.LEDGER_PROTOCOL_VERSION,
+                    Bucket::FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY))
             {
                 // init/dead pairs should mutually-annihilate pretty readily as
                 // they go, empirically this test peaks at buckets around 400
@@ -465,7 +469,7 @@ TEST_CASE("single entry bubbling up", "[bucket][bucketlist][bucketbubble]")
 TEST_CASE("BucketList sizeOf and oldestLedgerIn relations",
           "[bucket][bucketlist][count]")
 {
-    std::uniform_int_distribution<uint32_t> dist;
+    stellar::uniform_int_distribution<uint32_t> dist;
     for (uint32_t i = 0; i < 1000; ++i)
     {
         for (uint32_t level = 0; level < BucketList::kNumLevels; ++level)
@@ -513,8 +517,8 @@ TEST_CASE("BucketList snap reaches steady state", "[bucket][bucketlist][count]")
 
         // Generate random ledgers above and below the split to test that
         // it was actually at steady state.
-        std::uniform_int_distribution<uint32_t> distLow(1, boundary - 1);
-        std::uniform_int_distribution<uint32_t> distHigh(boundary);
+        stellar::uniform_int_distribution<uint32_t> distLow(1, boundary - 1);
+        stellar::uniform_int_distribution<uint32_t> distHigh(boundary);
         for (uint32_t i = 0; i < 1000; ++i)
         {
             uint32_t low = distLow(gRandomEngine);
@@ -535,8 +539,8 @@ TEST_CASE("BucketList deepest curr accumulates", "[bucket][bucketlist][count]")
         [deepest](uint32_t ledger) {
             return (BucketList::sizeOfCurr(ledger, deepest) > 0);
         });
-    std::uniform_int_distribution<uint32_t> distLow(1, boundary - 1);
-    std::uniform_int_distribution<uint32_t> distHigh(boundary);
+    stellar::uniform_int_distribution<uint32_t> distLow(1, boundary - 1);
+    stellar::uniform_int_distribution<uint32_t> distHigh(boundary);
     for (uint32_t i = 0; i < 1000; ++i)
     {
         uint32_t low = distLow(gRandomEngine);

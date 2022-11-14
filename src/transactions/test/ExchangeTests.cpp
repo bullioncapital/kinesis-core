@@ -4,9 +4,9 @@
 
 #include "ledger/test/LedgerTestUtils.h"
 #include "lib/catch.hpp"
-#include "lib/util/uint128_t.h"
 #include "transactions/OfferExchange.h"
 #include "transactions/TransactionUtils.h"
+#include "util/numeric128.h"
 
 using namespace stellar;
 
@@ -964,79 +964,158 @@ TEST_CASE("Exchange with liquidity pools", "[exchange]")
         }
     };
 
+    RoundingType const send = RoundingType::PATH_PAYMENT_STRICT_SEND;
+    RoundingType const recv = RoundingType::PATH_PAYMENT_STRICT_RECEIVE;
+
     SECTION("Error conditions")
     {
-        RoundingType const send = RoundingType::PATH_PAYMENT_STRICT_SEND;
-        RoundingType const recv = RoundingType::PATH_PAYMENT_STRICT_RECEIVE;
-        REQUIRE_THROWS(validate(100, 50, 100, 50, -1, send, false, 0, 0));
-        REQUIRE_THROWS(validate(100, 50, 100, 50, -1, recv, false, 0, 0));
+        // feeBps < 0
+        REQUIRE_THROWS(
+            validate(100, 50, 100, INT64_MAX, -1, send, false, 0, 0));
+        REQUIRE_THROWS(
+            validate(100, INT64_MAX, 100, 50, -1, recv, false, 0, 0));
 
-        REQUIRE_THROWS(validate(100, 50, 100, 50, 10000, send, false, 0, 0));
-        REQUIRE_THROWS(validate(100, 50, 100, 50, 10000, recv, false, 0, 0));
+        // feeBps == maxBps
+        REQUIRE_THROWS(
+            validate(100, 50, 100, INT64_MAX, 10000, send, false, 0, 0));
+        REQUIRE_THROWS(
+            validate(100, INT64_MAX, 100, 50, 10000, recv, false, 0, 0));
 
+        // feeBps > maxBps
+        REQUIRE_THROWS(
+            validate(100, 50, 100, INT64_MAX, INT32_MAX, send, false, 0, 0));
+        REQUIRE_THROWS(
+            validate(100, INT64_MAX, 100, 50, INT32_MAX, recv, false, 0, 0));
+
+        // Strict send with bounded receive
+        REQUIRE_THROWS(
+            validate(100, 50, 100, INT64_MAX - 1, 0, send, false, 0, 0));
+        REQUIRE_THROWS(validate(100, 50, 100, 0, 0, send, false, 0, 0));
+
+        // Strict receive with bounded send
+        REQUIRE_THROWS(
+            validate(100, INT64_MAX - 1, 100, 50, 0, recv, false, 0, 0));
+        REQUIRE_THROWS(validate(100, 0, 100, 50, 0, recv, false, 0, 0));
+
+        // Not path payment
         REQUIRE_THROWS(
             validate(100, 50, 100, 50, 0, RoundingType::NORMAL, false, 0, 0));
+    }
+
+    SECTION("strict send failure cases")
+    {
+        // Sending maxSendToPool would overflow the reserve: low reserves but
+        // high maxSend
+        validate(100, INT64_MAX - 100, 100, INT64_MAX, 0, send, true,
+                 INT64_MAX - 100, 99);
+        validate(100, INT64_MAX - 99, 100, INT64_MAX, 0, send, false, 0, 0);
+
+        // Sending maxSendToPool would overflow the reserve: high reserves but
+        // low maxSend
+        validate(INT64_MAX - 100, 100, INT64_MAX - 100, INT64_MAX, 0, send,
+                 true, 100, 99);
+        validate(INT64_MAX - 99, 100, INT64_MAX - 100, INT64_MAX, 0, send,
+                 false, 0, 0);
+
+        // As far as I can tell, the hugeDivide can never fail.
+
+        // fromPool = 0
+        validate(100, 2, 100, INT64_MAX, 0, send, true, 2, 1);
+        validate(100, 1, 100, INT64_MAX, 0, send, false, 0, 0);
+    }
+
+    SECTION("strict receive failure cases")
+    {
+        // Receiving maxReceiveFromPool would deplete the reserves entirely: low
+        // reserves and low maxReceive
+        validate(100, INT64_MAX, 100, 99, 0, recv, true, 9900, 99);
+        validate(100, INT64_MAX, 100, 100, 0, recv, false, 0, 0);
+
+        // Receiving maxReceiveFromPool would deplete the reserves entirely:
+        // high reserves and high maxReceive
+        validate(100, INT64_MAX, INT64_MAX / 100, INT64_MAX / 100 - 1, 0, recv,
+                 true, INT64_MAX - 107, INT64_MAX / 100 - 1);
+        validate(100, INT64_MAX, INT64_MAX / 100, INT64_MAX / 100, 0, recv,
+                 false, 0, 0);
+
+        // If fromPool = k*(maxBps - feeBps) and reservesFromPool = fromPool + 1
+        // then
+        //     (reservesToPool * fromPool) / (maxBps - feeBps)
+        //         = k * reservesToPool
+        // so if k = 101 and reservesToPool = INT64_MAX / 100 then
+        // B / C > INT64_MAX in the hugeDivide.
+        validate(INT64_MAX / 100, INT64_MAX, 101 * 10000 + 1, 101 * 10000, 0,
+                 recv, false, 0, 0);
+
+        // If fromPool = maxBps - feeBps and reservesFromPool = fromPool + 1
+        // then
+        //      toPool = maxBps * reservesToPool
+        // so if reservesToPool = INT64_MAX / 100 then the hugeDivide overflows.
+        validate(INT64_MAX / 100, INT64_MAX, 10000 + 1, 10000, 0, recv, false,
+                 0, 0);
+
+        // Pool receives more than it has available reserves for
+        validate(INT64_MAX - 100, INT64_MAX, INT64_MAX / 2, 49, 0, recv, true,
+                 98, 49);
+        validate(INT64_MAX - 100, INT64_MAX, INT64_MAX / 2, 50, 0, recv, false,
+                 0, 0);
     }
 
     SECTION("No fees")
     {
         SECTION("Strict send")
         {
-            RoundingType const round = RoundingType::PATH_PAYMENT_STRICT_SEND;
-
             // Works exactly
-            validate(100, 100, 100, 49, 0, round, true, 100, 49);
-            validate(100, 100, 100, 50, 0, round, true, 100, 50);
-            validate(100, 100, 100, 51, 0, round, true, 100, 50);
+            validate(100, 100, 100, INT64_MAX, 0, send, true, 100, 50);
 
-            // Requires rounding
-            validate(100, 50, 100, 32, 0, round, true, 50, 32);
-            validate(100, 50, 100, 33, 0, round, true, 50, 33);
-            validate(100, 50, 100, 34, 0, round, true, 50, 33);
+            // Requires sending
+            validate(100, 50, 100, INT64_MAX, 0, send, true, 50, 33);
 
-            // Sending 0 or receiving 0
-            validate(100, 0, 100, 50, 0, round, true, 0, 0);
-            validate(100, 50, 100, 0, 0, round, true, 50, 0);
-
-            // Sending the maximum
-            validate(100, INT64_MAX - 100, 100, 98, 0, round, true,
-                     INT64_MAX - 100, 98);
-            validate(100, INT64_MAX - 100, 100, 99, 0, round, true,
-                     INT64_MAX - 100, 99);
-            validate(100, INT64_MAX - 100, 100, 100, 0, round, true,
-                     INT64_MAX - 100, 99);
+            // Sending 0
+            validate(100, 0, 100, INT64_MAX, 0, send, false, 0, 0);
 
             // Sending too much
-            validate(100, INT64_MAX - 99, 100, INT64_MAX, 0, round, false, 0,
-                     0);
+            validate(100, INT64_MAX - 99, 100, INT64_MAX, 0, send, false, 0, 0);
         }
 
         SECTION("Strict receive")
         {
-            RoundingType const round =
-                RoundingType::PATH_PAYMENT_STRICT_RECEIVE;
-
             // Works exactly
-            validate(100, 99, 100, 50, 0, round, true, 99, 50);
-            validate(100, 100, 100, 50, 0, round, true, 100, 50);
-            validate(100, 101, 100, 50, 0, round, true, 100, 50);
+            validate(100, INT64_MAX, 100, 50, 0, recv, true, 100, 50);
 
-            // Requires rounding
-            validate(100, 49, 100, 33, 0, round, true, 49, 33);
-            validate(100, 50, 100, 33, 0, round, true, 50, 33);
-            validate(100, 51, 100, 33, 0, round, true, 50, 33);
+            // Requires recving
+            validate(100, INT64_MAX, 100, 33, 0, recv, true, 50, 33);
 
-            // Sending 0 or receiving 0
-            validate(100, 0, 100, 50, 0, round, true, 0, 50);
-            validate(100, 50, 100, 0, 0, round, true, 0, 0);
-
-            // Receiving the maximum
-            validate(100, 9899, 100, 99, 0, round, true, 9899, 99);
-            validate(100, 9900, 100, 99, 0, round, true, 9900, 99);
-            validate(100, 9901, 100, 99, 0, round, true, 9900, 99);
+            // Receiving 0
+            validate(100, INT64_MAX, 100, 0, 0, recv, true, 0, 0);
 
             // Receiving too much
-            validate(100, INT64_MAX, 100, 100, 0, round, false, 0, 0);
+            validate(100, INT64_MAX, 100, 100, 0, recv, false, 0, 0);
+        }
+    }
+
+    SECTION("30 bps fee actually charges 30 bps")
+    {
+        // These test cases look weird because they actually charge 31 bps
+        // instead of 30 bps. But this is expected, because you pay fees on
+        // the fees you provided: I want to send 10000 after fees, so I send
+        // 100030.... but that doesn't work because 0.997 * 10030 = 9999.910
+        // is too low.
+
+        SECTION("Strict send")
+        {
+            // With no fee, sending 10000 would receive 10000. So to receive
+            // 1000 we need to send ceil(10000 / 0.997) = 10031.
+            validate(10000, 10031, 20000, INT64_MAX, 30, send, true, 10031,
+                     10000);
+        }
+
+        SECTION("Strict receive")
+        {
+            // With no fee, sending 10000 would receive 10000. So to send
+            // ceil(10000 / 0.997) = 10031 we need to receive 10000.
+            validate(10000, INT64_MAX, 20000, 10000, 30, recv, true, 10031,
+                     10000);
         }
     }
 }

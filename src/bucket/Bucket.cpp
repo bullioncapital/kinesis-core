@@ -88,9 +88,13 @@ Bucket::apply(Application& app) const
 {
     ZoneScoped;
 
-    BucketApplicator applicator(app, app.getConfig().LEDGER_PROTOCOL_VERSION,
-                                shared_from_this(),
-                                [](LedgerEntryType) { return true; });
+    BucketApplicator applicator(
+        app, app.getConfig().LEDGER_PROTOCOL_VERSION,
+        0 /*set to 0 so we always load from the parent to check state*/,
+        0 /*set to a level that's not the bottom so we don't treat live entries
+             as init*/
+        ,
+        shared_from_this(), [](LedgerEntryType) { return true; });
     BucketApplicator::Counters counters(app.getClock().now());
     while (applicator)
     {
@@ -150,8 +154,8 @@ Bucket::fresh(BucketManager& bucketManager, uint32_t protocolVersion,
     // When building fresh buckets after protocol version 10 (i.e. version
     // 11-or-after) we differentiate INITENTRY from LIVEENTRY. In older
     // protocols, for compatibility sake, we mark both cases as LIVEENTRY.
-    bool useInit =
-        (protocolVersion >= FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY);
+    bool useInit = protocolVersionStartsFrom(
+        protocolVersion, FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY);
 
     BucketMetadata meta;
     meta.ledgerVersion = protocolVersion;
@@ -197,11 +201,13 @@ void
 Bucket::checkProtocolLegality(BucketEntry const& entry,
                               uint32_t protocolVersion)
 {
-    if (protocolVersion < FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY &&
+    if (protocolVersionIsBefore(
+            protocolVersion,
+            FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY) &&
         (entry.type() == INITENTRY || entry.type() == METAENTRY))
     {
         throw std::runtime_error(fmt::format(
-            "unsupported entry type {} in protocol {} bucket",
+            FMT_STRING("unsupported entry type {} in protocol {:d} bucket"),
             (entry.type() == INITENTRY ? "INIT" : "META"), protocolVersion));
     }
 }
@@ -371,7 +377,8 @@ calculateMergeProtocolVersion(
     for (auto const& si : shadowIterators)
     {
         auto version = si.getMetadata().ledgerVersion;
-        if (version < Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED)
+        if (protocolVersionIsBefore(version,
+                                    Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED))
         {
             protocolVersion = std::max(version, protocolVersion);
         }
@@ -383,7 +390,8 @@ calculateMergeProtocolVersion(
     if (protocolVersion > maxProtocolVersion)
     {
         throw std::runtime_error(fmt::format(
-            "bucket protocol version {} exceeds maxProtocolVersion {}",
+            FMT_STRING(
+                "bucket protocol version {:d} exceeds maxProtocolVersion {:d}"),
             protocolVersion, maxProtocolVersion));
     }
 
@@ -392,8 +400,9 @@ calculateMergeProtocolVersion(
     // support annihilation of INITENTRY and DEADENTRY pairs. See commentary
     // above in `maybePut`.
     keepShadowedLifecycleEntries = true;
-    if (protocolVersion <
-        Bucket::FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY)
+    if (protocolVersionIsBefore(
+            protocolVersion,
+            Bucket::FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY))
     {
         ++mc.mPreInitEntryProtocolMerges;
         keepShadowedLifecycleEntries = false;
@@ -403,7 +412,8 @@ calculateMergeProtocolVersion(
         ++mc.mPostInitEntryProtocolMerges;
     }
 
-    if (protocolVersion < Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED)
+    if (protocolVersionIsBefore(protocolVersion,
+                                Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED))
     {
         ++mc.mPreShadowRemovalProtocolMerges;
     }
@@ -663,6 +673,14 @@ Bucket::merge(BucketManager& bucketManager, uint32_t maxProtocolVersion,
 
 uint32_t
 Bucket::getBucketVersion(std::shared_ptr<Bucket> const& bucket)
+{
+    releaseAssert(bucket);
+    BucketInputIterator it(bucket);
+    return it.getMetadata().ledgerVersion;
+}
+
+uint32_t
+Bucket::getBucketVersion(std::shared_ptr<Bucket const> const& bucket)
 {
     releaseAssert(bucket);
     BucketInputIterator it(bucket);

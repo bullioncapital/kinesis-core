@@ -10,6 +10,7 @@
 #include "ledger/LedgerTxn.h"
 #include "ledger/test/LedgerTestUtils.h"
 #include "lib/catch.hpp"
+#include "lib/util/stdrandom.h"
 #include "main/Application.h"
 #include "test/TestUtils.h"
 #include "test/test.h"
@@ -68,8 +69,19 @@ generateRandomSubEntry(LedgerEntry const& acc)
         break;
     case TRUSTLINE:
         le.data.trustLine().accountID = acc.data.account().accountID;
-        le.data.trustLine().asset.alphaNum4().issuer =
-            validAccountIDGenerator();
+        switch (le.data.trustLine().asset.type())
+        {
+        case ASSET_TYPE_CREDIT_ALPHANUM4:
+            le.data.trustLine().asset.alphaNum4().issuer =
+                validAccountIDGenerator();
+            break;
+        case ASSET_TYPE_CREDIT_ALPHANUM12:
+            le.data.trustLine().asset.alphaNum12().issuer =
+                validAccountIDGenerator();
+            break;
+        default:
+            break;
+        }
         break;
     case DATA:
         le.data.data().accountID = acc.data.account().accountID;
@@ -180,7 +192,8 @@ addRandomSubEntryToAccount(Application& app, LedgerEntry& le,
     {
         auto se = generateRandomSubEntry(le);
         subentries.push_back(se);
-        updateAccountSubEntries(app, le, lePrev, 1,
+        updateAccountSubEntries(app, le, lePrev,
+                                testutil::computeMultiplier(se),
                                 makeUpdateList({se}, nullptr));
     }
 }
@@ -203,14 +216,14 @@ modifyRandomSubEntryFromAccount(Application& app, LedgerEntry& le,
     ++le.lastModifiedLedgerSeq;
     if (modifySigner)
     {
-        std::uniform_int_distribution<uint32_t> dist(
+        stellar::uniform_int_distribution<uint32_t> dist(
             0, uint32_t(acc.signers.size()) - 1);
         acc.signers.at(dist(gRandomEngine)) = validSignerGenerator();
         updateAccountSubEntries(app, le, lePrev, 0, {});
     }
     else
     {
-        std::uniform_int_distribution<uint32_t> dist(
+        stellar::uniform_int_distribution<uint32_t> dist(
             0, uint32_t(subentries.size()) - 1);
         auto index = dist(gRandomEngine);
         auto se = subentries.at(index);
@@ -239,7 +252,7 @@ deleteRandomSubEntryFromAccount(Application& app, LedgerEntry& le,
     ++le.lastModifiedLedgerSeq;
     if (deleteSigner)
     {
-        std::uniform_int_distribution<uint32_t> dist(
+        stellar::uniform_int_distribution<uint32_t> dist(
             0, uint32_t(acc.signers.size()) - 1);
 
         auto pos = dist(gRandomEngine);
@@ -254,12 +267,13 @@ deleteRandomSubEntryFromAccount(Application& app, LedgerEntry& le,
     }
     else
     {
-        std::uniform_int_distribution<uint32_t> dist(
+        stellar::uniform_int_distribution<uint32_t> dist(
             0, uint32_t(subentries.size()) - 1);
         auto index = dist(gRandomEngine);
         auto se = subentries.at(index);
         subentries.erase(subentries.begin() + index);
-        updateAccountSubEntries(app, le, lePrev, -1,
+        updateAccountSubEntries(app, le, lePrev,
+                                -testutil::computeMultiplier(se),
                                 makeUpdateList(nullptr, {se}));
     }
 }
@@ -283,7 +297,7 @@ TEST_CASE("Create account with no subentries",
 TEST_CASE("Create account then add signers and subentries",
           "[invariant][accountsubentriescount]")
 {
-    std::uniform_int_distribution<int32_t> changesDist(-1, 2);
+    stellar::uniform_int_distribution<int32_t> changesDist(-1, 2);
     Config cfg = getTestConfig(0);
     cfg.INVARIANT_CHECKS = {"AccountSubEntriesCountIsValid"};
 

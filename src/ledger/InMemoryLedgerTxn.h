@@ -44,13 +44,38 @@ class InMemoryLedgerTxn : public LedgerTxn
     Database& mDb;
     std::unique_ptr<soci::transaction> mTransaction;
 
+    UnorderedMap<AccountID, UnorderedSet<InternalLedgerKey>>
+        mOffersAndPoolShareTrustlineKeys;
+
+    void updateLedgerKeyMap(InternalLedgerKey const& genKey, bool add) noexcept;
+    void updateLedgerKeyMap(EntryIterator iter);
+
   public:
     InMemoryLedgerTxn(InMemoryLedgerTxnRoot& parent, Database& db);
     virtual ~InMemoryLedgerTxn();
 
-    void addChild(AbstractLedgerTxn& child) override;
-    void commitChild(EntryIterator iter, LedgerTxnConsistency cons) override;
-    void rollbackChild() override;
+    void addChild(AbstractLedgerTxn& child, TransactionMode mode) override;
+    void commitChild(EntryIterator iter,
+                     LedgerTxnConsistency cons) noexcept override;
+    void rollbackChild() noexcept override;
+
+    void createWithoutLoading(InternalLedgerEntry const& entry) override;
+    void updateWithoutLoading(InternalLedgerEntry const& entry) override;
+    void eraseWithoutLoading(InternalLedgerKey const& key) override;
+
+    LedgerTxnEntry create(InternalLedgerEntry const& entry) override;
+    void erase(InternalLedgerKey const& key) override;
+    LedgerTxnEntry load(InternalLedgerKey const& key) override;
+    ConstLedgerTxnEntry
+    loadWithoutRecord(InternalLedgerKey const& key) override;
+
+    UnorderedMap<LedgerKey, LedgerEntry>
+    getOffersByAccountAndAsset(AccountID const& account,
+                               Asset const& asset) override;
+
+    UnorderedMap<LedgerKey, LedgerEntry>
+    getPoolShareTrustLinesByAccountAndAsset(AccountID const& account,
+                                            Asset const& asset) override;
 };
 
 }

@@ -196,6 +196,16 @@ class Config : public std::enable_shared_from_this<Config>
     // system.
     bool ARTIFICIALLY_REPLAY_WITH_NEWEST_BUCKET_LOGIC_FOR_TESTING;
 
+    // A config parameter that forces a delay in state rebuild via buckets in
+    // captive core. This is useful for testing how stellar-core buffers ledgers
+    // during captive core fast restart.
+    std::chrono::seconds ARTIFICIALLY_DELAY_BUCKET_APPLICATION_FOR_TESTING;
+
+    // A config parameter that forces stellar-core to sleep every time a task is
+    // picked up from the scheduler. This is useful to imitate a "slow" node.
+    // This config should only be enabled when testing.
+    std::chrono::microseconds ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING;
+
     // Config parameters that force transaction application during ledger
     // close to sleep for a certain amount of time.
     // The probability that it sleeps for
@@ -216,6 +226,29 @@ class Config : public std::enable_shared_from_this<Config>
     // i.
     std::vector<unsigned short> LOADGEN_OP_COUNT_FOR_TESTING;
     std::vector<uint32> LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING;
+
+    // Waits for merges to complete before applying transactions during catchup
+    bool CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING;
+
+    // A config parameter that controls how many messages from a particular peer
+    // core can process simultaneously. If core is at capacity, it temporarily
+    // stops reading from a peer until it completes processing of at least one
+    // in-flight message. This config only takes effect if
+    // ENABLE_OVERLAY_FLOW_CONTROL=true.
+    uint32_t PEER_READING_CAPACITY;
+
+    // A config parameter that controls how many flood messages (tx or SCP) from
+    // a particular peer core can process simultaneously. This config only takes
+    // effect if ENABLE_OVERLAY_FLOW_CONTROL=true.
+    uint32_t PEER_FLOOD_READING_CAPACITY;
+
+    // A config parameter that allows core to enable or disable flow control
+    // when communicating with peers.
+    bool ENABLE_OVERLAY_FLOW_CONTROL;
+
+    // When flow control is enabled, peer asks for more data every time it
+    // processes `FLOW_CONTROL_SEND_MORE_BATCH_SIZE` messages
+    uint32_t FLOW_CONTROL_SEND_MORE_BATCH_SIZE;
 
     // A config parameter that allows a node to generate buckets. This should
     // be set to `false` only for testing purposes.
@@ -256,6 +289,10 @@ class Config : public std::enable_shared_from_this<Config>
     // Set to use config file values for genesis ledger
     // not setable in config file - only tests are allowed to do this
     bool USE_CONFIG_FOR_GENESIS;
+
+#ifdef _KINESIS
+    bool KINESIS_TESTING_DEFAULT_LEDGER;
+#endif
 
     // This is the number of failures you want to be able to tolerate.
     // You will need at least 3f+1 nodes in your quorum set.
@@ -315,7 +352,12 @@ class Config : public std::enable_shared_from_this<Config>
     // Set of cursors added at each startup with value '1'.
     std::vector<std::string> KNOWN_CURSORS;
 
+    // maximum protocol version supported by the application, can be overridden
+    // in tests
     uint32_t LEDGER_PROTOCOL_VERSION;
+    // min ledger version for which internal errors are reported with high
+    // severity
+    uint32_t LEDGER_PROTOCOL_MIN_VERSION_INTERNAL_ERROR_REPORT;
     VirtualClock::system_time_point TESTING_UPGRADE_DATETIME;
 
     // maximum allowed drift for close time when joining the network for the
@@ -330,11 +372,17 @@ class Config : public std::enable_shared_from_this<Config>
     std::string LOG_FILE_PATH;
     bool LOG_COLOR;
     std::string BUCKET_DIR_PATH;
-    uint32_t TESTING_UPGRADE_DESIRED_FEE;            // in stroops
-    uint32_t TESTING_UPGRADE_RESERVE;                // in stroops
+    // Ledger protocol version for testing purposes. Defaulted to
+    // LEDGER_PROTOCOL_VERSION. Used in the following scenarios: 1. to specify
+    // the genesis ledger version (only when USE_CONFIG_FOR_GENESIS is true) 2.
+    // as the protocol version for Upgrades.
+    uint32_t TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION;
+    uint32_t TESTING_UPGRADE_DESIRED_FEE; // in stroops
+    uint32_t TESTING_UPGRADE_RESERVE;     // in stroops
     uint32_t TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE; // in basis points
     uint64_t TESTING_UPGRADE_DESIRED_MAX_FEE; // max fee in stroops
     uint32_t TESTING_UPGRADE_MAX_TX_SET_SIZE;
+    uint32_t TESTING_UPGRADE_FLAGS;
     unsigned short HTTP_PORT; // what port to listen for commands
     bool PUBLIC_HTTP_PORT;    // if you accept commands from not localhost
     int HTTP_MAX_CLIENT;      // maximum number of http clients, i.e backlog
@@ -354,6 +402,8 @@ class Config : public std::enable_shared_from_this<Config>
     int MAX_BATCH_WRITE_BYTES;
     double FLOOD_OP_RATE_PER_LEDGER;
     int FLOOD_TX_PERIOD_MS;
+    int32_t FLOOD_ARB_TX_BASE_ALLOWANCE;
+    double FLOOD_ARB_TX_DAMPING_FACTOR;
     static constexpr size_t const POSSIBLY_PREFERRED_EXTRA = 2;
     static constexpr size_t const REALLY_DEAD_NUM_FAILURES_CUTOFF = 120;
 
@@ -369,14 +419,6 @@ class Config : public std::enable_shared_from_this<Config>
 
     // Whether to exclude peers that are not preferred.
     bool PREFERRED_PEERS_ONLY;
-
-    // Percentage, between 0 and 100, of system activity (measured in terms
-    // of both event-loop cycles and database time) below-which the system
-    // will consider itself "loaded" and attempt to shed load. Set this
-    // number low and the system will be tolerant of overloading. Set it
-    // high and the system will be intolerant. By default it is 0, meaning
-    // totally insensitive to overloading.
-    uint32_t MINIMUM_IDLE_PERCENT;
 
     // thread-management config
     int WORKER_THREADS;
@@ -418,6 +460,14 @@ class Config : public std::enable_shared_from_this<Config>
     // SQL load. Note that it should be significantly smaller than size of
     // the entry cache
     size_t PREFETCH_BATCH_SIZE;
+
+    // If set to true, the application will halt when an internal error is
+    // encountered during applying a transaction. Otherwise, the
+    // txINTERNAL_ERROR transaction is created but not applied.
+    // Enabling this is useful for debugging the transaction errors caused by
+    // the core's internal errors via catching them early.
+    // The default value is false.
+    bool HALT_ON_INTERNAL_TRANSACTION_ERROR;
 
 #ifdef BUILD_TESTS
     // If set to true, the application will be aware this run is for a test
@@ -470,5 +520,7 @@ class Config : public std::enable_shared_from_this<Config>
     static std::string const STDIN_SPECIAL_NAME;
 
     void processOpApplySleepTimeForTestingConfigs();
+
+    std::chrono::seconds HISTOGRAM_WINDOW_SIZE;
 };
 }

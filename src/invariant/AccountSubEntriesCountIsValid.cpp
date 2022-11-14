@@ -14,17 +14,38 @@
 namespace stellar
 {
 
+static bool
+isPoolShareTrustline(LedgerEntry const& le)
+{
+    return le.data.type() == TRUSTLINE &&
+           le.data.trustLine().asset.type() == ASSET_TYPE_POOL_SHARE;
+}
+
 static int32_t
 calculateDelta(LedgerEntry const* current, LedgerEntry const* previous)
 {
     int32_t delta = 0;
     if (current)
     {
-        ++delta;
+        if (isPoolShareTrustline(*current))
+        {
+            delta += 2;
+        }
+        else
+        {
+            ++delta;
+        }
     }
     if (previous)
     {
-        --delta;
+        if (isPoolShareTrustline(*previous))
+        {
+            delta -= 2;
+        }
+        else
+        {
+            --delta;
+        }
     }
     return delta;
 }
@@ -137,8 +158,8 @@ AccountSubEntriesCountIsValid::checkOnOperationApply(
         if (change.numSubEntries != change.calculatedSubEntries)
         {
             return fmt::format(
-                "Change in Account {} numSubEntries ({}) does not"
-                " match change in number of subentries ({})",
+                FMT_STRING("Change in Account {} numSubEntries ({:d}) does not"
+                           " match change in number of subentries ({:d})"),
                 KeyUtils::toStrKey(kv.first), change.numSubEntries,
                 change.calculatedSubEntries);
         }
@@ -171,8 +192,9 @@ AccountSubEntriesCountIsValid::checkOnOperationApply(
                     static_cast<int32_t>(account.numSubEntries) -
                     static_cast<int32_t>(account.signers.size());
                 return fmt::format(
-                    "Deleted Account {} has {} subentries other than"
-                    " signers",
+                    FMT_STRING(
+                        "Deleted Account {} has {:d} subentries other than"
+                        " signers"),
                     KeyUtils::toStrKey(account.accountID), otherSubEntries);
             }
         }

@@ -7,6 +7,7 @@
 #include "database/Database.h"
 #include "main/Application.h"
 #include "transactions/TransactionFrame.h"
+#include "util/ProtocolVersion.h"
 #include "util/XDROperators.h"
 #include <Tracy.hpp>
 
@@ -28,9 +29,10 @@ BumpSequenceOpFrame::getThresholdLevel() const
 }
 
 bool
-BumpSequenceOpFrame::isVersionSupported(uint32_t protocolVersion) const
+BumpSequenceOpFrame::isOpSupported(LedgerHeader const& header) const
 {
-    return protocolVersion >= 10;
+    return protocolVersionStartsFrom(header.ledgerVersion,
+                                     ProtocolVersion::V_10);
 }
 
 bool

@@ -420,6 +420,14 @@ TCPPeer::scheduleRead()
     // Post to the peer-specific Scheduler a call to ::startRead below;
     // this will be throttled to try to balance input rates across peers.
     ZoneScoped;
+
+    if (mIsPeerThrottled)
+    {
+        return;
+    }
+
+    releaseAssert(hasReadingCapacity());
+
     assertThreadIsMain();
     if (shouldAbort())
     {
@@ -428,7 +436,7 @@ TCPPeer::scheduleRead()
     auto self = static_pointer_cast<TCPPeer>(shared_from_this());
     self->getApp().postOnMainThread(
         [self]() { self->startRead(); },
-        fmt::format("TCPPeer::startRead for {}", toString()));
+        fmt::format(FMT_STRING("TCPPeer::startRead for {}"), toString()));
 }
 
 void
@@ -436,6 +444,7 @@ TCPPeer::startRead()
 {
     ZoneScoped;
     assertThreadIsMain();
+    releaseAssert(hasReadingCapacity());
     if (shouldAbort())
     {
         return;
@@ -466,6 +475,8 @@ TCPPeer::startRead()
             return;
         }
         size_t length = getIncomingMsgLength();
+
+        // in_avail = amount of unread data
         if (mSocket->in_avail() >= length)
         {
             // We can finish reading a full message here synchronously,
@@ -487,6 +498,14 @@ TCPPeer::startRead()
                 }
                 noteFullyReadBody(length);
                 recvMessage();
+                if (!hasReadingCapacity())
+                {
+                    // Break and wait until more capacity frees up
+                    CLOG_DEBUG(Overlay, "Throttle reading from peer {}!",
+                               mApp.getConfig().toShortString(getPeerID()));
+                    mIsPeerThrottled = true;
+                    return;
+                }
                 if (mApp.getClock().shouldYield())
                 {
                     break;
@@ -495,6 +514,9 @@ TCPPeer::startRead()
         }
         else
         {
+            // No throttling - we just read a header, so we must have capacity
+            releaseAssert(hasReadingCapacity());
+
             // We read a header synchronously, but don't have enough data in the
             // buffered_stream to read the body synchronously. Pretend we just
             // finished reading the header asynchronously, and punt to
@@ -620,6 +642,16 @@ TCPPeer::readBodyHandler(asio::error_code const& error,
         // sequence happens after the first read of a single large input-buffer
         // worth of input. Even when we weren't preempted, we still bounce off
         // the per-peer scheduler queue here, to balance input across peers.
+        if (!hasReadingCapacity())
+        {
+            // No more capacity after processing this message
+            CLOG_DEBUG(Overlay,
+                       "TCPPeer::readBodyHandler: throttle reading from {}",
+                       mApp.getConfig().toShortString(getPeerID()));
+            mIsPeerThrottled = true;
+            return;
+        }
+
         scheduleRead();
     }
 }
@@ -629,6 +661,7 @@ TCPPeer::recvMessage()
 {
     ZoneScoped;
     assertThreadIsMain();
+    releaseAssert(hasReadingCapacity());
 
     try
     {
@@ -663,18 +696,22 @@ TCPPeer::drop(std::string const& reason, DropDirection dropDirection,
         return;
     }
 
+    std::string connectionType =
+        isFlowControlled() ? "flow-controlled" : "not flow-controlled";
     if (mState != GOT_AUTH)
     {
-        CLOG_DEBUG(Overlay, "TCPPeer::drop {} in state {} we called:{}",
-                   toString(), mState, mRole);
+        CLOG_DEBUG(Overlay, "TCPPeer::drop {} {} in state {} we called:{}",
+                   connectionType, toString(), mState, mRole);
     }
     else if (dropDirection == Peer::DropDirection::WE_DROPPED_REMOTE)
     {
-        CLOG_INFO(Overlay, "Dropping peer {}, reason {}", toString(), reason);
+        CLOG_INFO(Overlay, "Dropping {} peer {}, reason {}", connectionType,
+                  toString(), reason);
     }
     else
     {
-        CLOG_INFO(Overlay, "Peer {} dropped us, reason {}", toString(), reason);
+        CLOG_INFO(Overlay, "{} peer {} dropped us, reason {}", connectionType,
+                  toString(), reason);
     }
 
     mState = CLOSING;

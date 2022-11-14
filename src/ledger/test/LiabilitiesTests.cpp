@@ -12,6 +12,7 @@
 #include "test/test.h"
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionUtils.h"
+#include "util/ProtocolVersion.h"
 #include "util/Timer.h"
 
 #include "util/Logging.h"
@@ -80,43 +81,44 @@ TEST_CASE("liabilities", "[ledger][liabilities]")
             return res;
         };
 
-        auto addSellingLiabilities =
-            [&](uint32_t initNumSubEntries, int64_t initBalance,
-                int64_t initSellingLiabilities, int64_t deltaLiabilities) {
-                int32_t reserve = lm.getLastReserve();
-                uint32_t ledgerVersion = 0;
-                {
-                    LedgerTxn ltx(app->getLedgerTxnRoot());
-                    ledgerVersion = ltx.loadHeader().current().ledgerVersion;
-                }
+        auto addSellingLiabilities = [&](uint32_t initNumSubEntries,
+                                         int64_t initBalance,
+                                         int64_t initSellingLiabilities,
+                                         int64_t deltaLiabilities) {
+            int32_t reserve = lm.getLastReserve();
+            uint32_t ledgerVersion = 0;
+            {
+                LedgerTxn ltx(app->getLedgerTxnRoot());
+                ledgerVersion = ltx.loadHeader().current().ledgerVersion;
+            }
 
-                auto res = addSellingLiabilitiesHelper(
-                    initNumSubEntries, 0, 0, initBalance,
-                    initSellingLiabilities, deltaLiabilities);
-                if (ledgerVersion < 14)
-                {
-                    return res;
-                }
-
-                for (int32_t i = 0; i < 3; ++i)
-                {
-                    for (int32_t j = 0; j < 3; ++j)
-                    {
-                        int64_t delta = (i - j) * reserve;
-                        if (delta > INT64_MAX - initBalance ||
-                            initBalance + delta < 0)
-                        {
-                            continue;
-                        }
-
-                        REQUIRE(addSellingLiabilitiesHelper(
-                                    initNumSubEntries, i, j,
-                                    initBalance + delta, initSellingLiabilities,
-                                    deltaLiabilities) == res);
-                    }
-                }
+            auto res = addSellingLiabilitiesHelper(
+                initNumSubEntries, 0, 0, initBalance, initSellingLiabilities,
+                deltaLiabilities);
+            if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_14))
+            {
                 return res;
-            };
+            }
+
+            for (int32_t i = 0; i < 3; ++i)
+            {
+                for (int32_t j = 0; j < 3; ++j)
+                {
+                    int64_t delta = (i - j) * reserve;
+                    if (delta > INT64_MAX - initBalance ||
+                        initBalance + delta < 0)
+                    {
+                        continue;
+                    }
+
+                    REQUIRE(addSellingLiabilitiesHelper(
+                                initNumSubEntries, i, j, initBalance + delta,
+                                initSellingLiabilities,
+                                deltaLiabilities) == res);
+                }
+            }
+            return res;
+        };
 
         auto addSellingLiabilitiesUninitialized =
             [&](uint32_t initNumSubEntries, int64_t initBalance,
@@ -328,35 +330,36 @@ TEST_CASE("liabilities", "[ledger][liabilities]")
             return res;
         };
 
-        auto addBuyingLiabilities =
-            [&](uint32_t initNumSubEntries, int64_t initBalance,
-                int64_t initBuyingLiabilities, int64_t deltaLiabilities) {
-                uint32_t ledgerVersion = 0;
-                {
-                    LedgerTxn ltx(app->getLedgerTxnRoot());
-                    ledgerVersion = ltx.loadHeader().current().ledgerVersion;
-                }
+        auto addBuyingLiabilities = [&](uint32_t initNumSubEntries,
+                                        int64_t initBalance,
+                                        int64_t initBuyingLiabilities,
+                                        int64_t deltaLiabilities) {
+            uint32_t ledgerVersion = 0;
+            {
+                LedgerTxn ltx(app->getLedgerTxnRoot());
+                ledgerVersion = ltx.loadHeader().current().ledgerVersion;
+            }
 
-                auto res = addBuyingLiabilitiesHelper(
-                    initNumSubEntries, 0, 0, initBalance, initBuyingLiabilities,
-                    deltaLiabilities);
-                if (ledgerVersion < 14)
-                {
-                    return res;
-                }
-
-                for (int32_t i = 0; i < 3; ++i)
-                {
-                    for (int32_t j = 0; j < 3; ++j)
-                    {
-                        REQUIRE(addBuyingLiabilitiesHelper(
-                                    initNumSubEntries, i, j, initBalance,
-                                    initBuyingLiabilities,
-                                    deltaLiabilities) == res);
-                    }
-                }
+            auto res = addBuyingLiabilitiesHelper(
+                initNumSubEntries, 0, 0, initBalance, initBuyingLiabilities,
+                deltaLiabilities);
+            if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_14))
+            {
                 return res;
-            };
+            }
+
+            for (int32_t i = 0; i < 3; ++i)
+            {
+                for (int32_t j = 0; j < 3; ++j)
+                {
+                    REQUIRE(addBuyingLiabilitiesHelper(
+                                initNumSubEntries, i, j, initBalance,
+                                initBuyingLiabilities,
+                                deltaLiabilities) == res);
+                }
+            }
+            return res;
+        };
 
         auto addBuyingLiabilitiesUninitialized = [&](uint32_t initNumSubEntries,
                                                      int64_t initBalance,
@@ -541,7 +544,8 @@ TEST_CASE("liabilities", "[ledger][liabilities]")
         auto addSellingLiabilities = [&](int64_t initLimit, int64_t initBalance,
                                          int64_t initSellingLiabilities,
                                          int64_t deltaLiabilities) {
-            TrustLineEntry tl = LedgerTestUtils::generateValidTrustLineEntry();
+            TrustLineEntry tl =
+                LedgerTestUtils::generateNonPoolShareValidTrustLineEntry();
             tl.flags = AUTHORIZED_FLAG;
             tl.balance = initBalance;
             tl.limit = initLimit;
@@ -581,7 +585,7 @@ TEST_CASE("liabilities", "[ledger][liabilities]")
             [&](int64_t initLimit, int64_t initBalance,
                 int64_t deltaLiabilities) {
                 TrustLineEntry tl =
-                    LedgerTestUtils::generateValidTrustLineEntry();
+                    LedgerTestUtils::generateNonPoolShareValidTrustLineEntry();
                 tl.flags = AUTHORIZED_FLAG;
                 tl.balance = initBalance;
                 tl.limit = initLimit;
@@ -683,7 +687,8 @@ TEST_CASE("liabilities", "[ledger][liabilities]")
         auto addBuyingLiabilities = [&](int64_t initLimit, int64_t initBalance,
                                         int64_t initBuyingLiabilities,
                                         int64_t deltaLiabilities) {
-            TrustLineEntry tl = LedgerTestUtils::generateValidTrustLineEntry();
+            TrustLineEntry tl =
+                LedgerTestUtils::generateNonPoolShareValidTrustLineEntry();
             tl.flags = AUTHORIZED_FLAG;
             tl.balance = initBalance;
             tl.limit = initLimit;
@@ -722,7 +727,8 @@ TEST_CASE("liabilities", "[ledger][liabilities]")
         auto addBuyingLiabilitiesUninitialized = [&](int64_t initLimit,
                                                      int64_t initBalance,
                                                      int64_t deltaLiabilities) {
-            TrustLineEntry tl = LedgerTestUtils::generateValidTrustLineEntry();
+            TrustLineEntry tl =
+                LedgerTestUtils::generateNonPoolShareValidTrustLineEntry();
             tl.flags = AUTHORIZED_FLAG;
             tl.balance = initBalance;
             tl.limit = initLimit;
@@ -886,7 +892,7 @@ TEST_CASE("balance with liabilities", "[ledger][liabilities]")
 
             auto res = addBalanceHelper(initNumSubEntries, 0, 0, initBalance,
                                         initLiabilities, deltaBalance);
-            if (ledgerVersion < 14)
+            if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_14))
             {
                 return res;
             }
@@ -1069,7 +1075,7 @@ TEST_CASE("balance with liabilities", "[ledger][liabilities]")
             auto res =
                 addSubEntriesHelper(initNumSubEntries, 0, 0, initBalance,
                                     initSellingLiabilities, deltaLiabilities);
-            if (ledgerVersion < 14)
+            if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_14))
             {
                 return res;
             }
@@ -1154,7 +1160,8 @@ TEST_CASE("balance with liabilities", "[ledger][liabilities]")
         auto addBalance = [&](int64_t initLimit, int64_t initBalance,
                               Liabilities initLiabilities,
                               int64_t deltaBalance) {
-            TrustLineEntry tl = LedgerTestUtils::generateValidTrustLineEntry();
+            TrustLineEntry tl =
+                LedgerTestUtils::generateNonPoolShareValidTrustLineEntry();
             tl.balance = initBalance;
             tl.limit = initLimit;
             tl.flags = AUTHORIZED_FLAG;
@@ -1279,7 +1286,7 @@ TEST_CASE("available balance and limit", "[ledger][liabilities]")
 
             checkAvailableBalanceHelper(initNumSubEntries, 0, 0, initBalance,
                                         initSellingLiabilities);
-            if (ledgerVersion < 14)
+            if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_14))
             {
                 return;
             }
@@ -1381,7 +1388,7 @@ TEST_CASE("available balance and limit", "[ledger][liabilities]")
 
             checkAvailableLimitHelper(initNumSubEntries, 0, 0, initBalance,
                                       initBuyingLiabilities);
-            if (ledgerVersion < 14)
+            if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_14))
             {
                 return;
             }
@@ -1443,7 +1450,8 @@ TEST_CASE("available balance and limit", "[ledger][liabilities]")
     {
         auto checkAvailableBalance = [&](int64_t initLimit, int64_t initBalance,
                                          int64_t initSellingLiabilities) {
-            TrustLineEntry tl = LedgerTestUtils::generateValidTrustLineEntry();
+            TrustLineEntry tl =
+                LedgerTestUtils::generateNonPoolShareValidTrustLineEntry();
             tl.flags = AUTHORIZED_FLAG;
             tl.balance = initBalance;
             tl.limit = initLimit;
@@ -1488,7 +1496,8 @@ TEST_CASE("available balance and limit", "[ledger][liabilities]")
     {
         auto checkAvailableLimit = [&](int64_t initLimit, int64_t initBalance,
                                        int64_t initBuyingLiabilities) {
-            TrustLineEntry tl = LedgerTestUtils::generateValidTrustLineEntry();
+            TrustLineEntry tl =
+                LedgerTestUtils::generateNonPoolShareValidTrustLineEntry();
             tl.flags = AUTHORIZED_FLAG;
             tl.balance = initBalance;
             tl.limit = initLimit;
@@ -1536,7 +1545,8 @@ TEST_CASE("available balance and limit", "[ledger][liabilities]")
     {
         auto checkMinimumLimit = [&](int64_t initBalance,
                                      int64_t initBuyingLiabilities) {
-            TrustLineEntry tl = LedgerTestUtils::generateValidTrustLineEntry();
+            TrustLineEntry tl =
+                LedgerTestUtils::generateNonPoolShareValidTrustLineEntry();
             tl.flags = AUTHORIZED_FLAG;
             tl.balance = initBalance;
             tl.limit = INT64_MAX;

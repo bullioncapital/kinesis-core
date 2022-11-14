@@ -29,7 +29,7 @@ void createSponsoredEntryButSponsorHasInsufficientBalance(
 void createModifyAndRemoveSponsoredEntry(
     Application& app, TestAccount& sponsoredAcc, Operation const& opCreate,
     Operation const& opModify1, Operation const& opModify2,
-    Operation const& opRemove, LedgerKey const& lk);
+    Operation const& opRemove, LedgerKey const& lk, uint32_t ledgerVersionFrom);
 
 void createModifyAndRemoveSponsoredEntry(
     Application& app, TestAccount& sponsoredAcc, Operation const& opCreate,
@@ -37,9 +37,14 @@ void createModifyAndRemoveSponsoredEntry(
     Operation const& opRemove, SignerKey const& signerKey);
 
 void tooManySponsoring(Application& app, TestAccount& sponsoredAcc,
-                       Operation const& successfulOp, Operation const& failOp);
+                       Operation const& successfulOp, Operation const& failOp,
+                       uint32_t reservesForSuccesfulOp);
 
 void tooManySponsoring(Application& app, TestAccount& successfulOpAcc,
                        TestAccount& failOpAcc, Operation const& successfulOp,
-                       Operation const& failOp);
+                       Operation const& failOp,
+                       uint32_t reservesForSuccesfulOp);
+
+void tooManySubentries(Application& app, TestAccount& testAcc,
+                       Operation const& opCreate1, Operation const& opCreate2);
 }

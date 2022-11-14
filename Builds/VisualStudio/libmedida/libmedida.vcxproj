@@ -35,38 +35,38 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugNoPostgres|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugNoPostgres|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
@@ -221,6 +221,8 @@
       <DisableSpecificWarnings Condition="'$(Configuration)|$(Platform)'=='DebugNoPostgres|x64'">4244;4996</DisableSpecificWarnings>
     </ClCompile>
     <ClCompile Include="..\..\..\lib\libmedida\src\medida\reporting\util.cc" />
+    <ClCompile Include="..\..\..\lib\libmedida\src\medida\stats\ckms.cc" />
+    <ClCompile Include="..\..\..\lib\libmedida\src\medida\stats\ckms_sample.cc" />
     <ClCompile Include="..\..\..\lib\libmedida\src\medida\stats\ewma.cc" />
     <ClCompile Include="..\..\..\lib\libmedida\src\medida\stats\exp_decay_sample.cc" />
     <ClCompile Include="..\..\..\lib\libmedida\src\medida\stats\sliding_window_sample.cc" />
@@ -245,6 +247,8 @@
     <ClInclude Include="..\..\..\lib\libmedida\src\medida\reporting\json_reporter.h" />
     <ClInclude Include="..\..\..\lib\libmedida\src\medida\reporting\util.h" />
     <ClInclude Include="..\..\..\lib\libmedida\src\medida\sampling_interface.h" />
+    <ClInclude Include="..\..\..\lib\libmedida\src\medida\stats\ckms.h" />
+    <ClInclude Include="..\..\..\lib\libmedida\src\medida\stats\ckms_sample.h" />
     <ClInclude Include="..\..\..\lib\libmedida\src\medida\stats\ewma.h" />
     <ClInclude Include="..\..\..\lib\libmedida\src\medida\stats\exp_decay_sample.h" />
     <ClInclude Include="..\..\..\lib\libmedida\src\medida\stats\sample.h" />

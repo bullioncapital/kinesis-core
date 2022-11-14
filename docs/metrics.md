@@ -25,10 +25,7 @@ Tracks multiple timers organized into disjoint buckets.
 Metric name                              | Type      | Description
 ---------------------------------------  | --------  | --------------------
 app.post-on-background-thread.delay      | timer     | time to start task posted to background thread
-app.post-on-main-thread-with-delay.delay | timer     | time to start task posted to next crank of main thread
 app.post-on-main-thread.delay            | timer     | time to start task posted to current crank of main thread
-app.state.current                        | counter   | state (BOOTING=0, JOIN_SCP=1, LEDGER_SYNC=2, CATCHING_UP=3, SYNCED=4, STOPPING=5)
-bucket.available-time.level-<X>          | timer     | available time to merge two buckets on level <X> (always constant)
 bucket.batch.addtime                     | timer     | time to add a batch
 bucket.batch.objectsadded                | meter     | number of objects added per batch
 bucket.memory.shared                     | counter   | number of buckets referenced (excluding publish queue)
@@ -40,17 +37,11 @@ herder.pending-txs.age2                  | counter   | number of gen2 pending tr
 herder.pending-txs.age3                  | counter   | number of gen3 pending transactions
 herder.pending-txs.banned                | counter   | number of transactions that got banned
 herder.pending-txs.delay                 | timer     | time for transactions to be included in a ledger
-history.apply-ledger-chain.failure       | meter     | apply ledger chain failed
-history.apply-ledger-chain.success       | meter     | apply ledger chain completed successfully
-history.download-<X>.failure             | meter     | download of <X> failed
-history.download-<X>.success             | meter     | download of <X> completed successfully
 history.check.failure                    | meter     | history archive status checks failed
 history.check.success                    | meter     | history archive status checks succeeded
 history.publish.failure                  | meter     | published failed
 history.publish.success                  | meter     | published completed successfully
 history.publish.time                     | timer     | time to successfully publish history
-history.verify-<X>.failure               | meter     | verification of file from archive <X> failed
-history.verify-<X>.success               | meter     | verification of file from archive <X> succeeded
 ledger.age.closed                        | bucket    | time between ledgers
 ledger.age.current-seconds               | counter   | gap between last close ledger time and current time
 ledger.catchup.duration                  | timer     | time between entering LM_CATCHING_UP_STATE and entering LM_SYNCED_STATE
@@ -77,6 +68,7 @@ overlay.byte.write                       | meter     | number of bytes sent
 overlay.async.read                       | meter     | number of async read requests issued
 overlay.async.write                      | meter     | number of async write requests issued
 overlay.connection.authenticated         | counter   | number of authenticated peers
+overlay.flow-control.percentage          | counter   | percentage of authenticated connections that enable flow control
 overlay.connection.latency               | timer     | estimated latency between peers
 overlay.connection.pending               | counter   | number of pending connections
 overlay.delay.async-write                | timer     | time between each message's async write issue and completion
@@ -92,6 +84,8 @@ overlay.inbound.attempt                  | meter     | inbound connection attemp
 overlay.inbound.drop                     | meter     | inbound connection dropped
 overlay.inbound.establish                | meter     | inbound connection established (added to pending)
 overlay.inbound.reject                   | meter     | inbound connection rejected
+overlay.outbound-queue.scp               | timer     | time SCP traffic sits in flow-controlled queues
+overlay.outbound-queue.tx                | timer     | time tx traffic sits in flow-controlled queues
 overlay.item-fetcher.next-peer           | meter     | ask for item past the first one
 overlay.memory.flood-known               | counter   | number of known flooded entries
 overlay.message.broadcast                | meter     | message broadcasted

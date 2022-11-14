@@ -8,6 +8,7 @@
 			"APT_MIRROR": "http://au.archive.ubuntu.com/ubuntu/"
 		}
 	},
+	"context": "..",
 	// The optional 'runArgs' property can be used to specify additional runtime arguments.
 	"runArgs": [
 		// Uncomment the line if you will use a ptrace-based debugger like C++, Go, and Rust.
@@ -23,6 +24,15 @@
 	// You can edit these settings after create using File > Preferences > Settings > Remote.
 	"settings": { 
 		"terminal.integrated.shell.linux": "/bin/bash"
+	},
+
+	// Use 'features.docker-from-docker' to setup docker inside the container
+	// for building the Docker images inside GitHub Codespaces.
+	"features": {
+		"docker-from-docker": {
+			"version": "latest",
+			"moby": true
+		}
 	},
 
 	// Uncomment the next line if you want to publish any ports.

@@ -8,7 +8,7 @@ stellar-core can be controlled via the following commands.
 ## Common options
 Common options can be placed at any place in the command line.
 
-* **--conf <FILE-NAME>**: Specify a config file to use. You can use '/dev/stdin' and
+* **--conf <FILE-NAME>**: Specify a config file to use. You can use 'stdin' and
   provide the config file via STDIN. *default 'stellar-core.cfg'*
 * **--ll <LEVEL>**: Set the log level. It is redundant with `http-command ll`
   but we need this form if you want to change the log level during test runs.
@@ -55,13 +55,13 @@ Command options can only by placed after command.
   specified in the stellar-core.cfg. This will write a
   `.well-known/stellar-history.json` file in the archive root.
 * **offline-info**: Returns an output similar to `--c info` for an offline
-  instance
+  instance, but written directly to standard output (ignoring log levels).
 * **print-xdr <FILE-NAME>**:  Pretty-print a binary file containing an XDR
-  object. If FILE-NAME is "/dev/stdin", the XDR object is read from standard input.<br>
+  object. If FILE-NAME is "stdin", the XDR object is read from standard input.<br>
   Option **--filetype [auto|ledgerheader|meta|result|resultpair|tx|txfee]**
   controls type used for printing (default: auto).<br>
   Option **--base64** alters the behavior to work on base64-encoded XDR rather than
-  raw XDR.
+  raw XDR, and converts a stream of encoded objects separated by space/newline.
 * **publish**: Execute publish of all items remaining in publish queue without
   connecting to network. May not publish last checkpoint if last closed ledger
   is on checkpoint boundary.
@@ -85,7 +85,7 @@ Command options can only by placed after command.
   envelope stored in binary format in <FILE-NAME>, and send the result to
   standard output (which should be redirected to a file or piped through a tool
   such as `base64`).  The private signing key is read from standard input,
-  unless <FILE-NAME> is "/dev/stdin" in which case the transaction envelope is read from
+  unless <FILE-NAME> is "stdin" in which case the transaction envelope is read from
   standard input and the signing key is read from `/dev/tty`.  In either event,
   if the signing key appears to be coming from a terminal, stellar-core
   disables echo. Note that if you do not have a STELLAR_NETWORK_ID environment
@@ -169,8 +169,10 @@ format.
    * `queue` performs deletion of queue data. See `setcursor` for more information.
 
 * **metrics**
+  `metrics?[enable=PARTITION_1,PARTITION_2,...,PARTITION_N]`<br>
   Returns a snapshot of the metrics registry (for monitoring and debugging
   purpose).
+  If `enable` is set, return only specified metric partitions. Partitions are either metric domain names (e.g. `scp`, `overlay`, etc) or individual metric names.
 
 * **clearmetrics**
   `clearmetrics?[domain=DOMAIN]`<br>
@@ -192,6 +194,11 @@ format.
   If `compact` is set, only returns a summary version.
 
   If `fullkeys` is set, outputs unshortened public keys.
+  The quorum endpoint categorizes each node as following:
+  * `missing`: didn't participate in the latest consensus rounds.
+  * `disagree`: participating in the latest consensus rounds, but working on different values.
+  * `delayed`: participating in the latest consensus rounds, but slower than others.
+  * `agree`: running just fine.
 
 * **setcursor**
   `setcursor?id=ID&cursor=N`<br>
@@ -232,22 +239,24 @@ format.
     Retrieves the currently configured upgrade settings.<br>
   * `upgrades?mode=clear`<br>
     Clears any upgrade settings.<br>
-  * `upgrades?mode=set&upgradetime=DATETIME&[basefee=NUM]&[basereserve=NUM]&[maxtxsize=NUM]&[protocolversion=NUM]`<br>
-    * upgradetime is a required date (UTC) in the form `1970-01-01T00:00:00Z`. 
+  * `upgrades?mode=set&upgradetime=DATETIME&[basefee=NUM]&[basereserve=NUM]&[maxtxsetsize=NUM]&[protocolversion=NUM]`<br>
+    * `upgradetime` is a required date (UTC) in the form `1970-01-01T00:00:00Z`. 
         It is the time the upgrade will be scheduled for. If it is in the past
         by less than 12 hours, the upgrade will occur immediately. If it's more
         than 12 hours, then the upgrade will be ignored<br>
-    * fee (uint32) This is what you would prefer the base fee to be. It is in
+    * `fee` (uint32) This is what you would prefer the base fee to be. It is in
         stroops<br>
-    * basereserve (uint32) This is what you would prefer the base reserve to
+    * `basereserve` (uint32) This is what you would prefer the base reserve to
         be. It is in stroops.<br>
-    * maxtxsize (uint32) This defines the maximum number of transactions to
-        include in a ledger. When too many transactions are pending, surge
-        pricing is applied. The instance picks the top maxtxsize transactions
-        locally to be considered in the next ledger. Where transactions are
-        ordered by transaction fee(lower fee transactions are held for later).
+    * `maxtxsetsize` (uint32) This defines the maximum number of operations in 
+        the transaction set to include in a ledger. When too many transactions 
+        are pending, surge pricing is applied. The instance picks the 
+        transactions from the transaction queue locally to be considered in the 
+        next ledger until at most `maxtxsetsize` operations are accumulated.
+        Transactions are ordered by fee per operation (transactions with lower 
+        operation fees are held for later)
         <br>
-    * protocolversion (uint32) defines the protocol version to upgrade to.
+    * `protocolversion` (uint32) defines the protocol version to upgrade to.
         When specified it must match one of the protocol versions supported
         by the node and should be greater than ledgerVersion from the current
         ledger<br>

@@ -28,10 +28,6 @@ VerifyBucketWork::VerifyBucketWork(Application& app,
     , mBucketFile(bucketFile)
     , mHash(hash)
     , mOnFailure(failureCb)
-    , mVerifyBucketSuccess(app.getMetrics().NewMeter(
-          {"history", "verify-bucket", "success"}, "event"))
-    , mVerifyBucketFailure(app.getMetrics().NewMeter(
-          {"history", "verify-bucket", "failure"}, "event"))
 {
 }
 
@@ -43,10 +39,8 @@ VerifyBucketWork::onRun()
     {
         if (mEc)
         {
-            mVerifyBucketFailure.Mark();
             return State::WORK_FAILURE;
         }
-        mVerifyBucketSuccess.Mark();
         return State::WORK_SUCCESS;
     }
 
@@ -66,6 +60,14 @@ VerifyBucketWork::spawnVerifier()
         [&app, filename, weak, hash]() {
             SHA256 hasher;
             asio::error_code ec;
+
+            // No point in verifying buckets if things are shutting down
+            auto self = weak.lock();
+            if (!self || self->isAborting())
+            {
+                return;
+            }
+
             try
             {
                 ZoneNamedN(verifyZone, "bucket verify", true);
@@ -76,8 +78,8 @@ VerifyBucketWork::spawnVerifier()
                 std::ifstream in(filename, std::ifstream::binary);
                 if (!in)
                 {
-                    throw std::runtime_error(
-                        fmt::format("Error opening file {}", filename));
+                    throw std::runtime_error(fmt::format(
+                        FMT_STRING("Error opening file {}"), filename));
                 }
                 in.exceptions(std::ios::badbit);
                 char buf[4096];

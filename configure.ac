@@ -104,6 +104,17 @@ AS_IF([test "x$enable_asan" = "xyes"], [
   sanitizeopts="address"
 ])
 
+AC_ARG_ENABLE([codecoverage],
+  AS_HELP_STRING([--enable-codecoverage],
+        [build with code coverage enabled]))
+AS_IF([test "x$enable_codecoverage" = "xyes"], [
+  AC_MSG_NOTICE([ enabling codecoverage, see https://clang.llvm.org/docs/SourceBasedCodeCoverage.html ])
+
+  LDFLAGS="$LDFLAGS -fprofile-instr-generate -fcoverage-mapping"
+  CXXFLAGS="$CXXFLAGS -fprofile-instr-generate -fcoverage-mapping"
+  CFLAGS="$CFLAGS -fprofile-instr-generate -fcoverage-mapping"
+])
+
 AC_ARG_ENABLE([memcheck],
   AS_HELP_STRING([--enable-memcheck],
         [build with memcheck (memory-sanitizer) instrumentation]))
@@ -165,6 +176,9 @@ AC_ARG_ENABLE([ccache],
               AS_HELP_STRING([--enable-ccache], [build with ccache]))
 AS_IF([test "x$enable_ccache" = "xyes"], [
   AC_CHECK_PROGS([CCACHE], [ccache])
+  AS_IF([test -z "$CCACHE"], [
+    AC_MSG_ERROR([ccache enabled but not found])
+  ])
   case "$CC" in
   *ccache\ *)
       ;;
@@ -355,6 +369,11 @@ AC_ARG_ENABLE(tracy-capture,
         [Enable 'tracy' profiler/tracer capture program]))
 AM_CONDITIONAL(USE_TRACY_CAPTURE, [test x$enable_tracy_capture = xyes])
 
+AC_ARG_ENABLE(tracy-csvexport,
+    AS_HELP_STRING([--enable-tracy-csvexport],
+        [Enable 'tracy' profiler/tracer csvexport program]))
+AM_CONDITIONAL(USE_TRACY_CSVEXPORT, [test x$enable_tracy_csvexport = xyes])
+
 AC_ARG_ENABLE(spdlog,
     AS_HELP_STRING([--disable-spdlog],
         [Disable spdlog]))
@@ -369,10 +388,11 @@ AM_CONDITIONAL(ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION,
 AC_ARG_ENABLE(libunwind,
     AS_HELP_STRING([--disable-libunwind],
         [Disable backtraces using libunwind]))
-if test x"$enable_libunwind" = xyes; then
+if test x"$enable_libunwind" != xno; then
     case "${host_os}" in
         *darwin*)
             # libunwind comes standard with the command-line tools on macos
+            AC_MSG_NOTICE([using platform-native libunwind])
             AC_DEFINE([HAVE_LIBUNWIND], [1],
                 [Define to 1 if you have the <libunwind.h> header file])
             ;;
@@ -401,6 +421,8 @@ if test x"$enable_libunwind" = xyes; then
             esac
             ;;
     esac
+else
+  AC_MSG_NOTICE([not using libunwind as it was not requested])
 fi
 
 # Need this to pass through ccache for xdrpp, libsodium
