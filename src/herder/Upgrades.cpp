@@ -274,11 +274,11 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
                            upgrade.newBaseReserve());
     case LEDGER_UPGRADE_FLAGS:
         return fmt::format(FMT_STRING("flags={:d}"), upgrade.newFlags());
-        return fmt::format("basereserve={0}", upgrade.newBaseReserve());
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         return fmt::format("basepercentagefee={0}", upgrade.newBasePercentageFee());
+         return fmt::format(FMT_STRING("basepercentagefee={:d}"),
+                            upgrade.newBasePercentageFee());
      case LEDGER_UPGRADE_MAX_FEE:
-         return fmt::format("maxfee={0}", upgrade.newMaxFee());
+         return fmt::format(FMT_STRING("maxfee={:d}"), upgrade.newMaxFee());
     default:
         return "<unsupported>";
     }
