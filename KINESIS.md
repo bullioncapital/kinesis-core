@@ -1,21 +1,26 @@
-# Setup Development Environment
+# Development Environment Setup
 
 - Download & install vscode
-- Open code in remote container
-- Install vscode extensions inside remote container: (1) C++ Extension Pack (2) CodeLLDB
+    ```bash
+    'snap install code' (Linux)
+    ```
+- Open the kinesis-core project in a remote container via VSCode
+    `https://code.visualstudio.com/docs/devcontainers/create-dev-container#_create-a-devcontainerjson-file`
+    
+- Install vscode extensions inside the remote container once it is opened, install the following extensions: (1) C++ Extension Pack (2) CodeLLDB
 
 ## Configure you environment
 
-If it is your first time checking out code you need to run `vscode-configure.sh` in remote container terminal.
+If it is your first time checking out this repository then, before doing anything, you need to run `vscode-configure.sh` in the remote container terminal within VSCode.
 
 ## Debugging
 
-1. Start from unit test identify section
-2. Update `.vscode/launch.json`
+1. Start stepping through the unit test identify section in project root->test folder
+2. Update the `.vscode/launch.json` file with accurate values if necessary. ie: compiler and debugger paths.
 3. Set breakpoints
 4. Hit `F5`
 
-## Build Docker Image
+## Building a Docker Image
 
 Use the following command to build a local docker image with debug symbol and test suites:
 
@@ -24,7 +29,7 @@ export TAG=kinesis-core:local
 docker build --build-arg NPROC=$(nproc) -t $TAG . -f docker/Dockerfile.kinesis
 ```
 
-Build for release:
+Building for release:
 ```bash
 export TAG=kinesis-core:local
 docker build --build-arg NPROC=$(nproc) --build-arg BUILD=release -t $TAG . -f docker/Dockerfile.kinesis
@@ -32,7 +37,7 @@ docker build --build-arg NPROC=$(nproc) --build-arg BUILD=release -t $TAG . -f d
 
 ## Run Tests
 
-Use the following command to run test inside docker built in previous section.
+Use the following command to run tests inside docker as built in the previous section.
 
 ```bash
 export TAG=kinesis-core:local
