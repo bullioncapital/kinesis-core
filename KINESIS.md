@@ -1,13 +1,12 @@
 # Development Environment Setup
 
-- Download & install vscode
-    ```bash
-    'snap install code' (Linux)
-    ```
-- Open the kinesis-core project in a remote container via VSCode
-    `https://code.visualstudio.com/docs/devcontainers/create-dev-container#_create-a-devcontainerjson-file`
-    
-- Install vscode extensions inside the remote container once it is opened, install the following extensions: (1) C++ Extension Pack (2) CodeLLDB
+- [Download & install vscode](https://code.visualstudio.com/download)
+- Open the kinesis-core project in vscode and click on "Reopen in Container" when asked
+![image](https://user-images.githubusercontent.com/29750/203445568-939211f6-126f-4150-8b7e-d2b3360effff.png)
+
+- Install vscode extensions inside the remote container once it is opened, install the following extensions:
+    * [C++ Extension Pack](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools-extension-pack)
+    * [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
 
 ## Configure you environment
 
