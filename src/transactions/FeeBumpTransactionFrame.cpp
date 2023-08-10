@@ -233,7 +233,7 @@ FeeBumpTransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx)
         return false;
     }
 
-    if (getFeeBid() < getMinFee(header.current()))
+    if (getFeeBid() < getMinFee(*this, header.current()))
     {
         getResult().result.code(txINSUFFICIENT_FEE);
         return false;
@@ -311,13 +311,6 @@ int64_t
 FeeBumpTransactionFrame::getFullFee() const
 {
     return mEnvelope.feeBump().tx.fee;
-}
-
-int64_t
-FeeBumpTransactionFrame::getFeeBid() const
-{
-    int64_t flatFee = mInnerTx->getFullFee() - mInnerTx->getFeeBid();
-    return mEnvelope.feeBump().tx.fee - flatFee;
 }
 
 #ifdef _KINESIS

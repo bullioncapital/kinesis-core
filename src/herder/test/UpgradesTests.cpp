@@ -102,9 +102,8 @@ simulateUpgrade(std::vector<LedgerUpgradeNode> const& nodes,
     qSet.validators.push_back(keys[1].getPublicKey());
     qSet.validators.push_back(keys[2].getPublicKey());
 
-    auto setUpgrade = [](std::optional<uint32>& o, uint32 v) {
-        o = std::make_optional<uint32>(v);
-    };
+    auto setUpgrade = [](std::optional<uint32>& o, uint32 v)
+    { o = std::make_optional<uint32>(v); };
     // create nodes
     for (size_t i = 0; i < nodes.size(); i++)
     {
@@ -140,7 +139,8 @@ simulateUpgrade(std::vector<LedgerUpgradeNode> const& nodes,
 
     simulation->startAllNodes();
 
-    auto statesMatch = [&](std::vector<LedgerUpgradeableData> const& state) {
+    auto statesMatch = [&](std::vector<LedgerUpgradeableData> const& state)
+    {
         for (size_t i = 0; i < nodes.size(); i++)
         {
             auto const& node = simulation->getNode(keys[i].getPublicKey());
@@ -162,13 +162,16 @@ simulateUpgrade(std::vector<LedgerUpgradeNode> const& nodes,
         statesMatch(result.expected);
     }
 
-    auto allSynced = [&]() {
-        return std::all_of(
-            std::begin(keys), std::end(keys), [&](SecretKey const& key) {
-                auto const& node = simulation->getNode(key.getPublicKey());
-                return node->getLedgerManager().getState() ==
-                       LedgerManager::LM_SYNCED_STATE;
-            });
+    auto allSynced = [&]()
+    {
+        return std::all_of(std::begin(keys), std::end(keys),
+                           [&](SecretKey const& key)
+                           {
+                               auto const& node =
+                                   simulation->getNode(key.getPublicKey());
+                               return node->getLedgerManager().getState() ==
+                                      LedgerManager::LM_SYNCED_STATE;
+                           });
     };
 
     // all nodes are synced as there was no disagreement about upgrades
@@ -179,7 +182,9 @@ simulateUpgrade(std::vector<LedgerUpgradeNode> const& nodes,
         // at least one node should show message that it has some
         // pending upgrades
         REQUIRE(std::any_of(
-            std::begin(keys), std::end(keys), [&](SecretKey const& key) {
+            std::begin(keys), std::end(keys),
+            [&](SecretKey const& key)
+            {
                 auto const& node = simulation->getNode(key.getPublicKey());
                 return !node->getStatusManager()
                             .getStatusMessage(StatusCategory::REQUIRES_UPGRADES)
@@ -344,7 +349,8 @@ testValidateUpgrades(VirtualClock::system_time_point preferredUpgradeDatetime,
     baseLH.ledgerVersion = 8;
     baseLH.scpValue.closeTime = checkTime;
 
-    auto checkWith = [&](bool nomination) {
+    auto checkWith = [&](bool nomination)
+    {
         SECTION("invalid upgrade data")
         {
             REQUIRE(!Upgrades{cfg}.isValid(UpgradeType{}, ledgerUpgradeType,
@@ -530,6 +536,7 @@ TEST_CASE("Ledger Manager applies upgrades properly", "[upgrades]")
     auto app = createTestApplication(clock, cfg);
 
     auto const& lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+    auto const& lastHash = lcl.hash;
 
     REQUIRE(lcl.header.ledgerVersion == LedgerManager::GENESIS_LEDGER_VERSION);
     REQUIRE(lcl.header.baseFee == LedgerManager::GENESIS_LEDGER_BASE_FEE);
@@ -839,6 +846,7 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
     auto& lm = app->getLedgerManager();
     auto txFee = lm.getLastTxFee();
 
+    auto const& lcl = lm.getLastClosedLedgerHeader();
     auto root = TestAccount::createRoot(*app);
     auto issuer = root.create("issuer", lm.getLastMinBalance(0) + 100 * txFee);
     auto native = txtest::makeNativeAsset();
@@ -847,12 +855,14 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
 
     auto market = TestMarket{*app};
 
-    auto executeUpgrade = [&] {
+    auto executeUpgrade = [&]
+    {
         REQUIRE(::executeUpgrade(*app, makeProtocolVersionUpgrade(10))
                     .ledgerVersion == 10);
     };
 
-    auto getLiabilities = [&](TestAccount& acc) {
+    auto getLiabilities = [&](TestAccount& acc)
+    {
         Liabilities res;
         LedgerTxn ltx(app->getLedgerTxnRoot());
         auto account = stellar::loadAccount(ltx, acc.getPublicKey());
@@ -860,7 +870,8 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
         res.buying = getBuyingLiabilities(ltx.loadHeader(), account);
         return res;
     };
-    auto getAssetLiabilities = [&](TestAccount& acc, Asset const& asset) {
+    auto getAssetLiabilities = [&](TestAccount& acc, Asset const& asset)
+    {
         Liabilities res;
         if (acc.hasTrustLine(asset))
         {
@@ -875,7 +886,8 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
     auto createOffer = [&](TestAccount& acc, Asset const& selling,
                            Asset const& buying,
                            std::vector<TestMarketOffer>& offers,
-                           OfferState const& afterUpgrade = OfferState::SAME) {
+                           OfferState const& afterUpgrade = OfferState::SAME)
+    {
         OfferState state = {selling, buying, Price{2, 1}, 1000};
         auto offer = market.requireChangesWithOffer(
             {}, [&] { return market.addOffer(acc, state); });
@@ -932,19 +944,20 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
             auto createOfferQuantity =
                 [&](TestAccount& acc, Asset const& selling, Asset const& buying,
                     int64_t quantity, std::vector<TestMarketOffer>& offers,
-                    OfferState const& afterUpgrade = OfferState::SAME) {
-                    OfferState state = {selling, buying, Price{2, 1}, quantity};
-                    auto offer = market.requireChangesWithOffer(
-                        {}, [&] { return market.addOffer(acc, state); });
-                    if (afterUpgrade == OfferState::SAME)
-                    {
-                        offers.push_back({offer.key, offer.state});
-                    }
-                    else
-                    {
-                        offers.push_back({offer.key, afterUpgrade});
-                    }
-                };
+                    OfferState const& afterUpgrade = OfferState::SAME)
+            {
+                OfferState state = {selling, buying, Price{2, 1}, quantity};
+                auto offer = market.requireChangesWithOffer(
+                    {}, [&] { return market.addOffer(acc, state); });
+                if (afterUpgrade == OfferState::SAME)
+                {
+                    offers.push_back({offer.key, offer.state});
+                }
+                else
+                {
+                    offers.push_back({offer.key, afterUpgrade});
+                }
+            };
 
             auto a1 =
                 root.create("A", lm.getLastMinBalance(5) + 2000 + 5 * txFee);
@@ -1217,11 +1230,11 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
 
     SECTION("liabilities overflow")
     {
-        auto createOfferLarge = [&](TestAccount& acc, Asset const& selling,
-                                    Asset const& buying,
-                                    std::vector<TestMarketOffer>& offers,
-                                    OfferState const& afterUpgrade =
-                                        OfferState::SAME) {
+        auto createOfferLarge =
+            [&](TestAccount& acc, Asset const& selling, Asset const& buying,
+                std::vector<TestMarketOffer>& offers,
+                OfferState const& afterUpgrade = OfferState::SAME)
+        {
             OfferState state = {selling, buying, Price{2, 1}, INT64_MAX / 3};
             auto offer = market.requireChangesWithOffer(
                 {}, [&] { return market.addOffer(acc, state); });
@@ -1297,19 +1310,20 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
             auto createOfferQuantity =
                 [&](TestAccount& acc, Asset const& selling, Asset const& buying,
                     int64_t quantity, std::vector<TestMarketOffer>& offers,
-                    OfferState const& afterUpgrade = OfferState::SAME) {
-                    OfferState state = {selling, buying, Price{3, 2}, quantity};
-                    auto offer = market.requireChangesWithOffer(
-                        {}, [&] { return market.addOffer(acc, state); });
-                    if (afterUpgrade == OfferState::SAME)
-                    {
-                        offers.push_back({offer.key, offer.state});
-                    }
-                    else
-                    {
-                        offers.push_back({offer.key, afterUpgrade});
-                    }
-                };
+                    OfferState const& afterUpgrade = OfferState::SAME)
+            {
+                OfferState state = {selling, buying, Price{3, 2}, quantity};
+                auto offer = market.requireChangesWithOffer(
+                    {}, [&] { return market.addOffer(acc, state); });
+                if (afterUpgrade == OfferState::SAME)
+                {
+                    offers.push_back({offer.key, offer.state});
+                }
+                else
+                {
+                    offers.push_back({offer.key, afterUpgrade});
+                }
+            };
 
             auto a1 = root.create("A", lm.getLastMinBalance(6) + 6 * txFee);
             a1.changeTrust(cur1, 1000);
@@ -1336,19 +1350,20 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
             auto createOfferQuantity =
                 [&](TestAccount& acc, Asset const& selling, Asset const& buying,
                     int64_t quantity, std::vector<TestMarketOffer>& offers,
-                    OfferState const& afterUpgrade = OfferState::SAME) {
-                    OfferState state = {selling, buying, Price{2, 3}, quantity};
-                    auto offer = market.requireChangesWithOffer(
-                        {}, [&] { return market.addOffer(acc, state); });
-                    if (afterUpgrade == OfferState::SAME)
-                    {
-                        offers.push_back({offer.key, offer.state});
-                    }
-                    else
-                    {
-                        offers.push_back({offer.key, afterUpgrade});
-                    }
-                };
+                    OfferState const& afterUpgrade = OfferState::SAME)
+            {
+                OfferState state = {selling, buying, Price{2, 3}, quantity};
+                auto offer = market.requireChangesWithOffer(
+                    {}, [&] { return market.addOffer(acc, state); });
+                if (afterUpgrade == OfferState::SAME)
+                {
+                    offers.push_back({offer.key, offer.state});
+                }
+                else
+                {
+                    offers.push_back({offer.key, afterUpgrade});
+                }
+            };
 
             auto a1 = root.create("A", lm.getLastMinBalance(4) + 4 * txFee);
             a1.changeTrust(cur1, 1000);
@@ -1372,23 +1387,24 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
             auto createOfferQuantity =
                 [&](TestAccount& acc, Asset const& selling, Asset const& buying,
                     int64_t quantity, std::vector<TestMarketOffer>& offers,
-                    OfferState const& afterUpgrade = OfferState::SAME) {
-                    OfferState state = {selling, buying, Price{3, 2}, quantity};
-                    auto offer = market.requireChangesWithOffer(
-                        {}, [&] { return market.addOffer(acc, state); });
-                    if (afterUpgrade == OfferState::SAME)
-                    {
-                        offers.push_back({offer.key, offer.state});
-                    }
-                    else
-                    {
-                        offers.push_back({offer.key, afterUpgrade});
-                    }
-                };
-            auto startingBalance =lm.getLastMinBalance(10) + 2000 + 12 * txFee;
-            auto additionalFund = txFee + (startingBalance * 0.0045) +startingBalance;
-            auto a1 =
-                root.create("A", additionalFund);
+                    OfferState const& afterUpgrade = OfferState::SAME)
+            {
+                OfferState state = {selling, buying, Price{3, 2}, quantity};
+                auto offer = market.requireChangesWithOffer(
+                    {}, [&] { return market.addOffer(acc, state); });
+                if (afterUpgrade == OfferState::SAME)
+                {
+                    offers.push_back({offer.key, offer.state});
+                }
+                else
+                {
+                    offers.push_back({offer.key, afterUpgrade});
+                }
+            };
+            auto startingBalance = lm.getLastMinBalance(10) + 2000 + 12 * txFee;
+            auto additionalFund =
+                txFee + (startingBalance * 0.0045) + startingBalance;
+            auto a1 = root.create("A", additionalFund);
             a1.changeTrust(cur1, 5125);
             a1.changeTrust(cur2, 5125);
             issuer.pay(a1, cur1, 2050);
@@ -1523,8 +1539,9 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
 
         SECTION("unauthorized offers still contribute liabilities")
         {
-            auto startingBalance =lm.getLastMinBalance(10) + 2000 + 10 * txFee;
-            auto additionalFund = txFee + (startingBalance * 0.0045) +startingBalance;
+            auto startingBalance = lm.getLastMinBalance(10) + 2000 + 10 * txFee;
+            auto additionalFund =
+                txFee + (startingBalance * 0.0045) + startingBalance;
             auto a1 = root.create("A", startingBalance);
             a1.changeTrust(cur1, 6000);
             a1.changeTrust(cur2, 6000);
@@ -1853,9 +1870,8 @@ TEST_CASE("upgrade to version 12", "[upgrades]")
             auto lev0Snap = lev0.getSnap();
             auto lev1Curr = lev1.getCurr();
             auto lev1Snap = lev1.getSnap();
-            auto getVers = [](std::shared_ptr<Bucket> b) -> uint32_t {
-                return BucketInputIterator(b).getMetadata().ledgerVersion;
-            };
+            auto getVers = [](std::shared_ptr<Bucket> b) -> uint32_t
+            { return BucketInputIterator(b).getMetadata().ledgerVersion; };
             switch (ledgerSeq)
             {
             case 8:
@@ -1978,6 +1994,10 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
     VirtualClock clock;
     auto cfg = getTestConfig(0);
 
+    // Do our setup in version 0 so that for_versions_* below do not
+    // try to downgrade us from >0 to 0.
+    cfg.USE_CONFIG_FOR_GENESIS = false;
+
     auto app = createTestApplication(clock, cfg);
 
     auto& lm = app->getLedgerManager();
@@ -1991,12 +2011,14 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
 
     auto market = TestMarket{*app};
 
-    auto executeUpgrade = [&](uint32_t newReserve) {
+    auto executeUpgrade = [&](uint32_t newReserve)
+    {
         REQUIRE(::executeUpgrade(*app, makeBaseReserveUpgrade(newReserve))
                     .baseReserve == newReserve);
     };
 
-    auto getLiabilities = [&](TestAccount& acc) {
+    auto getLiabilities = [&](TestAccount& acc)
+    {
         Liabilities res;
         LedgerTxn ltx(app->getLedgerTxnRoot());
         auto account = stellar::loadAccount(ltx, acc.getPublicKey());
@@ -2004,7 +2026,8 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
         res.buying = getBuyingLiabilities(ltx.loadHeader(), account);
         return res;
     };
-    auto getAssetLiabilities = [&](TestAccount& acc, Asset const& asset) {
+    auto getAssetLiabilities = [&](TestAccount& acc, Asset const& asset)
+    {
         Liabilities res;
         if (acc.hasTrustLine(asset))
         {
@@ -2015,12 +2038,14 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
         }
         return res;
     };
-    auto getNumSponsoringEntries = [&](TestAccount& acc) {
+    auto getNumSponsoringEntries = [&](TestAccount& acc)
+    {
         LedgerTxn ltx(app->getLedgerTxnRoot());
         auto account = stellar::loadAccount(ltx, acc.getPublicKey());
         return getNumSponsoring(account.current());
     };
-    auto getNumSponsoredEntries = [&](TestAccount& acc) {
+    auto getNumSponsoredEntries = [&](TestAccount& acc)
+    {
         LedgerTxn ltx(app->getLedgerTxnRoot());
         auto account = stellar::loadAccount(ltx, acc.getPublicKey());
         return getNumSponsored(account.current());
@@ -2029,7 +2054,8 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
     auto createOffer = [&](TestAccount& acc, Asset const& selling,
                            Asset const& buying,
                            std::vector<TestMarketOffer>& offers,
-                           OfferState const& afterUpgrade = OfferState::SAME) {
+                           OfferState const& afterUpgrade = OfferState::SAME)
+    {
         OfferState state = {selling, buying, Price{2, 1}, 1000};
         auto offer = market.requireChangesWithOffer(
             {}, [&] { return market.addOffer(acc, state); });
@@ -2045,7 +2071,8 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
 
     auto createOffers = [&](TestAccount& acc,
                             std::vector<TestMarketOffer>& offers,
-                            bool expectToDeleteNativeSells = false) {
+                            bool expectToDeleteNativeSells = false)
+    {
         OfferState nativeSellState =
             expectToDeleteNativeSells ? OfferState::DELETED : OfferState::SAME;
 
@@ -2063,16 +2090,21 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
         createOffer(acc, cur2, cur1, offers);
     };
 
-    auto deleteOffers = [&](TestAccount& acc,
-                            std::vector<TestMarketOffer> const& offers) {
+    auto deleteOffers =
+        [&](TestAccount& acc, std::vector<TestMarketOffer> const& offers)
+    {
         for (auto const& offer : offers)
         {
             auto delOfferState = offer.state;
             delOfferState.amount = 0;
-            market.requireChangesWithOffer({}, [&] {
-                return market.updateOffer(acc, offer.key.offerID, delOfferState,
-                                          OfferState::DELETED);
-            });
+            market.requireChangesWithOffer({},
+                                           [&]
+                                           {
+                                               return market.updateOffer(
+                                                   acc, offer.key.offerID,
+                                                   delOfferState,
+                                                   OfferState::DELETED);
+                                           });
         }
     };
 
@@ -2085,54 +2117,66 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
         issuer.pay(a1, cur1, 4000);
         issuer.pay(a1, cur2, 4000);
 
-        for_versions_to(9, *app, [&] {
-            std::vector<TestMarketOffer> offers;
-            createOffers(a1, offers);
-            uint32_t baseReserve = lm.getLastReserve();
-            market.requireChanges(offers,
-                                  std::bind(executeUpgrade, baseReserve / 2));
-            deleteOffers(a1, offers);
-        });
-        for_versions_from(10, *app, [&] {
-            std::vector<TestMarketOffer> offers;
-            createOffers(a1, offers);
-            uint32_t baseReserve = lm.getLastReserve();
-            market.requireChanges(offers,
-                                  std::bind(executeUpgrade, baseReserve / 2));
-            REQUIRE(getLiabilities(a1) == Liabilities{8000, 4000});
-            REQUIRE(getAssetLiabilities(a1, cur1) == Liabilities{8000, 4000});
-            REQUIRE(getAssetLiabilities(a1, cur2) == Liabilities{8000, 4000});
-            deleteOffers(a1, offers);
-        });
+        for_versions_to(9, *app,
+                        [&]
+                        {
+                            std::vector<TestMarketOffer> offers;
+                            createOffers(a1, offers);
+                            uint32_t baseReserve = lm.getLastReserve();
+                            market.requireChanges(
+                                offers,
+                                std::bind(executeUpgrade, baseReserve / 2));
+                            deleteOffers(a1, offers);
+                        });
+        for_versions_from(
+            10, *app,
+            [&]
+            {
+                std::vector<TestMarketOffer> offers;
+                createOffers(a1, offers);
+                uint32_t baseReserve = lm.getLastReserve();
+                market.requireChanges(
+                    offers, std::bind(executeUpgrade, baseReserve / 2));
+                REQUIRE(getLiabilities(a1) == Liabilities{8000, 4000});
+                REQUIRE(getAssetLiabilities(a1, cur1) ==
+                        Liabilities{8000, 4000});
+                REQUIRE(getAssetLiabilities(a1, cur2) ==
+                        Liabilities{8000, 4000});
+                deleteOffers(a1, offers);
+            });
     }
 
     SECTION("increase reserve")
     {
-        for_versions_to(9, *app, [&] {
-            auto a1 = root.create("A", 2 * lm.getLastMinBalance(14) + 3999 +
-                                           14 * txFee);
-            a1.changeTrust(cur1, 12000);
-            a1.changeTrust(cur2, 12000);
-            issuer.pay(a1, cur1, 4000);
-            issuer.pay(a1, cur2, 4000);
+        for_versions_to(
+            9, *app,
+            [&]
+            {
+                auto a1 = root.create("A", 2 * lm.getLastMinBalance(14) + 3999 +
+                                               14 * txFee);
+                a1.changeTrust(cur1, 12000);
+                a1.changeTrust(cur2, 12000);
+                issuer.pay(a1, cur1, 4000);
+                issuer.pay(a1, cur2, 4000);
 
-            auto a2 = root.create("B", 2 * lm.getLastMinBalance(14) + 4000 +
-                                           14 * txFee);
-            a2.changeTrust(cur1, 12000);
-            a2.changeTrust(cur2, 12000);
-            issuer.pay(a2, cur1, 4000);
-            issuer.pay(a2, cur2, 4000);
+                auto a2 = root.create("B", 2 * lm.getLastMinBalance(14) + 4000 +
+                                               14 * txFee);
+                a2.changeTrust(cur1, 12000);
+                a2.changeTrust(cur2, 12000);
+                issuer.pay(a2, cur1, 4000);
+                issuer.pay(a2, cur2, 4000);
 
-            std::vector<TestMarketOffer> offers;
-            createOffers(a1, offers);
-            createOffers(a2, offers);
+                std::vector<TestMarketOffer> offers;
+                createOffers(a1, offers);
+                createOffers(a2, offers);
 
-            uint32_t baseReserve = lm.getLastReserve();
-            market.requireChanges(offers,
-                                  std::bind(executeUpgrade, 2 * baseReserve));
-        });
+                uint32_t baseReserve = lm.getLastReserve();
+                market.requireChanges(
+                    offers, std::bind(executeUpgrade, 2 * baseReserve));
+            });
 
-        auto submitTx = [&](TransactionFrameBasePtr tx) {
+        auto submitTx = [&](TransactionFrameBasePtr tx)
+        {
             LedgerTxn ltx(app->getLedgerTxnRoot());
             TransactionMetaFrame txm(ltx.loadHeader().current().ledgerVersion);
             REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
@@ -2142,8 +2186,9 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
             REQUIRE(tx->getResultCode() == txSUCCESS);
         };
 
-        auto increaseReserveFromV10 = [&](bool allowMaintainLiablities,
-                                          bool flipSponsorship) {
+        auto increaseReserveFromV10 =
+            [&](bool allowMaintainLiablities, bool flipSponsorship)
+        {
             auto a1 = root.create("A", 2 * lm.getLastMinBalance(14) + 3999 +
                                            14 * txFee);
             a1.changeTrust(cur1, 12000);
@@ -2224,11 +2269,11 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
 
         SECTION("sponsorships")
         {
-            auto accSponsorsAllOffersTest = [&](TestAccount& sponsoringAcc,
-                                                TestAccount& sponsoredAcc,
-                                                TestAccount& sponsoredAcc2,
-                                                bool sponsoringAccPullOffers,
-                                                bool sponsoredAccPullOffers) {
+            auto accSponsorsAllOffersTest =
+                [&](TestAccount& sponsoringAcc, TestAccount& sponsoredAcc,
+                    TestAccount& sponsoredAcc2, bool sponsoringAccPullOffers,
+                    bool sponsoredAccPullOffers)
+            {
                 sponsoringAcc.changeTrust(cur1, 12000);
                 sponsoringAcc.changeTrust(cur2, 12000);
                 issuer.pay(sponsoringAcc, cur1, 4000);
@@ -2369,8 +2414,9 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
                         Liabilities{4000, 4000});
             };
 
-            auto sponsorshipTestsBySeed = [&](std::string sponsoringSeed,
-                                              std::string sponsoredSeed) {
+            auto sponsorshipTestsBySeed =
+                [&](std::string sponsoringSeed, std::string sponsoredSeed)
+            {
                 auto sponsoring =
                     root.create(sponsoringSeed, 2 * lm.getLastMinBalance(27) +
                                                     4000 + 15 * txFee);
@@ -2407,22 +2453,24 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
                 }
             };
 
-            for_versions_from(14, *app, [&] {
-                // Swap the seeds to test that the ordering of accounts doesn't
-                // matter when upgrading
-                SECTION("account A is sponsored")
-                {
-                    sponsorshipTestsBySeed("B", "A");
-                }
-                SECTION("account B is sponsored")
-                {
-                    sponsorshipTestsBySeed("A", "B");
-                }
-                SECTION("swap sponsorship of orders")
-                {
-                    increaseReserveFromV10(false, true);
-                }
-            });
+            for_versions_from(14, *app,
+                              [&]
+                              {
+                                  // Swap the seeds to test that the ordering of
+                                  // accounts doesn't matter when upgrading
+                                  SECTION("account A is sponsored")
+                                  {
+                                      sponsorshipTestsBySeed("B", "A");
+                                  }
+                                  SECTION("account B is sponsored")
+                                  {
+                                      sponsorshipTestsBySeed("A", "B");
+                                  }
+                                  SECTION("swap sponsorship of orders")
+                                  {
+                                      increaseReserveFromV10(false, true);
+                                  }
+                              });
         }
     }
 }
@@ -2520,6 +2568,8 @@ TEST_CASE("simulate upgrades", "[herder][upgrades][acceptance]")
 TEST_CASE_VERSIONS("upgrade invalid during ledger close", "[upgrades]")
 {
     VirtualClock clock;
+    // Do our setup in version 0 so that for_versions_* below do not
+    // try to downgrade us from >0 to 0.
     auto cfg = getTestConfig();
     cfg.USE_CONFIG_FOR_GENESIS = false;
 
@@ -2558,24 +2608,28 @@ TEST_CASE_VERSIONS("upgrade invalid during ledger close", "[upgrades]")
         for_versions_to(
             17, *app, [&] { executeUpgrade(*app, makeFlagsUpgrade(1), true); });
 
-        for_versions_from(18, *app, [&] {
-            auto allFlags = DISABLE_LIQUIDITY_POOL_TRADING_FLAG |
-                            DISABLE_LIQUIDITY_POOL_DEPOSIT_FLAG |
-                            DISABLE_LIQUIDITY_POOL_WITHDRAWAL_FLAG
+        for_versions_from(
+            18, *app,
+            [&]
+            {
+                auto allFlags =
+                    DISABLE_LIQUIDITY_POOL_TRADING_FLAG |
+                    DISABLE_LIQUIDITY_POOL_DEPOSIT_FLAG |
+                    DISABLE_LIQUIDITY_POOL_WITHDRAWAL_FLAG
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
-                            | DISABLE_CONTRACT_CREATE |
-                            DISABLE_CONTRACT_UPDATE | DISABLE_CONTRACT_REMOVE |
-                            DISABLE_CONTRACT_INVOKE
+                    | DISABLE_CONTRACT_CREATE | DISABLE_CONTRACT_UPDATE |
+                    DISABLE_CONTRACT_REMOVE | DISABLE_CONTRACT_INVOKE
 #endif
-                ;
-            REQUIRE(allFlags == MASK_LEDGER_HEADER_FLAGS);
+                    ;
+                REQUIRE(allFlags == MASK_LEDGER_HEADER_FLAGS);
 
             executeUpgrade(*app, makeFlagsUpgrade(MASK_LEDGER_HEADER_FLAGS + 1),
                            true);
 
-            // success
-            executeUpgrade(*app, makeFlagsUpgrade(MASK_LEDGER_HEADER_FLAGS));
-        });
+                // success
+                executeUpgrade(*app,
+                               makeFlagsUpgrade(MASK_LEDGER_HEADER_FLAGS));
+            });
     }
 }
 
@@ -2785,89 +2839,93 @@ TEST_CASE_VERSIONS("upgrade flags", "[upgrades][liquiditypool]")
         makeChangeTrustAssetPoolShare(native, cur1, LIQUIDITY_POOL_FEE_V18);
     auto poolNative1 = xdrSha256(shareNative1.liquidityPool());
 
-    auto executeUpgrade = [&](uint32_t newFlags) {
+    auto executeUpgrade = [&](uint32_t newFlags)
+    {
         REQUIRE(
             ::executeUpgrade(*app, makeFlagsUpgrade(newFlags)).ext.v1().flags ==
             newFlags);
     };
 
-    for_versions_from(18, *app, [&] {
-        // deposit
-        REQUIRE_THROWS_AS(root.liquidityPoolDeposit(poolNative1, 1, 1,
-                                                    Price{1, 1}, Price{1, 1}),
-                          ex_LIQUIDITY_POOL_DEPOSIT_NO_TRUST);
+    for_versions_from(
+        18, *app,
+        [&]
+        {
+            // deposit
+            REQUIRE_THROWS_AS(root.liquidityPoolDeposit(
+                                  poolNative1, 1, 1, Price{1, 1}, Price{1, 1}),
+                              ex_LIQUIDITY_POOL_DEPOSIT_NO_TRUST);
 
-        executeUpgrade(DISABLE_LIQUIDITY_POOL_DEPOSIT_FLAG);
+            executeUpgrade(DISABLE_LIQUIDITY_POOL_DEPOSIT_FLAG);
 
-        REQUIRE_THROWS_AS(root.liquidityPoolDeposit(poolNative1, 1, 1,
-                                                    Price{1, 1}, Price{1, 1}),
-                          ex_opNOT_SUPPORTED);
+            REQUIRE_THROWS_AS(root.liquidityPoolDeposit(
+                                  poolNative1, 1, 1, Price{1, 1}, Price{1, 1}),
+                              ex_opNOT_SUPPORTED);
 
-        // withdraw
-        REQUIRE_THROWS_AS(root.liquidityPoolWithdraw(poolNative1, 1, 0, 0),
-                          ex_LIQUIDITY_POOL_WITHDRAW_NO_TRUST);
+            // withdraw
+            REQUIRE_THROWS_AS(root.liquidityPoolWithdraw(poolNative1, 1, 0, 0),
+                              ex_LIQUIDITY_POOL_WITHDRAW_NO_TRUST);
 
-        executeUpgrade(DISABLE_LIQUIDITY_POOL_WITHDRAWAL_FLAG);
+            executeUpgrade(DISABLE_LIQUIDITY_POOL_WITHDRAWAL_FLAG);
 
-        REQUIRE_THROWS_AS(root.liquidityPoolWithdraw(poolNative1, 1, 0, 0),
-                          ex_opNOT_SUPPORTED);
+            REQUIRE_THROWS_AS(root.liquidityPoolWithdraw(poolNative1, 1, 0, 0),
+                              ex_opNOT_SUPPORTED);
 
-        // clear flag
-        executeUpgrade(0);
+            // clear flag
+            executeUpgrade(0);
 
-        // try both after clearing flags
-        REQUIRE_THROWS_AS(root.liquidityPoolDeposit(poolNative1, 1, 1,
-                                                    Price{1, 1}, Price{1, 1}),
-                          ex_LIQUIDITY_POOL_DEPOSIT_NO_TRUST);
+            // try both after clearing flags
+            REQUIRE_THROWS_AS(root.liquidityPoolDeposit(
+                                  poolNative1, 1, 1, Price{1, 1}, Price{1, 1}),
+                              ex_LIQUIDITY_POOL_DEPOSIT_NO_TRUST);
 
-        REQUIRE_THROWS_AS(root.liquidityPoolWithdraw(poolNative1, 1, 0, 0),
-                          ex_LIQUIDITY_POOL_WITHDRAW_NO_TRUST);
+            REQUIRE_THROWS_AS(root.liquidityPoolWithdraw(poolNative1, 1, 0, 0),
+                              ex_LIQUIDITY_POOL_WITHDRAW_NO_TRUST);
 
-        // set both flags
-        executeUpgrade(DISABLE_LIQUIDITY_POOL_DEPOSIT_FLAG |
-                       DISABLE_LIQUIDITY_POOL_WITHDRAWAL_FLAG);
+            // set both flags
+            executeUpgrade(DISABLE_LIQUIDITY_POOL_DEPOSIT_FLAG |
+                           DISABLE_LIQUIDITY_POOL_WITHDRAWAL_FLAG);
 
-        REQUIRE_THROWS_AS(root.liquidityPoolDeposit(poolNative1, 1, 1,
-                                                    Price{1, 1}, Price{1, 1}),
-                          ex_opNOT_SUPPORTED);
+            REQUIRE_THROWS_AS(root.liquidityPoolDeposit(
+                                  poolNative1, 1, 1, Price{1, 1}, Price{1, 1}),
+                              ex_opNOT_SUPPORTED);
 
-        REQUIRE_THROWS_AS(root.liquidityPoolWithdraw(poolNative1, 1, 0, 0),
-                          ex_opNOT_SUPPORTED);
+            REQUIRE_THROWS_AS(root.liquidityPoolWithdraw(poolNative1, 1, 0, 0),
+                              ex_opNOT_SUPPORTED);
 
-        // clear flags
-        executeUpgrade(0);
+            // clear flags
+            executeUpgrade(0);
 
-        root.changeTrust(shareNative1, INT64_MAX);
+            root.changeTrust(shareNative1, INT64_MAX);
 
-        // deposit so we can test the disable trading flag
-        root.liquidityPoolDeposit(poolNative1, 1000, 1000, Price{1, 1},
-                                  Price{1, 1});
+            // deposit so we can test the disable trading flag
+            root.liquidityPoolDeposit(poolNative1, 1000, 1000, Price{1, 1},
+                                      Price{1, 1});
 
-        auto a1 =
-            root.create("a1", app->getLedgerManager().getLastMinBalance(0));
+            auto a1 =
+                root.create("a1", app->getLedgerManager().getLastMinBalance(0));
 
-        auto balance = a1.getBalance();
-        root.pay(a1, cur1, 2, native, 1, {});
-        REQUIRE(balance + 1 == a1.getBalance());
+            auto balance = a1.getBalance();
+            root.pay(a1, cur1, 2, native, 1, {});
+            REQUIRE(balance + 1 == a1.getBalance());
 
-        executeUpgrade(DISABLE_LIQUIDITY_POOL_TRADING_FLAG);
+            executeUpgrade(DISABLE_LIQUIDITY_POOL_TRADING_FLAG);
 
-        REQUIRE_THROWS_AS(root.pay(a1, cur1, 2, native, 1, {}),
-                          ex_PATH_PAYMENT_STRICT_RECEIVE_TOO_FEW_OFFERS);
+            REQUIRE_THROWS_AS(root.pay(a1, cur1, 2, native, 1, {}),
+                              ex_PATH_PAYMENT_STRICT_RECEIVE_TOO_FEW_OFFERS);
 
-        executeUpgrade(0);
+            executeUpgrade(0);
 
-        balance = a1.getBalance();
-        root.pay(a1, cur1, 2, native, 1, {});
-        REQUIRE(balance + 1 == a1.getBalance());
+            balance = a1.getBalance();
+            root.pay(a1, cur1, 2, native, 1, {});
+            REQUIRE(balance + 1 == a1.getBalance());
 
-        // block it again after trade (and add on a second flag)
-        executeUpgrade(DISABLE_LIQUIDITY_POOL_TRADING_FLAG |
-                       DISABLE_LIQUIDITY_POOL_WITHDRAWAL_FLAG);
+            // block it again after trade (and add on a second flag)
+            executeUpgrade(DISABLE_LIQUIDITY_POOL_TRADING_FLAG |
+                           DISABLE_LIQUIDITY_POOL_WITHDRAWAL_FLAG);
 
-        REQUIRE_THROWS_AS(root.pay(a1, cur1, 2, native, 1, {}),
-                          ex_PATH_PAYMENT_STRICT_RECEIVE_TOO_FEW_OFFERS);
-    });
+            REQUIRE_THROWS_AS(root.pay(a1, cur1, 2, native, 1, {}),
+                              ex_PATH_PAYMENT_STRICT_RECEIVE_TOO_FEW_OFFERS);
+        });
 }
 
 TEST_CASE("upgrade to generalized tx set changes TxSetFrame format",
@@ -2909,7 +2967,9 @@ TEST_CASE("upgrade to generalized tx set in network", "[upgrades][overlay]")
     }
     auto networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
     auto simulation = Topologies::core(
-        4, 0.75, Simulation::OVER_LOOPBACK, networkID, [](int i) {
+        4, 0.75, Simulation::OVER_LOOPBACK, networkID,
+        [](int i)
+        {
             auto cfg = getTestConfig(i, Config::TESTDB_ON_DISK_SQLITE);
             cfg.MAX_SLOTS_TO_REMEMBER = 12;
             cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION =
@@ -2920,9 +2980,9 @@ TEST_CASE("upgrade to generalized tx set in network", "[upgrades][overlay]")
     simulation->startAllNodes();
 
     // Wait for 3 ledgers in order to get to stable closing schedule (every 5s).
-    simulation->crankUntil(
-        [&]() { return simulation->haveAllExternalized(3, 1); },
-        Herder::EXP_LEDGER_TIMESPAN_SECONDS * 2, false);
+    simulation->crankUntil([&]()
+                           { return simulation->haveAllExternalized(3, 1); },
+                           Herder::EXP_LEDGER_TIMESPAN_SECONDS * 2, false);
     auto nodes = simulation->getNodes();
     auto lclCloseTime =
         VirtualClock::from_time_t(nodes[0]
@@ -2951,7 +3011,8 @@ TEST_CASE("upgrade to generalized tx set in network", "[upgrades][overlay]")
     auto currLoadGenCount = loadGenDone.count();
     std::optional<uint32_t> upgradeLedger;
     simulation->crankUntil(
-        [&]() {
+        [&]()
+        {
             if (!upgradeLedger &&
                 nodes[0]->getLedgerManager()
                         .getLastClosedLedgerHeader()
@@ -2983,7 +3044,8 @@ TEST_CASE("upgrade to generalized tx set in network", "[upgrades][overlay]")
         [&]() { return simulation->haveAllExternalized(12, 12); },
         Herder::EXP_LEDGER_TIMESPAN_SECONDS * 2, false);
 
-    auto getLedgerTxSet = [](Application& node, uint32_t ledger) {
+    auto getLedgerTxSet = [](Application& node, uint32_t ledger)
+    {
         auto& herder = *static_cast<HerderImpl*>(&node.getHerder());
         TxSetFrameConstPtr txSet;
         for (auto const& env : herder.getSCP().getLatestMessagesSend(ledger))
