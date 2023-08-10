@@ -55,8 +55,6 @@ class Upgrades
         std::optional<uint32> mBasePercentageFee;
         std::optional<uint64> mMaxFee;
         std::optional<uint32> mMaxTxSetSize;
-        std::optional<uint32> mBasePercentageFee;
-        std::optional<uint64> mMaxFee;
         std::optional<uint32> mBaseReserve;
         std::optional<uint32> mFlags;
 

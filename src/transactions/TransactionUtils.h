@@ -93,7 +93,7 @@ class TempReduceLimitsForTesting : public NonMovableOrCopyable
 };
 
 #endif
-
+int64_t const BASIS_POINTS_TO_PERCENT = 10000;
 int32_t const EXPECTED_CLOSE_TIME_MULT = 2;
 uint32_t const TRUSTLINE_AUTH_FLAGS =
     AUTHORIZED_FLAG | AUTHORIZED_TO_MAINTAIN_LIABILITIES_FLAG;

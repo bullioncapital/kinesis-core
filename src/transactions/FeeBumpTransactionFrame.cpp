@@ -190,7 +190,7 @@ FeeBumpTransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx)
         return false;
     }
 
-    if (getFeeBid() < getMinFee(header.current()))
+    if (getFeeBid() < getMinFee(*this, header.current()))
     {
         getResult().result.code(txINSUFFICIENT_FEE);
         return false;
@@ -270,18 +270,6 @@ FeeBumpTransactionFrame::getFeeBid() const
     return mEnvelope.feeBump().tx.fee;
 }
 
-#ifdef _KINESIS
-int64_t
-FeeBumpTransactionFrame::getMinFee(LedgerHeader const& header) const
-{
-    auto innerTxMinFee = mInnerTx->getMinFee(header);
-    auto feeBumpMinFee = ((int64_t)header.baseFee) + innerTxMinFee;
-    CLOG_DEBUG(Tx, "FeeBumpTransactionFrame - {} getMinFee {}",
-            xdr_to_string(getFullHash(), "fullHash"),
-            feeBumpMinFee);
-    return feeBumpMinFee;
-}
-#endif
 int64_t
 FeeBumpTransactionFrame::getFee(LedgerHeader const& header,
                                 std::optional<int64_t> baseFee,
@@ -292,7 +280,7 @@ FeeBumpTransactionFrame::getFee(LedgerHeader const& header,
         return getFeeBid();
     }
     
-    CLOG_DEBUG(Tx, "**Kinesis** FeeBumpTransactionFrame::getFee() - called, baseFee: {}", baseFee);
+    //CLOG_DEBUG(Tx, "**Kinesis** FeeBumpTransactionFrame::getFee() - called, baseFee: {}", baseFee);
     int64_t adjustedFee = *baseFee * std::max<int64_t>(1, getNumOperations());
     if (applying)
     {

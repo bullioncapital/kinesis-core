@@ -12,6 +12,7 @@
 #include "ledger/TrustLineWrapper.h"
 #include "transactions/OfferExchange.h"
 #include "transactions/SponsorshipUtils.h"
+#include "transactions/TransactionFrame.h"
 #include "util/ProtocolVersion.h"
 #include "util/XDROperators.h"
 #include "util/types.h"
@@ -443,7 +444,8 @@ acquireOrReleaseLiabilities(AbstractLedgerTxn& ltx,
     }
     auto const& sellerID = offer.sellerID;
 
-    auto loadAccountAndValidate = [&ltx, &sellerID]() {
+    auto loadAccountAndValidate = [&ltx, &sellerID]()
+    {
         auto account = stellar::loadAccount(ltx, sellerID);
         if (!account)
         {
@@ -452,7 +454,8 @@ acquireOrReleaseLiabilities(AbstractLedgerTxn& ltx,
         return account;
     };
 
-    auto loadTrustAndValidate = [&ltx, &sellerID](Asset const& asset) {
+    auto loadTrustAndValidate = [&ltx, &sellerID](Asset const& asset)
+    {
         auto trust = stellar::loadTrustLine(ltx, sellerID, asset);
         if (!trust)
         {
@@ -1495,9 +1498,8 @@ removeOffersAndPoolShareTrustLines(AbstractLedgerTxn& ltx,
 
         // use a lambda so we don't hold a reference to the internals of
         // TrustLineEntry
-        auto poolTL = [&]() -> TrustLineEntry const& {
-            return poolShareTrustLine.current().data.trustLine();
-        };
+        auto poolTL = [&]() -> TrustLineEntry const&
+        { return poolShareTrustLine.current().data.trustLine(); };
 
         auto poolID = poolTL().asset.liquidityPoolID();
         auto balance = poolTL().balance;
@@ -1517,7 +1519,8 @@ removeOffersAndPoolShareTrustLines(AbstractLedgerTxn& ltx,
         auto redeemIntoClaimableBalance =
             [&ltxInner, &txSourceID, txSeqNum, opIndex, &poolID, &accountID,
              &cbSponsoringAccID](Asset const& assetInPool,
-                                 int64_t amount) -> RemoveResult {
+                                 int64_t amount) -> RemoveResult
+        {
             // if the amount is 0 or the claimant is the issuer, then we don't
             // create the claimable balance
             if (isIssuer(accountID, assetInPool) || amount == 0)
@@ -1620,9 +1623,7 @@ removeOffersAndPoolShareTrustLines(AbstractLedgerTxn& ltx,
         // use a lambda so we don't hold a reference to the
         // LiquidityPoolEntry
         auto constantProduct = [&]() -> auto&
-        {
-            return pool.current().data.liquidityPool().body.constantProduct();
-        };
+        { return pool.current().data.liquidityPool().body.constantProduct(); };
 
         if (balance != 0)
         {
@@ -1800,7 +1801,70 @@ maybeUpdateAccountOnLedgerSeqUpdate(LedgerTxnHeader const& header,
         v3.seqTime = header.current().scpValue.closeTime;
     }
 }
+#ifdef _KINESIS
 
+// kinesis implementation
+int64_t
+getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
+          std::optional<int64_t> baseFee)
+{
+   // auto innerTxMinFee = tx.getMinFee(header);
+    //auto feeBumpMinFee = ((int64_t)header.baseFee) + innerTxMinFee;
+    //return feeBumpMinFee;
+    int64_t effectiveBaseFee = header.baseFee;
+        
+        if (baseFee)
+    {
+        effectiveBaseFee = std::max(effectiveBaseFee, *baseFee);
+    }
+    effectiveBaseFee = effectiveBaseFee * std::max<int64_t>(1, tx.getNumOperations());
+    // apply base percentage fee
+    // affect: create_account and payment ops
+    int64_t accumulatedBasePercentageFee = 0;
+    double basePercentageFeeRate =
+        (double)header.basePercentageFee / (double)BASIS_POINTS_TO_PERCENT;
+
+    int64_t totalAmount = 0;
+   
+    std::vector<std::shared_ptr<OperationFrame>> const& mOperations = tx.getOperations(); 
+
+    for (auto& op : mOperations)
+    {
+        auto operation = op->getOperation();
+        auto operationType = operation.body.type();
+        if (operationType == CREATE_ACCOUNT)
+        {
+            totalAmount += operation.body.createAccountOp().startingBalance;
+        }
+        else if (operationType == PAYMENT)
+        {
+            int8_t assetType =
+                operation.body.paymentOp().asset.type(); // 0 is native
+            if (assetType == 0)
+            {
+                totalAmount += operation.body.paymentOp().amount;
+            }
+        }
+    }
+
+    accumulatedBasePercentageFee +=
+        (int64_t)(totalAmount * basePercentageFeeRate);
+    int64_t totalFee = effectiveBaseFee + accumulatedBasePercentageFee;
+  //  CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getMinFee() - header.baseFee: {}, baseFee: {}, amount: {}, totalFee: {}",
+    //   header.baseFee, baseFee, totalAmount, totalFee
+    //);
+    int64_t headerMaxFee=(int64_t)header.maxFee;
+    totalFee=totalFee>headerMaxFee?headerMaxFee:totalFee;
+    return totalFee;
+   
+    //     // return totalFee;
+    //     auto feeBumpMinFee = ((int64_t)header.baseFee) + totalFee;
+    //     // CLOG_DEBUG(Tx, "FeeBumpTransactionFrame - {} getMinFee {}",
+    //     //       xdr_to_string(getFullHash(), "fullHash"),
+    //     //     feeBumpMinFee);
+    //     return feeBumpMinFee;
+    }
+#else
 int64_t
 getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
           std::optional<int64_t> baseFee)
@@ -1812,70 +1876,70 @@ getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
     }
     return effectiveBaseFee * std::max<int64_t>(1, tx.getNumOperations());
 }
-
-namespace detail
-{
-struct MuxChecker
-{
-    bool mHasMuxedAccount{false};
-
-    void
-    operator()(stellar::MuxedAccount const& t)
+#endif
+    namespace detail
     {
-        // checks if this is a multiplexed account,
-        // such as KEY_TYPE_MUXED_ED25519
-        if ((t.type() & 0x100) != 0)
+    struct MuxChecker
+    {
+        bool mHasMuxedAccount{false};
+
+        void
+        operator()(stellar::MuxedAccount const& t)
         {
-            mHasMuxedAccount = true;
+            // checks if this is a multiplexed account,
+            // such as KEY_TYPE_MUXED_ED25519
+            if ((t.type() & 0x100) != 0)
+            {
+                mHasMuxedAccount = true;
+            }
         }
-    }
 
-    template <typename T>
-    std::enable_if_t<(xdr::xdr_traits<T>::is_container ||
-                      xdr::xdr_traits<T>::is_class)>
-    operator()(T const& t)
-    {
-        if (!mHasMuxedAccount)
+        template <typename T>
+        std::enable_if_t<(xdr::xdr_traits<T>::is_container ||
+                          xdr::xdr_traits<T>::is_class)>
+        operator()(T const& t)
         {
-            xdr::xdr_traits<T>::save(*this, t);
+            if (!mHasMuxedAccount)
+            {
+                xdr::xdr_traits<T>::save(*this, t);
+            }
         }
+
+        template <typename T>
+        std::enable_if_t<!(xdr::xdr_traits<T>::is_container ||
+                           xdr::xdr_traits<T>::is_class)>
+        operator()(T const& t)
+        {
+        }
+    };
+    } // namespace detail
+
+    bool hasMuxedAccount(TransactionEnvelope const& e)
+    {
+        detail::MuxChecker c;
+        c(e);
+        return c.mHasMuxedAccount;
     }
 
-    template <typename T>
-    std::enable_if_t<!(xdr::xdr_traits<T>::is_container ||
-                       xdr::xdr_traits<T>::is_class)>
-    operator()(T const& t)
+    ClaimAtom makeClaimAtom(uint32_t ledgerVersion, AccountID const& accountID,
+                            int64_t offerID, Asset const& wheat,
+                            int64_t numWheatReceived, Asset const& sheep,
+                            int64_t numSheepSend)
     {
+        ClaimAtom atom;
+        if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_18))
+        {
+            atom.type(CLAIM_ATOM_TYPE_V0);
+            atom.v0() = ClaimOfferAtomV0(accountID.ed25519(), offerID, wheat,
+                                         numWheatReceived, sheep, numSheepSend);
+        }
+        else
+        {
+            atom.type(CLAIM_ATOM_TYPE_ORDER_BOOK);
+            atom.orderBook() =
+                ClaimOfferAtom(accountID, offerID, wheat, numWheatReceived,
+                               sheep, numSheepSend);
+        }
+        return atom;
     }
-};
-} // namespace detail
-
-bool
-hasMuxedAccount(TransactionEnvelope const& e)
-{
-    detail::MuxChecker c;
-    c(e);
-    return c.mHasMuxedAccount;
-}
-
-ClaimAtom
-makeClaimAtom(uint32_t ledgerVersion, AccountID const& accountID,
-              int64_t offerID, Asset const& wheat, int64_t numWheatReceived,
-              Asset const& sheep, int64_t numSheepSend)
-{
-    ClaimAtom atom;
-    if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_18))
-    {
-        atom.type(CLAIM_ATOM_TYPE_V0);
-        atom.v0() = ClaimOfferAtomV0(accountID.ed25519(), offerID, wheat,
-                                     numWheatReceived, sheep, numSheepSend);
-    }
-    else
-    {
-        atom.type(CLAIM_ATOM_TYPE_ORDER_BOOK);
-        atom.orderBook() = ClaimOfferAtom(
-            accountID, offerID, wheat, numWheatReceived, sheep, numSheepSend);
-    }
-    return atom;
-}
 } // namespace stellar

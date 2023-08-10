@@ -450,12 +450,6 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
                                         ProtocolVersion::V_18) &&
               (upgrade.newFlags() & ~MASK_LEDGER_HEADER_FLAGS) == 0;
         break;
-    case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         res = res && (upgrade.newBasePercentageFee() != 0);
-         break;
-    case LEDGER_UPGRADE_MAX_FEE:
-         res = res && (upgrade.newMaxFee() != 0);
-         break;
     default:
         res = false;
     }

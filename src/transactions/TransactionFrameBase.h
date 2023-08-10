@@ -68,5 +68,12 @@ class TransactionFrameBase
                                   std::optional<int64_t> baseFee) = 0;
 
     virtual StellarMessage toStellarMessage() const = 0;
+
+    // Adding the function to access operations list from TransactionFrame.cpp in TransactionUtils.cpp
+    virtual std::vector<std::shared_ptr<OperationFrame>> const& getOperations() const {
+        // Return an empty vector by default. Derived classes should override this.
+        static std::vector<std::shared_ptr<OperationFrame>> empty;
+        return empty;
+    }
 };
 }
