@@ -614,8 +614,8 @@ TxSetFrame::computeTxFees(LedgerHeader const& lclHeader, int64_t lowestBaseFee,
         {
             surgeOpsCutoff = lclHeader.maxTxSetSize - MAX_OPS_PER_TX;
         }
-        CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - ops: {}, surgeOpsCutOff: {}, lowBaseFee: {}",
-                ops, surgeOpsCutoff, lowBaseFee);
+
+        CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - surgeOpsCutOff: {}",surgeOpsCutoff);
         if (sizeOp() > surgeOpsCutoff)
         {
             baseFee = lowestBaseFee;
@@ -627,8 +627,7 @@ TxSetFrame::computeTxFees(LedgerHeader const& lclHeader, int64_t lowestBaseFee,
         }
     }
 
-    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - LH.baseFee: {}, baseFee: {}",
-        lh.baseFee, baseFee);
+    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - baseFee: {}", baseFee);
     for (auto const& tx : mTxs)
     {
         mTxBaseFee[tx] = baseFee;
@@ -710,8 +709,7 @@ TxSetFrame::getTotalFees(LedgerHeader const& lh) const
                                return t + tx->getFee(lh, getTxBaseFee(tx, lh),
                                                      true);
                            });
-    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getTotalFees() - baseFee: {}, totalFee: {}",
-        baseFee, totalFee);
+    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getTotalFees() - totalFee: {}", totalFee);
     return totalFee;
 }
 
