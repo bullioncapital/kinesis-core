@@ -75,52 +75,6 @@ InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
 
 #endif
 
-#ifdef _KINESIS
-
-bool
-InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
-{
-    auto header = ltx.loadHeader();
-    auto& lh = header.current();
-    time_t closeTime = lh.scpValue.closeTime;
-    uint64_t seq = lh.inflationSeq;
-
-    time_t inflationTime = (INFLATION_START_TIME + seq * INFLATION_FREQUENCY);
-    if (closeTime < inflationTime)
-    {
-        innerResult().code(INFLATION_NOT_TIME);
-        return false;
-    }
-
-    auto amountToDole = lh.feePool;
-    lh.feePool = 0;
-    lh.inflationSeq++;
-
-    // now credit each account
-    innerResult().code(INFLATION_SUCCESS);
-    auto& payouts = innerResult().payouts();
-
-    Hash seed = sha256(app.getConfig().NETWORK_PASSPHRASE + "feepool");
-    SecretKey feeKey = SecretKey::fromSeed(seed);
-    AccountID feeDestination = feeKey.getPublicKey();
-
-    int64 toDoleThisWinner = amountToDole;
-    int64 leftAfterDole = amountToDole;
-    auto winner = stellar::loadAccount(ltx, feeDestination);
-    if (winner) {
-        leftAfterDole -= toDoleThisWinner;
-        addBalance(header, winner, toDoleThisWinner);
-        payouts.emplace_back(feeDestination, toDoleThisWinner);
-    }
-
-    // put back in fee pool as unclaimed funds
-    lh.feePool += leftAfterDole;
-
-    return true;
-}
-
-#endif
-
 bool
 InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 {
