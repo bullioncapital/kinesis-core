@@ -325,6 +325,12 @@ FeeBumpTransactionFrame::getNumOperations() const
     return mInnerTx->getNumOperations() + 1;
 }
 
+std::vector<std::shared_ptr<OperationFrame>> const& 
+FeeBumpTransactionFrame::getOperations() const
+{
+    return mInnerTx->getOperations();
+}
+
 std::vector<Operation> const&
 FeeBumpTransactionFrame::getRawOperations() const
 {
