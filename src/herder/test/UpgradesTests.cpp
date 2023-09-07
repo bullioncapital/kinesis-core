@@ -1981,10 +1981,6 @@ TEST_CASE_VERSIONS("upgrade base reserve", "[upgrades]")
     VirtualClock clock;
     auto cfg = getTestConfig(0);
 
-    // Do our setup in version 0 so that for_versions_* below do not
-    // try to downgrade us from >0 to 0.
-    cfg.USE_CONFIG_FOR_GENESIS = false;
-
     auto app = createTestApplication(clock, cfg);
 
     auto& lm = app->getLedgerManager();
