@@ -133,7 +133,7 @@ class TransactionFrame : public TransactionFrameBase
     Hash const& getContentsHash() const override;
 
     std::vector<std::shared_ptr<OperationFrame>> const&
-    getOperations() const override
+    getOperations() const
     {
         // this can only be used on an initialized TransactionFrame
         releaseAssert(!mOperations.empty());
