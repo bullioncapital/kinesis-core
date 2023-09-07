@@ -291,7 +291,6 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
         case Config::TESTDB_POSTGRESQL:
             dbname << "postgresql://dbname=test" << instanceNumber
                    << " user=postgres";
-            ;
             break;
 #endif
         default:
@@ -788,7 +787,6 @@ loadTestTxMeta(stdfs::path const& dir)
 static void
 saveTestTxMeta(stdfs::path const& dir)
 {
-
     for (auto const& filePair : gTestTxMetadata)
     {
         Json::Value fileRoot;
