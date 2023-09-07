@@ -97,7 +97,7 @@ class FeeBumpTransactionFrame : public TransactionFrameBase
 
     static TransactionEnvelope
     convertInnerTxToV1(TransactionEnvelope const& envelope);
-    
+
     std::vector<std::shared_ptr<OperationFrame>> const&
     getOperations() const override;
 };

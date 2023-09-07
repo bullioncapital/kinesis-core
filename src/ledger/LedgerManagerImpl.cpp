@@ -254,10 +254,9 @@ LedgerManagerImpl::startNewLedger()
         ledger.maxFee = cfg.TESTING_UPGRADE_DESIRED_MAX_FEE;
     }
 #ifdef _KINESIS
-    else
-    if(cfg.KINESIS_TESTING_DEFAULT_LEDGER)
+    else if (cfg.KINESIS_TESTING_DEFAULT_LEDGER)
     {
-        ledger.basePercentageFee = cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE; 
+        ledger.basePercentageFee = cfg.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE;
     }
 #endif
 
@@ -475,7 +474,6 @@ LedgerManagerImpl::getLastClosedLedgerNum() const
 {
     return mLastClosedLedger.header.ledgerSeq;
 }
-
 
 // called by txherder
 void
@@ -793,7 +791,8 @@ LedgerManagerImpl::closeLedger(LedgerCloseData const& ledgerData)
     if (ledgerData.getExpectedHash() &&
         *ledgerData.getExpectedHash() != mLastClosedLedger.hash)
     {
-        CLOG_TRACE(Ledger, "Expected Ledger Hash: {} vs Actual Ledger Hash: {}", *ledgerData.getExpectedHash(), mLastClosedLedger.hash);
+        CLOG_TRACE(Ledger, "Expected Ledger Hash: {} vs Actual Ledger Hash: {}",
+                   *ledgerData.getExpectedHash(), mLastClosedLedger.hash);
         throw std::runtime_error("Local node's ledger corrupted during close");
     }
 

@@ -4,9 +4,9 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
-#include "main/Application.h"
 #include "ledger/LedgerHashUtils.h"
 #include "ledger/LedgerManager.h"
+#include "main/Application.h"
 #include "overlay/StellarXDR.h"
 #include "util/types.h"
 #include <memory>
@@ -42,9 +42,10 @@ class OperationFrame
 
     virtual bool doCheckValid(uint32_t ledgerVersion) = 0;
     virtual bool doApply(AbstractLedgerTxn& ltx) = 0;
-    virtual bool doApply(Application& app, AbstractLedgerTxn& ltx)
+    virtual bool
+    doApply(Application& app, AbstractLedgerTxn& ltx)
     {
-      return this->doApply(ltx);
+        return this->doApply(ltx);
     }
 
     // returns the threshold this operation requires
@@ -86,7 +87,8 @@ class OperationFrame
     bool checkValid(SignatureChecker& signatureChecker,
                     AbstractLedgerTxn& ltxOuter, bool forApply);
 
-    bool apply(Application& app, SignatureChecker& signatureChecker, AbstractLedgerTxn& ltx);
+    bool apply(Application& app, SignatureChecker& signatureChecker,
+               AbstractLedgerTxn& ltx);
 
     Operation const&
     getOperation() const

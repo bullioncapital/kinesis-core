@@ -16,10 +16,10 @@
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
-#include "util/ProtocolVersion.h"
-#include "util/numeric128.h"
 #include "util/Logging.h"
+#include "util/ProtocolVersion.h"
 #include "util/XDRCereal.h"
+#include "util/numeric128.h"
 #include "xdrpp/marshal.h"
 
 #include <numeric>
@@ -279,8 +279,9 @@ FeeBumpTransactionFrame::getFee(LedgerHeader const& header,
     {
         return getFeeBid();
     }
-    
-    //CLOG_DEBUG(Tx, "**Kinesis** FeeBumpTransactionFrame::getFee() - called, baseFee: {}", baseFee);
+
+    // CLOG_DEBUG(Tx, "**Kinesis** FeeBumpTransactionFrame::getFee() - called,
+    // baseFee: {}", baseFee);
     int64_t adjustedFee = *baseFee * std::max<int64_t>(1, getNumOperations());
     if (applying)
     {
@@ -325,7 +326,7 @@ FeeBumpTransactionFrame::getNumOperations() const
     return mInnerTx->getNumOperations() + 1;
 }
 
-std::vector<std::shared_ptr<OperationFrame>> const& 
+std::vector<std::shared_ptr<OperationFrame>> const&
 FeeBumpTransactionFrame::getOperations() const
 {
     return mInnerTx->getOperations();

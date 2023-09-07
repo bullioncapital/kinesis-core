@@ -245,9 +245,9 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, AbstractLedgerTxn& ltx)
         ltx.loadHeader().current().basePercentageFee =
             upgrade.newBasePercentageFee();
         break;
-     case LEDGER_UPGRADE_MAX_FEE:
-         ltx.loadHeader().current().maxFee = upgrade.newMaxFee();
-         break;
+    case LEDGER_UPGRADE_MAX_FEE:
+        ltx.loadHeader().current().maxFee = upgrade.newMaxFee();
+        break;
     default:
     {
         auto s =
@@ -276,10 +276,10 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
     case LEDGER_UPGRADE_FLAGS:
         return fmt::format(FMT_STRING("flags={:d}"), upgrade.newFlags());
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         return fmt::format(FMT_STRING("basepercentagefee={:d}"),
-                            upgrade.newBasePercentageFee());
-     case LEDGER_UPGRADE_MAX_FEE:
-         return fmt::format(FMT_STRING("maxfee={:d}"), upgrade.newMaxFee());
+        return fmt::format(FMT_STRING("basepercentagefee={:d}"),
+                           upgrade.newBasePercentageFee());
+    case LEDGER_UPGRADE_MAX_FEE:
+        return fmt::format(FMT_STRING("maxfee={:d}"), upgrade.newMaxFee());
     default:
         return "<unsupported>";
     }
@@ -393,8 +393,8 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
             resetParam(res.mBasePercentageFee, lu.newBasePercentageFee());
             break;
         case LEDGER_UPGRADE_MAX_FEE:
-             resetParam(res.mMaxFee, lu.newMaxFee());
-             break;
+            resetParam(res.mMaxFee, lu.newMaxFee());
+            break;
         default:
             // skip unknown
             break;
@@ -439,11 +439,11 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
         res = res && (upgrade.newBaseReserve() != 0);
         break;
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         res = res && (upgrade.newBasePercentageFee() != 0);
-         break;
+        res = res && (upgrade.newBasePercentageFee() != 0);
+        break;
     case LEDGER_UPGRADE_MAX_FEE:
-         res = res && (upgrade.newMaxFee() != 0);
-         break;
+        res = res && (upgrade.newMaxFee() != 0);
+        break;
     case LEDGER_UPGRADE_FLAGS:
         res = res &&
               protocolVersionStartsFrom(header.ledgerVersion,
@@ -480,12 +480,11 @@ Upgrades::isValidForNomination(LedgerUpgrade const& upgrade,
                (upgrade.newBaseReserve() == *mParams.mBaseReserve);
     case LEDGER_UPGRADE_FLAGS:
         return mParams.mFlags && (upgrade.newFlags() == *mParams.mFlags);
-     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         return mParams.mBasePercentageFee &&
-                 (upgrade.newBasePercentageFee() == *mParams.mBasePercentageFee);
-     case LEDGER_UPGRADE_MAX_FEE:
-         return mParams.mMaxFee &&
-                 (upgrade.newMaxFee() == *mParams.mMaxFee);
+    case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+        return mParams.mBasePercentageFee &&
+               (upgrade.newBasePercentageFee() == *mParams.mBasePercentageFee);
+    case LEDGER_UPGRADE_MAX_FEE:
+        return mParams.mMaxFee && (upgrade.newMaxFee() == *mParams.mMaxFee);
     default:
         return false;
     }
