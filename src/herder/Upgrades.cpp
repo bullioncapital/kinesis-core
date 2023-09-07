@@ -312,8 +312,6 @@ Upgrades::toString() const
     appendInfo("maxfee", mParams.mMaxFee);
     appendInfo("maxtxsetsize", mParams.mMaxTxSetSize);
     appendInfo("flags", mParams.mFlags);
-    appendInfo("basepercentagefee", mParams.mBasePercentageFee);
-    appendInfo("maxfee", mParams.mMaxFee);
 
     return r.str();
 }
