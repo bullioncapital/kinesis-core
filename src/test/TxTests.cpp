@@ -30,8 +30,8 @@
 #include "util/types.h"
 #include "xdrpp/autocheck.h"
 
-#include <lib/catch.hpp>
 #include "util/XDRCereal.h"
+#include <lib/catch.hpp>
 
 using namespace stellar;
 using namespace stellar::txtest;
@@ -250,9 +250,9 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
         // checks that the failure is the same if pre checks failed
         if (!check)
         {
-            if (tx->getResultCode() != txFAILED)        
+            if (tx->getResultCode() != txFAILED)
             {
-                 REQUIRE(checkResult == tx->getResult());
+                REQUIRE(checkResult == tx->getResult());
             }
             else
             {
@@ -621,9 +621,9 @@ transactionFromOperationsV0(Application& app, SecretKey const& from,
     e.v0().tx.sourceAccountEd25519 = from.getPublicKey().ed25519();
     e.v0().tx.fee =
         fee != 0 ? fee
-                    : static_cast<uint32_t>(
-                        (ops.size() * app.getLedgerManager().getLastTxFee()) &
-                        UINT32_MAX);
+                 : static_cast<uint32_t>(
+                       (ops.size() * app.getLedgerManager().getLastTxFee()) &
+                       UINT32_MAX);
 
     e.v0().tx.seqNum = seq;
     std::copy(std::begin(ops), std::end(ops),
@@ -645,9 +645,9 @@ transactionFromOperationsV1(Application& app, SecretKey const& from,
     e.v1().tx.sourceAccount = toMuxedAccount(from.getPublicKey());
     e.v1().tx.fee =
         fee != 0 ? fee
-                : static_cast<uint32_t>(
-                        (ops.size() * app.getLedgerManager().getLastTxFee()) &
-                        UINT32_MAX);
+                 : static_cast<uint32_t>(
+                       (ops.size() * app.getLedgerManager().getLastTxFee()) &
+                       UINT32_MAX);
     e.v1().tx.seqNum = seq;
     std::copy(std::begin(ops), std::end(ops),
               std::back_inserter(e.v1().tx.operations));

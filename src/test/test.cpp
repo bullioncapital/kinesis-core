@@ -223,7 +223,8 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
         cfgs[instanceNumber] = std::make_unique<Config>();
         Config& thisConfig = *cfgs[instanceNumber];
         thisConfig.USE_CONFIG_FOR_GENESIS = true;
-        thisConfig.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE = 0;        thisConfig.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = gTestingVersion;
+        thisConfig.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE = 0;
+        thisConfig.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = gTestingVersion;
         LOG_INFO(DEFAULT_LOG, "Making config for {}",
                  thisConfig.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION);
         thisConfig.TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE = 0;
@@ -288,7 +289,9 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
             break;
 #ifdef USE_POSTGRES
         case Config::TESTDB_POSTGRESQL:
-            dbname << "postgresql://dbname=test" << instanceNumber<<" user=postgres";;
+            dbname << "postgresql://dbname=test" << instanceNumber
+                   << " user=postgres";
+            ;
             break;
 #endif
         default:

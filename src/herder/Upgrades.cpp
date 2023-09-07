@@ -597,11 +597,11 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
         res = res && (upgrade.newBaseReserve() != 0);
         break;
     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
-         res = res && (upgrade.newBasePercentageFee() != 0);
-         break;
+        res = res && (upgrade.newBasePercentageFee() != 0);
+        break;
     case LEDGER_UPGRADE_MAX_FEE:
-         res = res && (upgrade.newMaxFee() != 0);
-         break;
+        res = res && (upgrade.newMaxFee() != 0);
+        break;
     case LEDGER_UPGRADE_FLAGS:
         res = res &&
               protocolVersionStartsFrom(header.ledgerVersion,

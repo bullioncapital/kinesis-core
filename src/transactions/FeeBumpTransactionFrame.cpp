@@ -18,10 +18,10 @@
 #include "transactions/TransactionMetaFrame.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
-#include "util/ProtocolVersion.h"
-#include "util/numeric128.h"
 #include "util/Logging.h"
+#include "util/ProtocolVersion.h"
 #include "util/XDRCereal.h"
+#include "util/numeric128.h"
 #include "xdrpp/marshal.h"
 
 #include <numeric>
@@ -381,7 +381,7 @@ FeeBumpTransactionFrame::getNumOperations() const
     return mInnerTx->getNumOperations() + 1;
 }
 
-std::vector<std::shared_ptr<OperationFrame>> const& 
+std::vector<std::shared_ptr<OperationFrame>> const&
 FeeBumpTransactionFrame::getOperations() const
 {
     return mInnerTx->getOperations();
