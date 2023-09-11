@@ -1,10 +1,12 @@
 # Development Environment Setup
 
 - [Download & install vscode](https://code.visualstudio.com/download)
-- Open the kinesis-core project in vscode and click on "Reopen in Container" when asked
+- Open the kinesis-core project in vscode and click on "Reopen in Container" when asked. 
 ![image](https://user-images.githubusercontent.com/29750/203445568-939211f6-126f-4150-8b7e-d2b3360effff.png)
 
-- Install vscode extensions inside the remote container once it is opened, install the following extensions:
+`Troubleshooting note` : If the devcontainer is not booting up with package errors, try using a different mirror to download the packages : Run `wget -qO - mirrors.ubuntu.com/mirrors.txt` on terminal, pick one of the mirrors and update `APT_MIRROR` build argument in [devcontainer.json](.devcontainer/devcontainer.json) with your mirror and then rebuild container.
+
+- Install vscode extensions inside the remote container once it is opened, install the following extensions if not installed on their own:
     * [C++ Extension Pack](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools-extension-pack)
     * [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
 
