@@ -60,7 +60,7 @@ RUN apt-get update \
 RUN apt-get -y install git build-essential pkg-config autoconf automake libtool bison flex libpq-dev parallel libunwind-dev curl
 
 # Update compiler tools
-RUN apt-get -y install libstdc++-8-dev clang-format-10 ccache && apt-get update --fix-missing
+RUN apt-get -y install libstdc++-8-dev clang-format-10 ccache 
 
 # gcc
 RUN apt-get -y install cpp-8 gcc-8 g++-8
