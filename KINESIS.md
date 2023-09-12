@@ -53,8 +53,14 @@ make -j $(nproc)
 # run tests
 ./runTests.sh
 ```
-Note: The default location of test report is src folder, unless a path is provided as argument.
+Note: The default name of the report is `test-result.xml` and location of test report is src folder, unless a path with name is provided as argument.
 
+To generate the html from the report, just run following inside devcontainer
+```bash
+#XML_TESTS_REPORT = filename of the report (default filename = test-result)
+xunit-viewer -r <XML_TESTS_REPORT>.xml -o <XML_TESTS_REPORT>.html
+```
+The html report provides the passed and failed catch2 unit test cases.
 
 ## Building a Docker Image
 

@@ -87,3 +87,9 @@ ENV LC_ALL en_US.UTF-8
 
 # Switch back to dialog for any ad-hoc use of apt-get
 ENV DEBIAN_FRONTEND=
+
+# nodejs
+RUN curl -sL https://deb.nodesource.com/setup_14.x | bash - && \
+    apt-get -y install nodejs && apt-get clean
+
+RUN npm install -g xunit-viewer
