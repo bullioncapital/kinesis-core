@@ -15,9 +15,9 @@ The Kinesis changes of the fork are enabled using _KINESIS C++ macro and makefil
     * [C++ Extension Pack](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools-extension-pack)
     * [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
 
-### b. Configure you environment
+### b. Configure your environment
 
-If it is your first time checking out this repository then, before doing anything, you need to run `vscode-configure.sh` in the remote container terminal within VSCode.
+If it is your first time checking out this repository then, before doing anything, you need to run `vscode-configure.sh` in the remote container terminal within VSCode. You can enable or disable CXXFLAGS (for example _KINESIS feature flag) in `vscode-configure.sh` as required. 
 
 ### c. Debugging
 
@@ -76,3 +76,4 @@ Building for release:
 export TAG=kinesis-core:local
 docker build --build-arg NPROC=$(nproc) --build-arg BUILD=release -t $TAG . -f docker/Dockerfile.kinesis
 ```
+

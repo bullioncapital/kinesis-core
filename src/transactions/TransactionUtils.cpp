@@ -1842,25 +1842,26 @@ getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
 
     int64_t totalAmount = 0;
 
-    std::vector<std::shared_ptr<OperationFrame>> const& mOperations =
-        tx.getOperations();
-
-    for (auto& op : mOperations)
+    for (auto const& op : tx.getRawOperations())
     {
-        auto operation = op->getOperation();
-        auto operationType = operation.body.type();
-        if (operationType == CREATE_ACCOUNT)
+        switch (op.body.type())
         {
-            totalAmount += operation.body.createAccountOp().startingBalance;
+        case CREATE_ACCOUNT:
+        {
+            totalAmount += op.body.createAccountOp().startingBalance;
         }
-        else if (operationType == PAYMENT)
+        break;
+        case PAYMENT:
         {
-            int8_t assetType =
-                operation.body.paymentOp().asset.type(); // 0 is native
+            int8_t assetType = op.body.paymentOp().asset.type(); // 0 is native
             if (assetType == 0)
             {
-                totalAmount += operation.body.paymentOp().amount;
+                totalAmount += op.body.paymentOp().amount;
             }
+        }
+        break;
+        default:
+            continue;
         }
     }
 

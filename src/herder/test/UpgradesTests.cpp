@@ -27,7 +27,6 @@
 #include "transactions/TransactionUtils.h"
 #include "util/StatusManager.h"
 #include "util/Timer.h"
-#include "util/XDRCereal.h"
 #include <fmt/format.h>
 #include <optional>
 #include <xdrpp/autocheck.h>

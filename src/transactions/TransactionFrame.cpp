@@ -209,25 +209,6 @@ TransactionFrame::getFullFee() const
 }
 
 int64_t
-TransactionFrame::getFeeBid() const
-{
-    int64_t fullFee = getFullFee();
-#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
-    if (!isSoroban())
-    {
-        return fullFee;
-    }
-    // We rely here on the Soroban fee being computed at
-    // this point.
-    releaseAssertOrThrow(mSorobanResourceFee);
-    return std::max(fullFee - mSorobanResourceFee->fee,
-                    static_cast<int64_t>(0));
-#else
-    return fullFee;
-#endif
-}
-
-int64_t
 TransactionFrame::getFee(LedgerHeader const& header,
                          std::optional<int64_t> baseFee, bool applying) const
 {
