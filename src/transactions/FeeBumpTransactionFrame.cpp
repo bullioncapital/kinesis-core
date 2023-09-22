@@ -18,7 +18,9 @@
 #include "transactions/TransactionMetaFrame.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
+#include "util/Logging.h"
 #include "util/ProtocolVersion.h"
+#include "util/XDRCereal.h"
 #include "util/numeric128.h"
 #include "xdrpp/marshal.h"
 
@@ -311,13 +313,18 @@ FeeBumpTransactionFrame::getFullFee() const
     return mEnvelope.feeBump().tx.fee;
 }
 
+#ifdef _KINESIS
 int64_t
-FeeBumpTransactionFrame::getFeeBid() const
+FeeBumpTransactionFrame::getMinFee(LedgerHeader const& header) const
 {
-    int64_t flatFee = mInnerTx->getFullFee() - mInnerTx->getFeeBid();
-    return mEnvelope.feeBump().tx.fee - flatFee;
+    auto innerTxMinFee = mInnerTx->getMinFee(header);
+    auto feeBumpMinFee = ((int64_t)header.baseFee) + innerTxMinFee;
+    CLOG_DEBUG(Tx, "FeeBumpTransactionFrame - {} getMinFee {}",
+            xdr_to_string(getFullHash(), "fullHash"),
+            feeBumpMinFee);
+    return feeBumpMinFee;
 }
-
+#endif
 int64_t
 FeeBumpTransactionFrame::getFee(LedgerHeader const& header,
                                 std::optional<int64_t> baseFee,
@@ -327,7 +334,8 @@ FeeBumpTransactionFrame::getFee(LedgerHeader const& header,
     {
         return getFullFee();
     }
-    int64_t flatFee = mInnerTx->getFullFee() - mInnerTx->getFeeBid();
+    CLOG_DEBUG(Tx, "**Kinesis** FeeBumpTransactionFrame::getFee() - called, baseFee: {}", baseFee);
+    int64_t flatFee = mInnerTx->getFullFee() - mInnerTx->getFeeBid();   
     int64_t adjustedFee = *baseFee * std::max<int64_t>(1, getNumOperations());
     if (applying)
     {
@@ -370,6 +378,12 @@ uint32_t
 FeeBumpTransactionFrame::getNumOperations() const
 {
     return mInnerTx->getNumOperations() + 1;
+}
+
+std::vector<std::shared_ptr<OperationFrame>> const&
+FeeBumpTransactionFrame::getOperations() const
+{
+    return mInnerTx->getOperations();
 }
 
 std::vector<Operation> const&

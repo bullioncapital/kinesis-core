@@ -7,6 +7,7 @@
 #include "ledger/LedgerHashUtils.h"
 #include "ledger/LedgerManager.h"
 #include "ledger/NetworkConfig.h"
+#include "main/Application.h"
 #include "overlay/StellarXDR.h"
 #include "util/types.h"
 #include <medida/metrics_registry.h>
@@ -47,6 +48,11 @@ class OperationFrame
 
     virtual bool doApply(Application& app, AbstractLedgerTxn& ltx);
     virtual bool doApply(AbstractLedgerTxn& ltx) = 0;
+    virtual bool
+    doApply(Application& app, AbstractLedgerTxn& ltx)
+    {
+        return this->doApply(ltx);
+    }
 
     // returns the threshold this operation requires
     virtual ThresholdLevel getThresholdLevel() const;

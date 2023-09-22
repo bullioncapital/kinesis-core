@@ -4,6 +4,7 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include "main/Application.h"
 #include "transactions/OperationFrame.h"
 
 namespace stellar
@@ -23,7 +24,7 @@ class InflationOpFrame : public OperationFrame
   public:
     InflationOpFrame(Operation const& op, OperationResult& res,
                      TransactionFrame& parentTx);
-
+    bool doApply(Application& app, AbstractLedgerTxn& ltx) override;
     bool doApply(AbstractLedgerTxn& ltx) override;
     bool doCheckValid(uint32_t ledgerVersion) override;
     bool isOpSupported(LedgerHeader const& header) const override;

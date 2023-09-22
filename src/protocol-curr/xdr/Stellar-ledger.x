@@ -90,6 +90,8 @@ struct LedgerHeader
     uint64 idPool; // last used global ID, used for generating objects
 
     uint32 baseFee;     // base fee per operation in stroops
+    uint32 basePercentageFee;     // base percentage fee per create account and payment operation, in basis points
+    uint64 maxFee;     // max fee  transactions like per create account and payment operation
     uint32 baseReserve; // account base reserve in stroops
 
     uint32 maxTxSetSize; // maximum size a transaction set can be
@@ -122,7 +124,9 @@ enum LedgerUpgradeType
     LEDGER_UPGRADE_BASE_FEE = 2,
     LEDGER_UPGRADE_MAX_TX_SET_SIZE = 3,
     LEDGER_UPGRADE_BASE_RESERVE = 4,
-    LEDGER_UPGRADE_FLAGS = 5
+    LEDGER_UPGRADE_BASE_PERCENTAGE_FEE = 5,
+    LEDGER_UPGRADE_MAX_FEE = 6,
+    LEDGER_UPGRADE_FLAGS = 7
 };
 
 union LedgerUpgrade switch (LedgerUpgradeType type)
@@ -135,6 +139,10 @@ case LEDGER_UPGRADE_MAX_TX_SET_SIZE:
     uint32 newMaxTxSetSize; // update maxTxSetSize
 case LEDGER_UPGRADE_BASE_RESERVE:
     uint32 newBaseReserve; // update baseReserve
+case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+    uint32 newBasePercentageFee; // update basePercentageFee
+case LEDGER_UPGRADE_MAX_FEE:
+    uint64 newMaxFee; // update maxFee
 case LEDGER_UPGRADE_FLAGS:
     uint32 newFlags; // update flags
 };

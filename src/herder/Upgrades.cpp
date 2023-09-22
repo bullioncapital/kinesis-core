@@ -52,6 +52,8 @@ save(Archive& ar, stellar::Upgrades::UpgradeParameters const& p)
     ar(make_nvp("maxtxsize", p.mMaxTxSetSize));
     ar(make_nvp("reserve", p.mBaseReserve));
     ar(make_nvp("flags", p.mFlags));
+    ar(make_nvp("percentagefee", p.mBasePercentageFee));
+    ar(make_nvp("maxfee", p.mMaxFee));
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     std::optional<std::string> configUpgradeKeyStr;
@@ -76,6 +78,8 @@ load(Archive& ar, stellar::Upgrades::UpgradeParameters& o,
     ar(make_nvp("fee", o.mBaseFee));
     ar(make_nvp("maxtxsize", o.mMaxTxSetSize));
     ar(make_nvp("reserve", o.mBaseReserve));
+    ar(make_nvp("percentagefee", o.mBasePercentageFee));
+    ar(make_nvp("maxfee", o.mMaxFee));
 
     // the flags and configupgrade upgrades were added after the fields above,
     // so it's possible for them not to exist in the database
@@ -277,6 +281,19 @@ Upgrades::createUpgradesFor(LedgerHeader const& lclHeader,
             result.back().newFlags() = *mParams.mFlags;
         }
     }
+
+    if (mParams.mBasePercentageFee &&
+        (header.basePercentageFee != *mParams.mBasePercentageFee))
+    {
+        result.emplace_back(LEDGER_UPGRADE_BASE_PERCENTAGE_FEE);
+        result.back().newBasePercentageFee() = *mParams.mBasePercentageFee;
+    }
+
+    if (mParams.mMaxFee && (header.maxFee != *mParams.mMaxFee))
+    {
+        result.emplace_back(LEDGER_UPGRADE_MAX_FEE);
+        result.back().newMaxFee() = *mParams.mMaxFee;
+    }
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     auto key = mParams.mConfigUpgradeSetKey;
     if (key)
@@ -315,6 +332,13 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, Application& app,
     case LEDGER_UPGRADE_FLAGS:
         setLedgerHeaderFlag(ltx.loadHeader().current(), upgrade.newFlags());
         break;
+    case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+        ltx.loadHeader().current().basePercentageFee =
+            upgrade.newBasePercentageFee();
+        break;
+     case LEDGER_UPGRADE_MAX_FEE:
+         ltx.loadHeader().current().maxFee = upgrade.newMaxFee();
+         break;
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     case LEDGER_UPGRADE_CONFIG:
     {
@@ -360,6 +384,11 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
                            upgrade.newBaseReserve());
     case LEDGER_UPGRADE_FLAGS:
         return fmt::format(FMT_STRING("flags={:d}"), upgrade.newFlags());
+    case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+         return fmt::format(FMT_STRING("basepercentagefee={:d}"),
+                            upgrade.newBasePercentageFee());
+     case LEDGER_UPGRADE_MAX_FEE:
+         return fmt::format(FMT_STRING("maxfee={:d}"), upgrade.newMaxFee());
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     case LEDGER_UPGRADE_CONFIG:
         return fmt::format(
@@ -395,9 +424,12 @@ Upgrades::toString() const
             r << fmt::format(FMT_STRING(", {}={:d}"), s, *o);
         }
     };
+
     appendInfo("protocolversion", mParams.mProtocolVersion);
     appendInfo("basefee", mParams.mBaseFee);
     appendInfo("basereserve", mParams.mBaseReserve);
+    appendInfo("basepercentagefee", mParams.mBasePercentageFee);
+    appendInfo("maxfee", mParams.mMaxFee);
     appendInfo("maxtxsetsize", mParams.mMaxTxSetSize);
     appendInfo("flags", mParams.mFlags);
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
@@ -426,7 +458,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
     if (res.mUpgradeTime + Upgrades::UPDGRADE_EXPIRATION_HOURS <=
         VirtualClock::from_time_t(closeTime))
     {
-        auto resetParamIfSet = [&](std::optional<uint32>& o) {
+        auto resetParamIfSet = [&](auto& o) {
             if (o)
             {
                 o.reset();
@@ -439,7 +471,20 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         resetParamIfSet(res.mMaxTxSetSize);
         resetParamIfSet(res.mBaseReserve);
         resetParamIfSet(res.mFlags);
-#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+
+        resetParamIfSet(res.mBasePercentageFee);
+        resetParamIfSet(res.mMaxFee);
+        #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        if (res.mConfigUpgradeSetKey)
+        {
+            res.mConfigUpgradeSetKey.reset();
+            updated = true;
+        }
+#endif
+
+        resetParamIfSet(res.mBasePercentageFee);
+        resetParamIfSet(res.mMaxFee);
+        #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
         if (res.mConfigUpgradeSetKey)
         {
             res.mConfigUpgradeSetKey.reset();
@@ -450,7 +495,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         return res;
     }
 
-    auto resetParam = [&](std::optional<uint32>& o, uint32 v) {
+    auto resetParam = [&](auto& o, auto v) {
         if (o && *o == v)
         {
             o.reset();
@@ -470,6 +515,7 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         {
             continue;
         }
+
         switch (lu.type())
         {
         case LEDGER_UPGRADE_VERSION:
@@ -487,6 +533,12 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
         case LEDGER_UPGRADE_FLAGS:
             resetParam(res.mFlags, lu.newFlags());
             break;
+        case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+            resetParam(res.mBasePercentageFee, lu.newBasePercentageFee());
+            break;
+        case LEDGER_UPGRADE_MAX_FEE:
+             resetParam(res.mMaxFee, lu.newMaxFee());
+             break;
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
         case LEDGER_UPGRADE_CONFIG:
         {
@@ -552,12 +604,24 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
     case LEDGER_UPGRADE_BASE_RESERVE:
         res = res && (upgrade.newBaseReserve() != 0);
         break;
+    case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+        res = res && (upgrade.newBasePercentageFee() != 0);
+        break;
+    case LEDGER_UPGRADE_MAX_FEE:
+        res = res && (upgrade.newMaxFee() != 0);
+        break;
     case LEDGER_UPGRADE_FLAGS:
         res = res &&
               protocolVersionStartsFrom(header.ledgerVersion,
                                         ProtocolVersion::V_18) &&
               (upgrade.newFlags() & ~MASK_LEDGER_HEADER_FLAGS) == 0;
         break;
+    case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+         res = res && (upgrade.newBasePercentageFee() != 0);
+         break;
+    case LEDGER_UPGRADE_MAX_FEE:
+         res = res && (upgrade.newMaxFee() != 0);
+         break;
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     case LEDGER_UPGRADE_CONFIG:
     {
@@ -597,7 +661,6 @@ Upgrades::isValidForNomination(LedgerUpgrade const& upgrade, Application& app,
     {
         return false;
     }
-
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
@@ -613,6 +676,12 @@ Upgrades::isValidForNomination(LedgerUpgrade const& upgrade, Application& app,
                (upgrade.newBaseReserve() == *mParams.mBaseReserve);
     case LEDGER_UPGRADE_FLAGS:
         return mParams.mFlags && (upgrade.newFlags() == *mParams.mFlags);
+     case LEDGER_UPGRADE_BASE_PERCENTAGE_FEE:
+         return mParams.mBasePercentageFee &&
+                 (upgrade.newBasePercentageFee() == *mParams.mBasePercentageFee);
+     case LEDGER_UPGRADE_MAX_FEE:
+         return mParams.mMaxFee &&
+                 (upgrade.newMaxFee() == *mParams.mMaxFee);
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     case LEDGER_UPGRADE_CONFIG:
     {
