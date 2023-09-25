@@ -64,8 +64,9 @@ RUN apt-get -y install libstdc++-10-dev clang-format-12 ccache
 
 # gcc
 RUN apt-get -y install cpp-10 gcc-10 g++-10
-# clang
-RUN apt-get -y install clang-12 llvm-12
+
+RUN apt-get -y install clang-12 llvm-12 lldb-10
+
 # rust
 ENV PATH "/root/.cargo/bin:$PATH"
 
@@ -75,6 +76,7 @@ ENV CXX=clang++-12
 
 # Install postgresql to enable tests under make check
 RUN apt-get -y install postgresql
+COPY ../pg_hba.conf /etc/postgresql/12/main/
 
 # Set up locale
 RUN sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
@@ -86,3 +88,9 @@ ENV LC_ALL en_US.UTF-8
 
 # Switch back to dialog for any ad-hoc use of apt-get
 ENV DEBIAN_FRONTEND=
+
+# nodejs
+RUN curl -sL https://deb.nodesource.com/setup_14.x | bash - && \
+    apt-get -y install nodejs && apt-get clean
+
+RUN npm install -g xunit-viewer

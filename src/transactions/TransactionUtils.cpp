@@ -1815,7 +1815,74 @@ maybeUpdateAccountOnLedgerSeqUpdate(LedgerTxnHeader const& header,
         v3.seqTime = header.current().scpValue.closeTime;
     }
 }
+#ifdef _KINESIS
 
+// kinesis implementation
+int64_t
+getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
+          std::optional<int64_t> baseFee)
+{
+    // auto innerTxMinFee = tx.getMinFee(header);
+    // auto feeBumpMinFee = ((int64_t)header.baseFee) + innerTxMinFee;
+    // return feeBumpMinFee;
+    int64_t effectiveBaseFee = header.baseFee;
+
+    if (baseFee)
+    {
+        effectiveBaseFee = std::max(effectiveBaseFee, *baseFee);
+    }
+    effectiveBaseFee =
+        effectiveBaseFee * std::max<int64_t>(1, tx.getNumOperations());
+    // apply base percentage fee
+    // affect: create_account and payment ops
+    int64_t accumulatedBasePercentageFee = 0;
+    double basePercentageFeeRate =
+        (double)header.basePercentageFee / (double)BASIS_POINTS_TO_PERCENT;
+
+    int64_t totalAmount = 0;
+
+    for (auto const& op : tx.getRawOperations())
+    {
+        switch (op.body.type())
+        {
+        case CREATE_ACCOUNT:
+        {
+            totalAmount += op.body.createAccountOp().startingBalance;
+        }
+        break;
+        case PAYMENT:
+        {
+            int8_t assetType = op.body.paymentOp().asset.type(); // 0 is native
+            if (assetType == 0)
+            {
+                totalAmount += op.body.paymentOp().amount;
+            }
+        }
+        break;
+        default:
+            continue;
+        }
+    }
+
+    accumulatedBasePercentageFee +=
+        (int64_t)(totalAmount * basePercentageFeeRate);
+    int64_t totalFee = effectiveBaseFee + accumulatedBasePercentageFee;
+    //  CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getMinFee() -
+    //  header.baseFee: {}, baseFee: {}, amount: {}, totalFee: {}",
+    //   header.baseFee, baseFee, totalAmount, totalFee
+    //);
+    int64_t headerMaxFee = (int64_t)header.maxFee;
+    totalFee = totalFee > headerMaxFee ? headerMaxFee : totalFee;
+    return totalFee;
+
+    //     // return totalFee;
+    //     auto feeBumpMinFee = ((int64_t)header.baseFee) + totalFee;
+    //     // CLOG_DEBUG(Tx, "FeeBumpTransactionFrame - {} getMinFee {}",
+    //     //       xdr_to_string(getFullHash(), "fullHash"),
+    //     //     feeBumpMinFee);
+    //     return feeBumpMinFee;
+}
+#else
 int64_t
 getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
           std::optional<int64_t> baseFee)
@@ -1827,7 +1894,7 @@ getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
     }
     return effectiveBaseFee * std::max<int64_t>(1, tx.getNumOperations());
 }
-
+#endif
 namespace detail
 {
 struct MuxChecker

@@ -644,7 +644,7 @@ const MAX_OPS_PER_TX = 100;
 struct TransactionV0
 {
     uint256 sourceAccountEd25519;
-    uint32 fee;
+    uint64 fee;
     SequenceNumber seqNum;
     TimeBounds* timeBounds;
     Memo memo;
@@ -678,7 +678,7 @@ struct Transaction
     MuxedAccount sourceAccount;
 
     // the fee the sourceAccount will pay
-    uint32 fee;
+    uint64 fee;
 
     // sequence number to consume in the account
     SequenceNumber seqNum;

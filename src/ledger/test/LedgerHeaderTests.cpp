@@ -28,6 +28,9 @@ TEST_CASE("genesisledger", "[ledger]")
     VirtualClock clock{};
     auto cfg = getTestConfig(0);
     cfg.USE_CONFIG_FOR_GENESIS = false;
+#ifdef _KINESIS
+    cfg.KINESIS_TESTING_DEFAULT_LEDGER = false;
+#endif
     auto app = Application::create<ApplicationImpl>(clock, cfg);
     app->start();
 
@@ -54,8 +57,15 @@ TEST_CASE("genesisledger", "[ledger]")
     REQUIRE(header.skipList[1] == Hash{});
     REQUIRE(header.skipList[2] == Hash{});
     REQUIRE(header.skipList[3] == Hash{});
+#ifdef _KINESIS
+    REQUIRE(header.basePercentageFee == 45);
+    REQUIRE(header.maxFee == 250000000000);
+    REQUIRE(binToHex(lcl.hash) ==
+            "fb1972af27de3a7e4da8a93973a737e120d3d9ca9f0126c03639067f8b848512");
+#else
     REQUIRE(binToHex(lcl.hash) ==
             "caf73c70dde8134f792535756cc3212f65007883e8959adf92e48062f401e543");
+#endif
 }
 
 TEST_CASE("ledgerheader", "[ledger]")
