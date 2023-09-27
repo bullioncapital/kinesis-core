@@ -24,7 +24,9 @@ class InflationOpFrame : public OperationFrame
   public:
     InflationOpFrame(Operation const& op, OperationResult& res,
                      TransactionFrame& parentTx);
+    #ifdef _KINESIS               
     bool doApply(Application& app, AbstractLedgerTxn& ltx) override;
+    #endif
     bool doApply(AbstractLedgerTxn& ltx) override;
     bool doCheckValid(uint32_t ledgerVersion) override;
     bool isOpSupported(LedgerHeader const& header) const override;

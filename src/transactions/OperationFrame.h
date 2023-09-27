@@ -49,11 +49,6 @@ class OperationFrame
 
     virtual bool doApply(Application& app, AbstractLedgerTxn& ltx);
     virtual bool doApply(AbstractLedgerTxn& ltx) = 0;
-    virtual bool
-    doApply(Application& app, AbstractLedgerTxn& ltx)
-    {
-        return this->doApply(ltx);
-    }
 
     // returns the threshold this operation requires
     virtual ThresholdLevel getThresholdLevel() const;

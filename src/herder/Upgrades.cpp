@@ -280,13 +280,13 @@ Upgrades::createUpgradesFor(LedgerHeader const& lclHeader,
         }
     }
     if (mParams.mBasePercentageFee &&
-        (header.basePercentageFee != *mParams.mBasePercentageFee))
+        (lclHeader.basePercentageFee != *mParams.mBasePercentageFee))
     {
         result.emplace_back(LEDGER_UPGRADE_BASE_PERCENTAGE_FEE);
         result.back().newBasePercentageFee() = *mParams.mBasePercentageFee;
     }
 
-    if (mParams.mMaxFee && (header.maxFee != *mParams.mMaxFee))
+    if (mParams.mMaxFee && (lclHeader.maxFee != *mParams.mMaxFee))
     {
         result.emplace_back(LEDGER_UPGRADE_MAX_FEE);
         result.back().newMaxFee() = *mParams.mMaxFee;
