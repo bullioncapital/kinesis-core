@@ -80,6 +80,8 @@ HerderSCPDriver::HerderSCPDriver(Application& app, HerderImpl& herder,
           {"scp", "timeout", "nominate"})}
     , mPrepareTimeout{mApp.getMetrics().NewHistogram(
           {"scp", "timeout", "prepare"})}
+    , mUniqueValues{mApp.getMetrics().NewHistogram(
+          {"scp", "slot", "values-referenced"})}
     , mLedgerSeqNominating(0)
     , mTxSetValidCache(TXSETVALID_CACHE_SIZE)
 {
@@ -358,18 +360,19 @@ HerderSCPDriver::validateValue(uint64_t slotIndex, Value const& value,
         auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
 
         LedgerUpgradeType lastUpgradeType = LEDGER_UPGRADE_VERSION;
+
         // check upgrades
         for (size_t i = 0;
              i < b.upgrades.size() && res != SCPDriver::kInvalidValue; i++)
         {
             LedgerUpgradeType thisUpgradeType;
             if (!mUpgrades.isValid(b.upgrades[i], thisUpgradeType, nomination,
-                                   mApp.getConfig(), lcl.header))
+                                   mApp, lcl.header))
             {
-                CLOG_TRACE(
-                    Herder,
-                    "HerderSCPDriver::validateValue invalid step at index {}",
-                    i);
+                CLOG_TRACE(Herder,
+                           "HerderSCPDriver::validateValue invalid step at "
+                           "index {}",
+                           i);
                 res = SCPDriver::kInvalidValue;
             }
             else if (i != 0 && (lastUpgradeType >= thisUpgradeType))
@@ -419,7 +422,7 @@ HerderSCPDriver::extractValidValue(uint64_t slotIndex, Value const& value)
         LedgerUpgradeType thisUpgradeType;
         for (auto it = b.upgrades.begin(); it != b.upgrades.end();)
         {
-            if (!mUpgrades.isValid(*it, thisUpgradeType, true, mApp.getConfig(),
+            if (!mUpgrades.isValid(*it, thisUpgradeType, true, mApp,
                                    lcl.header))
             {
                 it = b.upgrades.erase(it);
@@ -533,6 +536,25 @@ HerderSCPDriver::setupTimer(uint64_t slotIndex, int timerID,
         timer.async_wait(std::bind(&HerderSCPDriver::timerCallbackWrapper, this,
                                    slotIndex, timerID, cb),
                          &VirtualTimer::onFailureNoop);
+    }
+}
+
+void
+HerderSCPDriver::stopTimer(uint64 slotIndex, int timerID)
+{
+
+    auto timersIt = mSCPTimers.find(slotIndex);
+    if (timersIt == mSCPTimers.end())
+    {
+        return;
+    }
+
+    auto& slotTimers = timersIt->second;
+    auto it = slotTimers.find(timerID);
+    if (it != slotTimers.end())
+    {
+        auto& timer = *it->second;
+        timer.cancel();
     }
 }
 
@@ -751,7 +773,7 @@ HerderSCPDriver::valueExternalized(uint64_t slotIndex, Value const& value)
         // all messages made it
         if (slotIndex > 2)
         {
-            logQuorumInformation(slotIndex - 2);
+            logQuorumInformationAndUpdateMetrics(slotIndex - 2);
         }
 
         if (mCurrentValue)
@@ -790,7 +812,7 @@ HerderSCPDriver::valueExternalized(uint64_t slotIndex, Value const& value)
 }
 
 void
-HerderSCPDriver::logQuorumInformation(uint64_t index)
+HerderSCPDriver::logQuorumInformationAndUpdateMetrics(uint64_t index)
 {
     std::string res;
     auto v = mApp.getHerder().getJsonQuorumInfo(mSCP.getLocalNodeID(), true,
@@ -801,6 +823,22 @@ HerderSCPDriver::logQuorumInformation(uint64_t index)
         Json::FastWriter fw;
         CLOG_INFO(Herder, "Quorum information for {} : {}", index,
                   fw.write(qset));
+    }
+
+    std::unordered_set<Hash> referencedValues;
+    auto collectReferencedHashes = [&](SCPEnvelope const& envelope) {
+        for (auto const& hash : getTxSetHashes(envelope))
+        {
+            referencedValues.insert(hash);
+        }
+        return true;
+    };
+
+    getSCP().processCurrentState(index, collectReferencedHashes,
+                                 /* forceSelf */ true);
+    if (!referencedValues.empty())
+    {
+        mUniqueValues.Update(referencedValues.size());
     }
 }
 
@@ -1077,16 +1115,23 @@ HerderSCPDriver::recordSCPExecutionMetrics(uint64_t slotIndex)
 }
 
 void
-HerderSCPDriver::purgeSlots(uint64_t maxSlotIndex)
+HerderSCPDriver::purgeSlots(uint64_t maxSlotIndex, uint64 slotToKeep)
 {
     // Clean up timings map
     auto it = mSCPExecutionTimes.begin();
     while (it != mSCPExecutionTimes.end() && it->first < maxSlotIndex)
     {
-        it = mSCPExecutionTimes.erase(it);
+        if (it->first == slotToKeep)
+        {
+            ++it;
+        }
+        else
+        {
+            it = mSCPExecutionTimes.erase(it);
+        }
     }
 
-    getSCP().purgeSlots(maxSlotIndex);
+    getSCP().purgeSlots(maxSlotIndex, slotToKeep);
 }
 
 void

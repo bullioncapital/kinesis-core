@@ -5,7 +5,9 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "xdr/Stellar-transaction.h"
+#include <medida/metrics_registry.h>
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+#include "rust/RustBridge.h"
 #include "transactions/OperationFrame.h"
 
 namespace stellar
@@ -20,6 +22,9 @@ class InvokeHostFunctionOpFrame : public OperationFrame
         return mResult.tr().invokeHostFunctionResult();
     }
 
+    void maybePopulateDiagnosticEvents(Config const& cfg,
+                                       InvokeHostFunctionOutput const& output);
+
     InvokeHostFunctionOp const& mInvokeHostFunction;
 
   public:
@@ -31,10 +36,11 @@ class InvokeHostFunctionOpFrame : public OperationFrame
     bool isOpSupported(LedgerHeader const& header) const override;
 
     bool doApply(AbstractLedgerTxn& ltx) override;
-    bool doCheckValid(uint32_t ledgerVersion) override;
+    bool doApply(Application& app, AbstractLedgerTxn& ltx) override;
 
-    static Json::Value preflight(Application& app,
-                                 InvokeHostFunctionOp const& op);
+    bool doCheckValid(SorobanNetworkConfig const& config,
+                      uint32_t ledgerVersion) override;
+    bool doCheckValid(uint32_t ledgerVersion) override;
 
     void
     insertLedgerKeysToPrefetch(UnorderedSet<LedgerKey>& keys) const override;
@@ -44,6 +50,8 @@ class InvokeHostFunctionOpFrame : public OperationFrame
     {
         return res.tr().invokeHostFunctionResult().code();
     }
+
+    virtual bool isSoroban() const override;
 };
 }
 #endif // ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION

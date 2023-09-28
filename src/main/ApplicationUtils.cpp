@@ -29,11 +29,13 @@
 #include "util/xdrquery/XDRQuery.h"
 #include "work/WorkScheduler.h"
 
+#include <charconv>
 #include <filesystem>
 #include <lib/http/HttpClient.h>
 #include <locale>
 #include <map>
 #include <optional>
+#include <regex>
 
 namespace stellar
 {
@@ -666,13 +668,57 @@ initializeDatabase(Config cfg)
 }
 
 void
-showOfflineInfo(Config cfg)
+showOfflineInfo(Config cfg, bool verbose)
 {
     // needs real time to display proper stats
     VirtualClock clock(VirtualClock::REAL_TIME);
     cfg.setNoListen();
     Application::pointer app = Application::create(clock, cfg, false);
-    app->reportInfo();
+    app->reportInfo(verbose);
+}
+
+void
+closeLedgersOffline(Config cfg, bool verbose, size_t nLedgers)
+{
+    VirtualClock clock(VirtualClock::REAL_TIME);
+    cfg.setNoListen();
+    cfg.AUTOMATIC_MAINTENANCE_PERIOD = std::chrono::seconds(0);
+    cfg.AUTOMATIC_SELF_CHECK_PERIOD = std::chrono::seconds(0);
+    Application::pointer app = Application::create(clock, cfg, false);
+    app->start();
+    size_t lclSeq = app->getLedgerManager().getLastClosedLedgerNum();
+    size_t targetSeq = lclSeq + nLedgers;
+    while (!app->isStopping() && lclSeq < targetSeq)
+    {
+        auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+        uint32_t nextSeq = lcl.header.ledgerSeq + 1;
+        auto txset = TxSetFrame::makeEmpty(lcl);
+        auto sv = app->getHerder().makeStellarValue(
+            txset->getContentsHash(),
+            VirtualClock::to_time_t(clock.system_now()), {}, cfg.NODE_SEED);
+        LedgerCloseData lcd{nextSeq, txset, sv};
+        LOG_INFO(DEFAULT_LOG, "Closing empty ledger {} offline", nextSeq);
+        ;
+        app->getLedgerManager().closeLedger(lcd);
+        do
+        {
+            lclSeq = app->getLedgerManager().getLastClosedLedgerNum();
+            clock.crank(false);
+        } while (
+            !app->isStopping() &&
+            (lclSeq < nextSeq || !app->getWorkScheduler().allChildrenDone()));
+    }
+    if (nLedgers > 0)
+    {
+        LOG_WARNING(DEFAULT_LOG,
+                    "Closed {} empty ledgers offline and published {} history "
+                    "checkpoints",
+                    nLedgers,
+                    app->getHistoryManager().getPublishSuccessCount());
+        LOG_WARNING(DEFAULT_LOG,
+                    "Database and history archive are no longer in "
+                    "consensus with any other validators");
+    }
 }
 
 #ifdef BUILD_TESTS
@@ -684,7 +730,7 @@ loadXdr(Config cfg, std::string const& bucketFile)
     Application::pointer app = Application::create(clock, cfg, false);
 
     uint256 zero;
-    Bucket bucket(bucketFile, zero);
+    Bucket bucket(bucketFile, zero, nullptr);
     bucket.apply(*app);
 }
 
@@ -868,7 +914,7 @@ catchup(Application::pointer app, CatchupConfiguration cc,
     }
     LOG_INFO(DEFAULT_LOG, "*");
 
-    catchupInfo = app->getJsonInfo();
+    catchupInfo = app->getJsonInfo(true);
     return synced ? 0 : 3;
 }
 
@@ -908,4 +954,22 @@ minimalDBForInMemoryMode(Config const& cfg)
     return fmt::format(FMT_STRING("sqlite3://{}"),
                        minimalDbPath(cfg).generic_string());
 }
+
+// Returns the major release version extracted from the git tag _if_ this is a
+// release-tagged version of stellar core (one that looks like vNN.X.Y or
+// vNN.X.YrcZ or vNN.X.YHOTZ). If its version has some other name structure
+// structure, return std::nullopt.
+std::optional<uint32_t>
+getStellarCoreMajorReleaseVersion(std::string const& vstr)
+{
+    std::regex re("^v([0-9]+)\\.[0-9]+\\.[0-9]+(rc[0-9]+|HOT[0-9]+)?$");
+    std::smatch match;
+    if (std::regex_match(vstr, match, re))
+    {
+        uint32_t vers = stoi(match.str(1));
+        return std::make_optional<uint32_t>(vers);
+    }
+    return std::nullopt;
+}
+
 }

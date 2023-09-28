@@ -3011,8 +3011,8 @@ TEST_CASE_VERSIONS("create offer", "[tx][offers]")
                 {sponsor});
 
             LedgerTxn ltx(app->getLedgerTxnRoot());
-            TransactionMeta txm(2);
-            REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+            TransactionMetaFrame txm(ltx.loadHeader().current().ledgerVersion);
+            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
             REQUIRE(tx->apply(*app, ltx, txm));
             ltx.commit();
         };
@@ -3038,8 +3038,8 @@ TEST_CASE_VERSIONS("create offer", "[tx][offers]")
             LedgerTxn ltx(app->getLedgerTxnRoot());
             auto expOfferID = ltx.loadHeader().current().idPool + 1;
 
-            TransactionMeta txm(2);
-            REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+            TransactionMetaFrame txm(ltx.loadHeader().current().ledgerVersion);
+            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
             REQUIRE(tx->apply(*app, ltx, txm));
 
             auto const& results = tx->getResult().result.results();
@@ -3748,8 +3748,9 @@ TEST_CASE_VERSIONS("create offer", "[tx][offers]")
                     LedgerTxn ltx(app->getLedgerTxnRoot());
                     auto expOfferID = ltx.loadHeader().current().idPool + 1;
 
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(tx->apply(*app, ltx, txm));
 
                     REQUIRE(!loadOffer(ltx, a2.getPublicKey(), expOfferID));
@@ -3790,8 +3791,9 @@ TEST_CASE_VERSIONS("create offer", "[tx][offers]")
                     {a1});
 
                 LedgerTxn ltx(app->getLedgerTxnRoot());
-                TransactionMeta txm(2);
-                REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                TransactionMetaFrame txm(
+                    ltx.loadHeader().current().ledgerVersion);
+                REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                 REQUIRE(tx->apply(*app, ltx, txm));
                 ltx.commit();
             }
@@ -3851,8 +3853,9 @@ TEST_CASE_VERSIONS("create offer", "[tx][offers]")
                 offerIdXlmUsd = ltx.loadHeader().current().idPool + 2;
                 offerIdIdrXlm = ltx.loadHeader().current().idPool + 3;
 
-                TransactionMeta txm(2);
-                REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                TransactionMetaFrame txm(
+                    ltx.loadHeader().current().ledgerVersion);
+                REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                 REQUIRE(tx->apply(*app, ltx, txm));
 
                 REQUIRE(loadOffer(ltx, acc1.getPublicKey(), offerIdUsdXlm));

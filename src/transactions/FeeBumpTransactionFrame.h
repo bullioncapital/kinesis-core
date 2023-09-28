@@ -5,6 +5,7 @@
 #pragma once
 
 #include "transactions/TransactionFrame.h"
+#include "transactions/TransactionMetaFrame.h"
 
 namespace stellar
 {
@@ -57,14 +58,18 @@ class FeeBumpTransactionFrame : public TransactionFrameBase
     virtual ~FeeBumpTransactionFrame(){};
 
     bool apply(Application& app, AbstractLedgerTxn& ltx,
-               TransactionMeta& meta) override;
+               TransactionMetaFrame& meta) override;
 
-    bool checkValid(AbstractLedgerTxn& ltxOuter, SequenceNumber current,
-                    uint64_t lowerBoundCloseTimeOffset,
+    void processPostApply(Application& app, AbstractLedgerTxn& ltx,
+                          TransactionMetaFrame& meta) override;
+
+    bool checkValid(Application& app, AbstractLedgerTxn& ltxOuter,
+                    SequenceNumber current, uint64_t lowerBoundCloseTimeOffset,
                     uint64_t upperBoundCloseTimeOffset) override;
 
     TransactionEnvelope const& getEnvelope() const override;
 
+    int64_t getFullFee() const override;
     int64_t getFeeBid() const override;
     int64_t getFee(LedgerHeader const& header, std::optional<int64_t> baseFee,
                    bool applying) const override;
@@ -97,5 +102,16 @@ class FeeBumpTransactionFrame : public TransactionFrameBase
 
     static TransactionEnvelope
     convertInnerTxToV1(TransactionEnvelope const& envelope);
+
+    bool hasDexOperations() const override;
+
+    bool isSoroban() const override;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    SorobanResources const& sorobanResources() const override;
+    void
+    maybeComputeSorobanResourceFee(uint32_t protocolVersion,
+                                   SorobanNetworkConfig const& sorobanConfig,
+                                   Config const& cfg) override;
+#endif
 };
 }

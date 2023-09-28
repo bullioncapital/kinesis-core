@@ -1,5 +1,6 @@
 Installation Instructions
 ==================
+
 These are instructions for building stellar-core from source.
 
 For a potentially quicker set up, the following projects could be good alternatives:
@@ -7,6 +8,19 @@ For a potentially quicker set up, the following projects could be good alternati
 * stellar-core in a [docker container](https://github.com/stellar/docker-stellar-core)
 * stellar-core and [horizon](https://github.com/stellar/go/tree/master/services/horizon) in a [docker container](https://github.com/stellar/docker-stellar-core-horizon)
 * pre-compiled [packages](https://github.com/stellar/packages)
+
+## Which version to run?
+
+In general, you should aim to run the most recent stable version of core, so make sure
+to keep track of new releases.
+
+We _highly_ recommend upgrading to the latest core release _within 30 days of a release_ as
+highlighted in our [protocol and security release notes](docs/software/security-protocol-release-notes.md) in case
+the release contains security fixes that could be exploited (we do not disclose
+ahead of time if a release contains security fixes to give people time to upgrade).
+
+As a consequence, old, potentially insecure or abandoned nodes _running releases that are older than 90 days will get blocked_ by newer nodes (if there are newer releases
+of course).
 
 ## Picking a version to run
 
@@ -44,27 +58,27 @@ To install Postgresql, follow instructions from the [Postgresql download page](h
 ## Build Dependencies
 
 - c++ toolchain and headers that supports c++17
-    - `clang` >= 10.0
-    - `g++` >= 8.0
+    - `clang` >= 12.0
+    - `g++` >= 10.0
 - `pkg-config`
 - `bison` and `flex`
 - `libpq-dev` unless you `./configure --disable-postgres` in the build step below.
 - 64-bit system
-- `clang-format-10` (for `make format` to work)
-- `perl`
+- `clang-format-12` (for `make format` to work)
+- `sed` and `perl`
 - `libunwind-dev`
 
 ### Ubuntu
 
-#### Ubuntu 18.04
+#### Ubuntu 20.04
 You can install the [test toolchain](#adding-the-test-toolchain) to build and run stellar-core with the latest version of the llvm toolchain.
 
 Alternatively, if you want to just depend on stock Ubuntu, you will have to build with clang *and* have use `libc++` instead of `libstdc++` when compiling.
 
-Ubuntu 18.04 has clang-10 available, that you can install with
+Ubuntu 20.04 has clang-12 available, that you can install with
 
-    # install clang-10 toolchain
-    sudo apt-get install clang-10
+    # install clang-12 toolchain
+    sudo apt-get install clang-12
 
 After installing packages, head to [building with clang and libc++](#building-with-clang-and-libc).
 
@@ -79,38 +93,31 @@ After installing packages, head to [building with clang and libc++](#building-wi
 
 #### Installing packages
     # common packages
-    sudo apt-get install git build-essential pkg-config autoconf automake libtool bison flex libpq-dev libunwind-dev parallel
+    sudo apt-get install git build-essential pkg-config autoconf automake libtool bison flex libpq-dev libunwind-dev parallel sed perl
     # if using clang
-    sudo apt-get install clang-10
+    sudo apt-get install clang-12
     # clang with libstdc++
-    sudo apt-get install gcc-8
+    sudo apt-get install gcc-10
     # if using g++ or building with libstdc++
-    # sudo apt-get install gcc-8 g++-8 cpp-8
+    # sudo apt-get install gcc-10 g++-10 cpp-10
 
 In order to make changes, you'll need to install the proper version of clang-format.
 
 In order to install the llvm (clang) toolchain, you may have to follow instructions on https://apt.llvm.org/
 
-    sudo apt-get install clang-format-10
+    sudo apt-get install clang-format-12
 
 ### OS X
 When building on OSX, here's some dependencies you'll need:
 - Install xcode
 - Install [homebrew](https://brew.sh)
-- `brew install libsodium`
-- `brew install libtool`
-- `brew install autoconf`
-- `brew install automake`
-- `brew install pkg-config`
-- `brew install libpq` (required for postgres)
-- `brew install openssl` (required for postgres)
-- `brew install parallel` (required for running tests)
-- `brew install ccache` (required for enabling ccache)
+- `brew install libsodium libtool autoconf automake pkg-config libpq openssl parallel ccache bison gnu-sed perl coreutils`
 
 You'll also need to configure pkg-config by adding the following to your shell (`.zshenv` or `.zshrc`):
 ```zsh
 export PKG_CONFIG_PATH="$PKG_CONFIG_PATH:$(brew --prefix)/opt/libpq/lib/pkgconfig"
 export PKG_CONFIG_PATH="$PKG_CONFIG_PATH:$(brew --prefix)/opt/openssl@3/lib/pkgconfig"
+export PATH="$(brew --prefix bison)/bin:$PATH"
 ```
 
 ### Windows
@@ -123,7 +130,7 @@ See [INSTALL-Windows.md](INSTALL-Windows.md)
 - `git submodule init`
 - `git submodule update`
 - Type `./autogen.sh`.
-- Type `./configure`   *(If configure complains about compiler versions, try `CXX=clang-10 ./configure` or `CXX=g++-8 ./configure` or similar, depending on your compiler.)*
+- Type `./configure`   *(If configure complains about compiler versions, try `CXX=clang-12 ./configure` or `CXX=g++-10 ./configure` or similar, depending on your compiler.)*
 - Type `make` or `make -j<N>` (where `<N>` is the number of parallel builds, a number less than the number of CPU cores available, e.g. `make -j3`)
 - Type `make check` to run tests.
 - Type `make install` to install.
@@ -134,15 +141,15 @@ On some systems, building with `libc++`, [LLVM's version of the standard library
 
 NB: there are newer versions available of both clang and libc++, you will have to use the versions suited for your system.
 
-You may need to install additional packages for this, for example, on Linux Ubuntu 18.04 LTS with clang-10:
+You may need to install additional packages for this, for example, on Linux Ubuntu 20.04 LTS with clang-12:
 
     # install libc++ headers
-    sudo apt-get install libc++-10-dev libc++abi-10-dev
+    sudo apt-get install libc++-12-dev libc++abi-12-dev
 
 Here are sample steps to achieve this:
 
-    export CC=clang-10
-    export CXX=clang++-10
+    export CC=clang-12
+    export CXX=clang++-12
     export CFLAGS="-O3 -g1 -fno-omit-frame-pointer"
     export CXXFLAGS="$CFLAGS -stdlib=libc++"
     git clone https://github.com/stellar/stellar-core.git

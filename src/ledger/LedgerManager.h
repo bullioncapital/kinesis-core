@@ -6,6 +6,7 @@
 
 #include "catchup/CatchupManager.h"
 #include "history/HistoryManager.h"
+#include "ledger/NetworkConfig.h"
 #include <memory>
 
 namespace stellar
@@ -120,6 +121,18 @@ class LedgerManager
     // return the maximum size of a transaction set to apply to the current
     // ledger expressed in number of operations
     virtual uint32_t getLastMaxTxSetSizeOps() const = 0;
+
+    // Return the network config for Soroban.
+    // The config is automatically refreshed on protocol upgrades.
+    // Ledger txn here is needed for the sake of lazy load; it won't be
+    // used most of the time.
+    virtual SorobanNetworkConfig const&
+    getSorobanNetworkConfig(AbstractLedgerTxn& ltx) = 0;
+
+#ifdef BUILD_TESTS
+    virtual void
+    setSorobanNetworkConfig(SorobanNetworkConfig const& config) = 0;
+#endif
 
     // Return the (changing) number of seconds since the LCL closed.
     virtual uint64_t secondsSinceLastLedgerClose() const = 0;

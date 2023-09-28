@@ -18,6 +18,7 @@
 #include "test/test.h"
 #include "transactions/OperationFrame.h"
 #include "transactions/SignatureChecker.h"
+#include "transactions/TransactionMetaFrame.h"
 #include "transactions/TransactionUtils.h"
 #include "util/Logging.h"
 #include "util/Math.h"
@@ -164,6 +165,8 @@ getShortKey(LedgerKey const& key)
         return static_cast<uint8_t>(key.configSetting().configSettingID);
     case CONTRACT_DATA:
         return key.contractData().contractID.at(0);
+    case CONTRACT_CODE:
+        return key.contractCode().hash.at(0);
 #endif
     }
     throw std::runtime_error("Unknown key type");
@@ -242,7 +245,7 @@ generateStoredLedgerKeys(StoredLedgerKeys::iterator begin,
     // Generate unvalidated ledger entry keys.
     std::generate(firstUnvalidatedLedgerKey, end, []() {
         size_t const entrySize = 3;
-        return LedgerTestUtils::generateLedgerKey(entrySize);
+        return autocheck::generator<LedgerKey>()(entrySize);
     });
 }
 
@@ -863,7 +866,7 @@ class FuzzTransactionFrame : public TransactionFrame
             mEnvelope.v1().signatures};
         // if any ill-formed Operations, do not attempt transaction application
         auto isInvalidOperation = [&](auto const& op) {
-            return !op->checkValid(signatureChecker, ltx, false);
+            return !op->checkValid(app, signatureChecker, ltx, false);
         };
         if (std::any_of(mOperations.begin(), mOperations.end(),
                         isInvalidOperation))
@@ -876,7 +879,7 @@ class FuzzTransactionFrame : public TransactionFrame
         // so in the future
         loadSourceAccount(ltx, ltx.loadHeader());
         processSeqNum(ltx);
-        TransactionMeta tm(2);
+        TransactionMetaFrame tm(2);
         applyOperations(signatureChecker, app, ltx, tm);
         if (getResultCode() == txINTERNAL_ERROR)
         {

@@ -717,7 +717,6 @@ If `compact=false`, then it also returns some extra metrics on each peer such as
             },
            "id" : "sdf1",
            "olver" : 5,
-           "pull_mode": false,
            "ver" : "v9.1.0"
         }
      ],
@@ -734,7 +733,6 @@ If `compact=false`, then it also returns some extra metrics on each peer such as
           },
           "id" : "sdf2",
           "olver" : 5,
-          "pull_mode": true,
           "ver" : "v9.1.0"
        },
        {
@@ -749,7 +747,6 @@ If `compact=false`, then it also returns some extra metrics on each peer such as
           },
           "id" : "sdf3",
           "olver" : 5,
-          "pull_mode": true,
           "ver" : "v9.1.0"
         }
      ]
@@ -1064,6 +1061,7 @@ The network settings are:
   * the maximum number of operations that can be included in a given ledger close
   * the cost (fee) associated with processing operations
   * the base reserve used to calculate the lumen balance needed to store things in the ledger
+  * generalized network settings stored in ConfigSettingEntries.
 
 When the network time is later than the `upgradetime` specified in
 the upgrade settings, the validator will vote to update the network

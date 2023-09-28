@@ -116,7 +116,6 @@ CommandHandler::CommandHandler(Application& app) : mApp(app)
     addRoute("metrics", &CommandHandler::metrics);
     addRoute("tx", &CommandHandler::tx);
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
-    addRoute("preflight", &CommandHandler::preflight);
     addRoute("getledgerentry", &CommandHandler::getLedgerEntry);
 #endif
     addRoute("upgrades", &CommandHandler::upgrades);
@@ -224,6 +223,20 @@ parseOptionalParamOrDefault(std::map<std::string, std::string> const& map,
     }
 }
 
+template <>
+bool
+parseOptionalParamOrDefault<bool>(std::map<std::string, std::string> const& map,
+                                  std::string const& key,
+                                  bool const& defaultValue)
+{
+    auto paramStr = parseOptionalParam<std::string>(map, key);
+    if (!paramStr)
+    {
+        return defaultValue;
+    }
+    return *paramStr == "true";
+}
+
 // Return a value only if the key exists and the value parses.
 // Otherwise, this throws an error.
 template <typename T>
@@ -312,10 +325,13 @@ CommandHandler::peers(std::string const& params, std::string& retStr)
 }
 
 void
-CommandHandler::info(std::string const&, std::string& retStr)
+CommandHandler::info(std::string const& params, std::string& retStr)
 {
     ZoneScoped;
-    retStr = mApp.getJsonInfo().toStyledString();
+    std::map<std::string, std::string> retMap;
+    http::server::server::parseParams(params, retMap);
+
+    retStr = mApp.getJsonInfo(retMap["compact"] == "false").toStyledString();
 }
 
 static bool
@@ -555,6 +571,28 @@ CommandHandler::upgrades(std::string const& params, std::string& retStr)
             parseOptionalParam<uint32>(retMap, "protocolversion");
         p.mFlags = parseOptionalParam<uint32>(retMap, "flags");
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        auto configXdrIter = retMap.find("configupgradesetkey");
+        if (configXdrIter != retMap.end())
+        {
+            std::vector<uint8_t> buffer;
+            decoder::decode_b64(configXdrIter->second, buffer);
+            ConfigUpgradeSetKey key;
+            xdr::xdr_from_opaque(buffer, key);
+            LedgerTxn ltx(mApp.getLedgerTxnRoot());
+
+            auto ptr = ConfigUpgradeSetFrame::makeFromKey(ltx, key);
+
+            if (!ptr ||
+                ptr->isValidForApply() != Upgrades::UpgradeValidity::VALID)
+            {
+                retStr = "Error setting configUpgradeSet";
+                return;
+            }
+
+            p.mConfigUpgradeSetKey = key;
+        }
+#endif
         mApp.getHerder().setUpgrades(p);
     }
     else if (s == "clear")
@@ -668,31 +706,6 @@ CommandHandler::ll(std::string const& params, std::string& retStr)
 }
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
-void
-CommandHandler::preflight(std::string const& params, std::string& retStr)
-{
-    ZoneScoped;
-    Json::Value root;
-
-    std::map<std::string, std::string> paramMap;
-    http::server::server::parseParams(params, paramMap);
-    std::string blob = paramMap["blob"];
-    if (!blob.empty())
-    {
-        InvokeHostFunctionOp op;
-        std::vector<uint8_t> binBlob;
-        fromOpaqueBase64(op, blob);
-        root = InvokeHostFunctionOpFrame::preflight(mApp, op);
-    }
-    else
-    {
-        throw std::invalid_argument(
-            "Must specify an InvokeHostFunctionOp blob: preflight?blob=<op in "
-            "base64 XDR format>");
-    }
-    retStr = Json::FastWriter().write(root);
-}
-
 void
 CommandHandler::getLedgerEntry(std::string const& params, std::string& retStr)
 {
@@ -950,41 +963,53 @@ CommandHandler::generateLoad(std::string const& params, std::string& retStr)
     {
         std::map<std::string, std::string> map;
         http::server::server::parseParams(params, map);
-
-        LoadGenMode mode = LoadGenerator::getMode(
+        GeneratedLoadConfig cfg;
+        cfg.mode = LoadGenerator::getMode(
             parseOptionalParamOrDefault<std::string>(map, "mode", "create"));
-        bool isCreate = mode == LoadGenMode::CREATE;
+        bool isCreate = cfg.mode == LoadGenMode::CREATE;
 
-        uint32_t nAccounts =
+        cfg.nAccounts =
             parseOptionalParamOrDefault<uint32_t>(map, "accounts", 1000);
-        uint32_t nTxs = parseOptionalParamOrDefault<uint32_t>(map, "txs", 0);
-        uint32_t txRate =
-            parseOptionalParamOrDefault<uint32_t>(map, "txrate", 10);
-        uint32_t batchSize = parseOptionalParamOrDefault<uint32_t>(
+        cfg.nTxs = parseOptionalParamOrDefault<uint32_t>(map, "txs", 0);
+        cfg.txRate = parseOptionalParamOrDefault<uint32_t>(map, "txrate", 10);
+        cfg.batchSize = parseOptionalParamOrDefault<uint32_t>(
             map, "batchsize", 100); // Only for account creations
-        uint32_t offset =
-            parseOptionalParamOrDefault<uint32_t>(map, "offset", 0);
+        cfg.offset = parseOptionalParamOrDefault<uint32_t>(map, "offset", 0);
         uint32_t spikeIntervalInt =
             parseOptionalParamOrDefault<uint32_t>(map, "spikeinterval", 0);
-        std::chrono::seconds spikeInterval(spikeIntervalInt);
-        uint32_t spikeSize =
+        cfg.spikeInterval = std::chrono::seconds(spikeIntervalInt);
+        cfg.spikeSize =
             parseOptionalParamOrDefault<uint32_t>(map, "spikesize", 0);
-
-        uint32_t numItems = isCreate ? nAccounts : nTxs;
-        std::string itemType = isCreate ? "accounts" : "txs";
-
-        if (batchSize > 100)
+        cfg.maxGeneratedFeeRate =
+            parseOptionalParam<uint32_t>(map, "maxfeerate");
+        cfg.skipLowFeeTxs =
+            parseOptionalParamOrDefault<bool>(map, "skiplowfeetxs", false);
+        // Only for MIXED_TX mode; fraction of DEX transactions.
+        cfg.dexTxPercent =
+            parseOptionalParamOrDefault<uint32_t>(map, "dextxpercent", 0);
+        if (cfg.batchSize > 100)
         {
-            batchSize = 100;
+            cfg.batchSize = 100;
             retStr = "Setting batch size to its limit of 100.";
         }
+        if (cfg.maxGeneratedFeeRate)
+        {
+            auto baseFee = mApp.getLedgerManager().getLastTxFee();
+            if (baseFee > *cfg.maxGeneratedFeeRate)
+            {
+                retStr = "maxfeerate is smaller than minimum base fee, load "
+                         "generation skipped.";
+                return;
+            }
+        }
 
-        mApp.generateLoad(mode, nAccounts, offset, nTxs, txRate, batchSize,
-                          spikeInterval, spikeSize);
+        uint32_t numItems = isCreate ? cfg.nAccounts : cfg.nTxs;
+        std::string itemType = isCreate ? "accounts" : "txs";
 
         retStr +=
             fmt::format(FMT_STRING(" Generating load: {:d} {:s}, {:d} tx/s"),
-                        numItems, itemType, txRate);
+                        numItems, itemType, cfg.txRate);
+        mApp.generateLoad(cfg);
     }
     else
     {

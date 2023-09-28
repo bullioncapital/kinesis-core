@@ -256,13 +256,13 @@ TxSetFrame::makeFromTransactions(TxSetFrame::Transactions const& txs,
     {
         GeneralizedTransactionSet xdrTxSet;
         txSet->toXDR(xdrTxSet);
-        outputTxSet = TxSetFrame::makeFromWire(app.getNetworkID(), xdrTxSet);
+        outputTxSet = TxSetFrame::makeFromWire(app, xdrTxSet);
     }
     else
     {
         TransactionSet xdrTxSet;
         txSet->toXDR(xdrTxSet);
-        outputTxSet = TxSetFrame::makeFromWire(app.getNetworkID(), xdrTxSet);
+        outputTxSet = TxSetFrame::makeFromWire(app, xdrTxSet);
     }
     // Make sure no transactions were lost during the roundtrip and the output
     // tx set is valid.
@@ -300,13 +300,13 @@ TxSetFrame::makeEmpty(LedgerHeaderHistoryEntry const& lclHeader)
 }
 
 TxSetFrameConstPtr
-TxSetFrame::makeFromWire(Hash const& networkID, TransactionSet const& xdrTxSet)
+TxSetFrame::makeFromWire(Application& app, TransactionSet const& xdrTxSet)
 {
     ZoneScoped;
     std::shared_ptr<TxSetFrame> txSet(new TxSetFrame(
         false, xdrTxSet.previousLedgerHash, TxSetFrame::Transactions{}));
     size_t encodedSize = xdr::xdr_argpack_size(xdrTxSet);
-    if (!txSet->addTxsFromXdr(networkID, xdrTxSet.txs, false, std::nullopt))
+    if (!txSet->addTxsFromXdr(app, xdrTxSet.txs, false, std::nullopt))
     {
         CLOG_DEBUG(Herder, "Got bad txSet: transactions are not "
                            "ordered correctly");
@@ -320,7 +320,7 @@ TxSetFrame::makeFromWire(Hash const& networkID, TransactionSet const& xdrTxSet)
 }
 
 TxSetFrameConstPtr
-TxSetFrame::makeFromWire(Hash const& networkID,
+TxSetFrame::makeFromWire(Application& app,
                          GeneralizedTransactionSet const& xdrTxSet)
 {
     ZoneScoped;
@@ -352,7 +352,7 @@ TxSetFrame::makeFromWire(Hash const& networkID,
                 {
                     baseFee = *component.txsMaybeDiscountedFee().baseFee;
                 }
-                if (!txSet->addTxsFromXdr(networkID,
+                if (!txSet->addTxsFromXdr(app,
                                           component.txsMaybeDiscountedFee().txs,
                                           true, baseFee))
                 {
@@ -375,12 +375,11 @@ TxSetFrame::makeFromStoredTxSet(StoredTransactionSet const& storedSet,
     TxSetFrameConstPtr cur;
     if (storedSet.v() == 0)
     {
-        cur = TxSetFrame::makeFromWire(app.getNetworkID(), storedSet.txSet());
+        cur = TxSetFrame::makeFromWire(app, storedSet.txSet());
     }
     else
     {
-        cur = TxSetFrame::makeFromWire(app.getNetworkID(),
-                                       storedSet.generalizedTxSet());
+        cur = TxSetFrame::makeFromWire(app, storedSet.generalizedTxSet());
     }
 
     return cur;
@@ -567,7 +566,25 @@ TxSetFrame::encodedSize() const
 }
 
 void
-TxSetFrame::computeTxFees(LedgerHeader const& lclHeader) const
+TxSetFrame::computeTxFeesForNonGeneralizedSet(
+    LedgerHeader const& lclHeader) const
+{
+    ZoneScoped;
+    auto ledgerVersion = lclHeader.ledgerVersion;
+    int64_t lowBaseFee = std::numeric_limits<int64_t>::max();
+    for (auto& txPtr : mTxs)
+    {
+        int64_t txBaseFee = computePerOpFee(*txPtr, ledgerVersion);
+        lowBaseFee = std::min(lowBaseFee, txBaseFee);
+    }
+    computeTxFeesForNonGeneralizedSet(lclHeader, lowBaseFee,
+                                      /* enableLogging */ false);
+}
+
+void
+TxSetFrame::computeTxFeesForNonGeneralizedSet(LedgerHeader const& lclHeader,
+                                              int64_t lowestBaseFee,
+                                              bool enableLogging) const
 {
     ZoneScoped;
     auto ledgerVersion = lclHeader.ledgerVersion;
@@ -621,6 +638,54 @@ TxSetFrame::computeTxFees(LedgerHeader const& lclHeader, int64_t lowestBaseFee,
     mFeesComputed = true;
 }
 
+void
+TxSetFrame::computeTxFees(LedgerHeader const& ledgerHeader,
+                          SurgePricingLaneConfig const& surgePricingConfig,
+                          std::vector<int64_t> const& lowestLaneFee,
+                          std::vector<bool> const& hadTxNotFittingLane)
+{
+    releaseAssert(!mFeesComputed);
+    releaseAssert(isGeneralizedTxSet());
+    releaseAssert(lowestLaneFee.size() == hadTxNotFittingLane.size());
+    std::vector<int64_t> laneBaseFee(lowestLaneFee.size(),
+                                     ledgerHeader.baseFee);
+    auto minBaseFee =
+        *std::min_element(lowestLaneFee.begin(), lowestLaneFee.end());
+    for (size_t lane = 0; lane < laneBaseFee.size(); ++lane)
+    {
+        // If generic lane is full, then any transaction had to compete with not
+        // included transactions and independently of the lane they need to have
+        // at least the minimum fee in the tx set applied.
+        if (hadTxNotFittingLane[SurgePricingPriorityQueue::GENERIC_LANE])
+        {
+            laneBaseFee[lane] = minBaseFee;
+        }
+        // If limited lane is full, then the transactions in this lane also had
+        // to compete with each other and have a base fee associated with this
+        // lane only.
+        if (lane != SurgePricingPriorityQueue::GENERIC_LANE &&
+            hadTxNotFittingLane[lane])
+        {
+            laneBaseFee[lane] = lowestLaneFee[lane];
+        }
+        if (laneBaseFee[lane] > ledgerHeader.baseFee)
+        {
+            CLOG_WARNING(
+                Herder,
+                "surge pricing for '{}' lane is in effect with base fee={}",
+                lane == SurgePricingPriorityQueue::GENERIC_LANE ? "generic"
+                                                                : "DEX",
+                laneBaseFee[lane]);
+        }
+    }
+
+    for (auto const& tx : mTxs)
+    {
+        mTxBaseFee[tx] = laneBaseFee[surgePricingConfig.getLane(*tx)];
+    }
+    mFeesComputed = true;
+}
+
 std::optional<int64_t>
 TxSetFrame::getTxBaseFee(TransactionFrameBaseConstPtr const& tx,
                          LedgerHeader const& lclHeader) const
@@ -628,7 +693,7 @@ TxSetFrame::getTxBaseFee(TransactionFrameBaseConstPtr const& tx,
     if (!mFeesComputed)
     {
         releaseAssert(!isGeneralizedTxSet());
-        computeTxFees(lclHeader);
+        computeTxFeesForNonGeneralizedSet(lclHeader);
     }
     auto it = mTxBaseFee.find(tx);
     if (it == mTxBaseFee.end())
@@ -774,15 +839,29 @@ TxSetFrame::isGeneralizedTxSet() const
 }
 
 bool
-TxSetFrame::addTxsFromXdr(Hash const& networkID,
+TxSetFrame::addTxsFromXdr(Application& app,
                           xdr::xvector<TransactionEnvelope> const& txs,
                           bool useBaseFee, std::optional<int64_t> baseFee)
 {
     size_t oldSize = mTxs.size();
     mTxs.reserve(oldSize + txs.size());
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    LedgerTxn ltx(app.getLedgerTxnRoot(), false,
+                  TransactionMode::READ_ONLY_WITHOUT_SQL_TXN);
+    auto ledgerVersion = ltx.loadHeader().current().ledgerVersion;
+    auto const& sorobanConfig =
+        app.getLedgerManager().getSorobanNetworkConfig(ltx);
+    auto const& appConfig = app.getConfig();
+#endif
     for (auto const& env : txs)
     {
-        auto tx = TransactionFrameBase::makeTransactionFromWire(networkID, env);
+        auto tx = TransactionFrameBase::makeTransactionFromWire(
+            app.getNetworkID(), env);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        tx->maybeComputeSorobanResourceFee(ledgerVersion, sorobanConfig,
+                                           appConfig);
+#endif
+
         mTxs.push_back(tx);
         if (useBaseFee)
         {
@@ -808,22 +887,46 @@ TxSetFrame::applySurgePricing(Application& app)
         static_cast<uint32_t>(app.getLedgerManager().getLastMaxTxSetSizeOps());
     auto const& lclHeader =
         app.getLedgerManager().getLastClosedLedgerHeader().header;
+    std::optional<uint32_t> dexOpsLimit;
+    if (isGeneralizedTxSet())
+    {
+        // DEX operations limit implies that DEX transactions should compete
+        // with each other in in a separate fee lane, which is only possible
+        // with generalized tx set.
+        dexOpsLimit = app.getConfig().MAX_DEX_TX_OPERATIONS_IN_TX_SET;
+    }
 
     auto actTxQueues = TxSetUtils::buildAccountTxQueues(mTxs);
+    auto surgePricingLaneConfig =
+        std::make_shared<DexLimitingLaneConfig>(maxOps, dexOpsLimit);
 
-    auto includedTxs = SurgePricingPriorityQueue::getMostTopTxsWithinLimit(
+    std::vector<bool> hadTxNotFittingLane;
+    auto includedTxs = SurgePricingPriorityQueue::getMostTopTxsWithinLimits(
         std::vector<TxStackPtr>(actTxQueues.begin(), actTxQueues.end()),
-        maxOps);
+        surgePricingLaneConfig, hadTxNotFittingLane);
 
-    int64_t lowestFee = std::numeric_limits<int64_t>::max();
+    size_t laneCount = surgePricingLaneConfig->getLaneOpsLimits().size();
+    std::vector<int64_t> lowestLaneFee(laneCount,
+                                       std::numeric_limits<int64_t>::max());
     for (auto const& tx : includedTxs)
     {
+        size_t lane = surgePricingLaneConfig->getLane(*tx);
         auto perOpFee = computePerOpFee(*tx, lclHeader.ledgerVersion);
-        lowestFee = std::min(lowestFee, perOpFee);
+        lowestLaneFee[lane] = std::min(lowestLaneFee[lane], perOpFee);
     }
+
     mTxs = includedTxs;
-    computeTxFees(lclHeader, lowestFee,
-                  /* enableLogging */ true);
+    if (isGeneralizedTxSet())
+    {
+        computeTxFees(lclHeader, *surgePricingLaneConfig, lowestLaneFee,
+                      hadTxNotFittingLane);
+    }
+    else
+    {
+        computeTxFeesForNonGeneralizedSet(
+            lclHeader, lowestLaneFee[SurgePricingPriorityQueue::GENERIC_LANE],
+            /* enableLogging */ true);
+    }
 }
 
 void

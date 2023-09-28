@@ -11,11 +11,10 @@
 // first to include <windows.h> -- so we try to include it before everything
 // else.
 #include "util/asio.h"
-#include "bucket/BucketTests.h"
 #include "bucket/Bucket.h"
-#include "bucket/BucketInputIterator.h"
 #include "bucket/BucketManager.h"
 #include "bucket/BucketOutputIterator.h"
+#include "bucket/test/BucketTestUtils.h"
 #include "ledger/LedgerTxn.h"
 #include "ledger/test/LedgerTestUtils.h"
 #include "lib/catch.hpp"
@@ -30,9 +29,7 @@
 #include "xdrpp/autocheck.h"
 
 using namespace stellar;
-
-namespace BucketTests
-{
+using namespace BucketTestUtils;
 
 static std::ifstream::pos_type
 fileSize(std::string const& name)
@@ -44,34 +41,7 @@ fileSize(std::string const& name)
     return in.tellg();
 }
 
-uint32_t
-getAppLedgerVersion(Application& app)
-{
-    auto const& lcl = app.getLedgerManager().getLastClosedLedgerHeader();
-    return lcl.header.ledgerVersion;
-}
-
-uint32_t
-getAppLedgerVersion(Application::pointer app)
-{
-    return getAppLedgerVersion(*app);
-}
-
-void
-for_versions_with_differing_bucket_logic(
-    Config const& cfg, std::function<void(Config const&)> const& f)
-{
-    for_versions(
-        {static_cast<uint32_t>(
-             Bucket::FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY) -
-             1,
-         static_cast<uint32_t>(
-             Bucket::FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY),
-         static_cast<uint32_t>(Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED)},
-        cfg, f);
-}
-
-void
+static void
 for_versions_with_differing_initentry_logic(
     Config const& cfg, std::function<void(Config const&)> const& f)
 {
@@ -84,45 +54,6 @@ for_versions_with_differing_initentry_logic(
         cfg, f);
 }
 
-EntryCounts::EntryCounts(std::shared_ptr<Bucket> bucket)
-{
-    BucketInputIterator iter(bucket);
-    if (iter.seenMetadata())
-    {
-        ++nMeta;
-    }
-    while (iter)
-    {
-        switch ((*iter).type())
-        {
-        case INITENTRY:
-            ++nInit;
-            break;
-        case LIVEENTRY:
-            ++nLive;
-            break;
-        case DEADENTRY:
-            ++nDead;
-            break;
-        case METAENTRY:
-            // This should never happen: only the first record can be METAENTRY
-            // and it is counted above.
-            abort();
-        }
-        ++iter;
-    }
-}
-
-size_t
-countEntries(std::shared_ptr<Bucket> bucket)
-{
-    EntryCounts e(bucket);
-    return e.sum();
-}
-}
-
-using namespace BucketTests;
-
 TEST_CASE_VERSIONS("file backed buckets", "[bucket][bucketbench]")
 {
     VirtualClock clock;
@@ -131,12 +62,14 @@ TEST_CASE_VERSIONS("file backed buckets", "[bucket][bucketbench]")
         Application::pointer app = createTestApplication(clock, cfg);
 
         CLOG_DEBUG(Bucket, "Generating 10000 random ledger entries");
-        std::vector<LedgerEntry> live(9000);
-        std::vector<LedgerKey> dead(1000);
-        for (auto& e : live)
-            e = LedgerTestUtils::generateValidLedgerEntry(3);
-        for (auto& e : dead)
-            e = LedgerTestUtils::generateLedgerKey(3);
+        auto live = LedgerTestUtils::generateValidUniqueLedgerEntries(9000);
+        auto dead = LedgerTestUtils::generateValidLedgerEntryKeysWithExclusions(
+            {
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            },
+            1000);
         CLOG_DEBUG(Bucket, "Hashing entries");
         std::shared_ptr<Bucket> b1 = Bucket::fresh(
             app->getBucketManager(), getAppLedgerVersion(app), {}, live, dead,
@@ -147,10 +80,14 @@ TEST_CASE_VERSIONS("file backed buckets", "[bucket][bucketbench]")
             CLOG_DEBUG(Bucket,
                        "Merging 10000 new ledger entries into {} entry bucket",
                        (i * 10000));
-            for (auto& e : live)
-                e = LedgerTestUtils::generateValidLedgerEntry(3);
-            for (auto& e : dead)
-                e = LedgerTestUtils::generateLedgerKey(3);
+            live = LedgerTestUtils::generateValidUniqueLedgerEntries(9000);
+            dead = LedgerTestUtils::generateValidLedgerEntryKeysWithExclusions(
+                {
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    CONFIG_SETTING
+#endif
+                },
+                1000);
             {
                 b1 = Bucket::merge(
                     app->getBucketManager(),
@@ -166,7 +103,7 @@ TEST_CASE_VERSIONS("file backed buckets", "[bucket][bucketbench]")
                     /*doFsync=*/true);
             }
         }
-        auto sz = static_cast<size_t>(fileSize(b1->getFilename()));
+        auto sz = static_cast<size_t>(fileSize(b1->getFilename().string()));
         CLOG_DEBUG(Bucket, "Spill file size: {}", sz);
     });
 }
@@ -222,6 +159,10 @@ TEST_CASE_VERSIONS("merging bucket entries", "[bucket]")
                     liveEntry.data.contractData() =
                         LedgerTestUtils::generateValidContractDataEntry(10);
                     break;
+                case CONTRACT_CODE:
+                    liveEntry.data.contractCode() =
+                        LedgerTestUtils::generateValidContractCodeEntry(10);
+                    break;
 #endif
                 default:
                     abort();
@@ -253,16 +194,21 @@ TEST_CASE_VERSIONS("merging bucket entries", "[bucket]")
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
         checkDeadAnnihilatesLive(CONFIG_SETTING);
         checkDeadAnnihilatesLive(CONTRACT_DATA);
+        checkDeadAnnihilatesLive(CONTRACT_CODE);
 #endif
 
         SECTION("random dead entries annihilates live entries")
         {
-            std::vector<LedgerEntry> live(100);
+            std::vector<LedgerEntry> live =
+                LedgerTestUtils::generateValidUniqueLedgerEntries(100);
             std::vector<LedgerKey> dead;
             for (auto& e : live)
             {
-                e = LedgerTestUtils::generateValidLedgerEntry(10);
-                if (rand_flip())
+                if (rand_flip()
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    && e.data.type() != CONFIG_SETTING
+#endif
+                )
                 {
                     dead.push_back(LedgerEntryKey(e));
                 }
@@ -289,12 +235,9 @@ TEST_CASE_VERSIONS("merging bucket entries", "[bucket]")
 
         SECTION("random live entries overwrite live entries in any order")
         {
-            std::vector<LedgerEntry> live(100);
+            std::vector<LedgerEntry> live =
+                LedgerTestUtils::generateValidUniqueLedgerEntries(100);
             std::vector<LedgerKey> dead;
-            for (auto& e : live)
-            {
-                e = LedgerTestUtils::generateValidLedgerEntry(10);
-            }
             std::shared_ptr<Bucket> b1 = Bucket::fresh(
                 app->getBucketManager(), getAppLedgerVersion(app), {}, live,
                 dead, /*countMergeEvents=*/true, clock.getIOContext(),
@@ -322,7 +265,12 @@ TEST_CASE_VERSIONS("merging bucket entries", "[bucket]")
             {
                 if (rand_flip())
                 {
-                    e = LedgerTestUtils::generateValidLedgerEntry(10);
+                    e = LedgerTestUtils::generateValidLedgerEntryWithExclusions(
+                        {
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                            CONFIG_SETTING
+#endif
+                        });
                     ++liveCount;
                 }
             }

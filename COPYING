@@ -37,6 +37,15 @@ lib/asio:
   Licensed under the Boost Software License 1.0
   (http://www.boost.org/LICENSE_1_0.txt)
 
+lib/bloom_filter.hpp:
+
+  The C++ Open Bloom Filter Library,
+  Copyright 2000 Arash Partow
+  (arash at partow dot net)
+  (https://www.partow.net/programming/bloomfilter/index.html)
+  Licensed under the MIT license
+  (http://opensource.org/licenses/MIT)
+
 lib/catch.hpp:
 
   The Catch library,
@@ -120,6 +129,15 @@ lib/soci:
   (https://github.com/SOCI/soci)
   Licensed under the Boost Software License 1.0
   (http://www.boost.org/LICENSE_1_0.txt)
+
+lib/libsodium:
+
+  Sodium,
+  Copyright (c) 2013-2022
+  (Frank Denis <j at pureftpd dot org>)
+  (https://github.com/jedisct1/libsodium)
+  Licensed under the ISC license
+  (https://en.wikipedia.org/wiki/ISC_license)
 
 lib/libmedida:
 

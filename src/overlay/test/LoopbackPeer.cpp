@@ -33,6 +33,49 @@ LoopbackPeer::getIP() const
     return "127.0.0.1";
 }
 
+std::pair<std::shared_ptr<LoopbackPeer>, std::shared_ptr<LoopbackPeer>>
+LoopbackPeer::initiate(Application& app, Application& otherApp)
+{
+    auto peer = make_shared<LoopbackPeer>(app, Peer::WE_CALLED_REMOTE);
+    auto otherPeer =
+        make_shared<LoopbackPeer>(otherApp, Peer::REMOTE_CALLED_US);
+
+    peer->mRemote = otherPeer;
+    peer->mState = Peer::CONNECTED;
+
+    otherPeer->mRemote = peer;
+    otherPeer->mState = Peer::CONNECTED;
+
+    peer->mAddress = PeerBareAddress(otherPeer->getIP(),
+                                     otherPeer->getApp().getConfig().PEER_PORT);
+    otherPeer->mAddress =
+        PeerBareAddress{peer->getIP(), peer->getApp().getConfig().PEER_PORT};
+
+    app.getOverlayManager().addOutboundConnection(peer);
+    otherApp.getOverlayManager().addInboundConnection(otherPeer);
+    // if connection was dropped during addPendingPeer, we don't want do call
+    // connectHandler
+    if (peer->mState != Peer::CONNECTED || otherPeer->mState != Peer::CONNECTED)
+    {
+        return std::pair(peer, otherPeer);
+    }
+
+    peer->startRecurrentTimer();
+    otherPeer->startRecurrentTimer();
+
+    std::weak_ptr<LoopbackPeer> init = peer;
+    peer->getApp().postOnMainThread(
+        [init]() {
+            auto inC = init.lock();
+            if (inC)
+            {
+                inC->connectHandler(asio::error_code());
+            }
+        },
+        "LoopbackPeer: connect");
+    return std::pair(peer, otherPeer);
+}
+
 AuthCert
 LoopbackPeer::getAuthCert()
 {
@@ -108,6 +151,21 @@ LoopbackPeer::drop(std::string const& reason, DropDirection direction, DropMode)
         return;
     }
 
+    if (mState != GOT_AUTH)
+    {
+        CLOG_DEBUG(Overlay, "LoopbackPeer::drop {} in state {} we called:{}",
+                   toString(), mState, mRole);
+    }
+    else if (direction == Peer::DropDirection::WE_DROPPED_REMOTE)
+    {
+        CLOG_DEBUG(Overlay, "Dropping peer {}, reason {}", toString(), reason);
+    }
+    else
+    {
+        CLOG_DEBUG(Overlay, "peer {} dropped us, reason {}", toString(),
+                   reason);
+    }
+
     mDropReason = reason;
     mState = CLOSING;
     Peer::shutdown();
@@ -170,7 +228,7 @@ duplicateMessage(Peer::TimestampedMessage const& msg)
 void
 LoopbackPeer::processInQueue()
 {
-    if (!hasReadingCapacity())
+    if (!canRead())
     {
         mIsPeerThrottled = true;
         return;
@@ -437,39 +495,10 @@ LoopbackPeer::setReorderProbability(double d)
 
 LoopbackPeerConnection::LoopbackPeerConnection(Application& initiator,
                                                Application& acceptor)
-    : mInitiator(make_shared<LoopbackPeer>(initiator, Peer::WE_CALLED_REMOTE))
-    , mAcceptor(make_shared<LoopbackPeer>(acceptor, Peer::REMOTE_CALLED_US))
 {
-    mInitiator->mRemote = mAcceptor;
-    mInitiator->mState = Peer::CONNECTED;
-
-    mAcceptor->mRemote = mInitiator;
-    mAcceptor->mState = Peer::CONNECTED;
-
-    initiator.getOverlayManager().addOutboundConnection(mInitiator);
-    acceptor.getOverlayManager().addInboundConnection(mAcceptor);
-
-    // if connection was dropped during addPendingPeer, we don't want do call
-    // connectHandler
-    if (mInitiator->mState != Peer::CONNECTED ||
-        mAcceptor->mState != Peer::CONNECTED)
-    {
-        return;
-    }
-
-    mInitiator->startRecurrentTimer();
-    mAcceptor->startRecurrentTimer();
-
-    std::weak_ptr<LoopbackPeer> init = mInitiator;
-    mInitiator->getApp().postOnMainThread(
-        [init]() {
-            auto inC = init.lock();
-            if (inC)
-            {
-                inC->connectHandler(asio::error_code());
-            }
-        },
-        "LoopbackPeer: connect");
+    auto res = LoopbackPeer::initiate(initiator, acceptor);
+    mInitiator = res.first;
+    mAcceptor = res.second;
 }
 
 LoopbackPeerConnection::~LoopbackPeerConnection()
@@ -494,8 +523,23 @@ LoopbackPeerConnection::getAcceptor() const
 }
 
 bool
-LoopbackPeer::checkCapacity(uint64_t expectedOutboundCapacity) const
+LoopbackPeer::checkCapacity(std::shared_ptr<LoopbackPeer> otherPeer) const
 {
-    return expectedOutboundCapacity == mOutboundCapacity;
+    // Outbound capacity is equal to the config on the other node
+    bool flowControlInBytes = getFlowControl()->getCapacityBytes() &&
+                              otherPeer->getFlowControl()->getCapacityBytes();
+    bool isValid =
+        otherPeer->getApp().getConfig().PEER_FLOOD_READING_CAPACITY ==
+        getFlowControl()->getCapacity()->getOutboundCapacity();
+    if (flowControlInBytes)
+    {
+        isValid = isValid &&
+                  (otherPeer->getApp()
+                       .getConfig()
+                       .PEER_FLOOD_READING_CAPACITY_BYTES ==
+                   getFlowControl()->getCapacityBytes()->getOutboundCapacity());
+    }
+
+    return isValid;
 }
 }

@@ -4,6 +4,7 @@
 
 #include "catchup/CatchupWork.h"
 #include "bucket/BucketList.h"
+#include "bucket/BucketManager.h"
 #include "catchup/ApplyBucketsWork.h"
 #include "catchup/ApplyBufferedLedgersWork.h"
 #include "catchup/ApplyCheckpointWork.h"
@@ -236,9 +237,20 @@ CatchupWork::downloadApplyBuckets()
         version = mVerifiedLedgerRangeStart.header.ledgerVersion;
     }
 
-    auto applyBuckets = std::make_shared<ApplyBucketsWork>(
-        mApp, mBuckets, *mBucketHAS, version);
-
+    std::shared_ptr<ApplyBucketsWork> applyBuckets;
+    if (mApp.getConfig().isUsingBucketListDB())
+    {
+        // Only apply unsupported BucketListDB types to SQL DB when BucketList
+        // lookup is enabled
+        applyBuckets = std::make_shared<ApplyBucketsWork>(
+            mApp, mBuckets, *mBucketHAS, version,
+            BucketIndex::typeNotSupported);
+    }
+    else
+    {
+        applyBuckets = std::make_shared<ApplyBucketsWork>(mApp, mBuckets,
+                                                          *mBucketHAS, version);
+    }
     seq.push_back(applyBuckets);
     return std::make_shared<WorkSequence>(mApp, "download-verify-apply-buckets",
                                           seq, RETRY_NEVER);

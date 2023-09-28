@@ -11,6 +11,7 @@
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/LedgerTxnHeader.h"
+#include "ledger/NetworkConfig.h"
 #include "lib/catch.hpp"
 #include "lib/json/json.h"
 #include "main/Application.h"
@@ -65,11 +66,20 @@ TEST_CASE("txset - correct apply order", "[tx][envelope]")
     auto txSet = TxSetFrame::makeFromTransactions(
         TxSetFrame::Transactions{tx1, tx2}, *app, 0, 0);
 
-    // Sort for apply re-orders transaction set
     auto txs = txSet->getTxsInApplyOrder();
     REQUIRE(txs.size() == 2);
-    REQUIRE(txs[1]->getFullHash() == tx1->getFullHash());
-    REQUIRE(txs[0]->getFullHash() == tx2->getFullHash());
+    // Sort for apply re-orders transaction set based on the contents hash
+    if (lessThanXored(tx1->getFullHash(), tx2->getFullHash(),
+                      txSet->getContentsHash()))
+    {
+        REQUIRE(txs[0]->getFullHash() == tx1->getFullHash());
+        REQUIRE(txs[1]->getFullHash() == tx2->getFullHash());
+    }
+    else
+    {
+        REQUIRE(txs[1]->getFullHash() == tx1->getFullHash());
+        REQUIRE(txs[0]->getFullHash() == tx2->getFullHash());
+    }
 }
 
 TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
@@ -822,7 +832,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                             setup();
                             {
                                 LedgerTxn ltx(app->getLedgerTxnRoot());
-                                REQUIRE(!tx->checkValid(ltx, 0, 0, 0));
+                                REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
                             }
                             REQUIRE(tx->getResultCode() == txBAD_SEQ);
                             REQUIRE(getAccountSigners(a1, *app).size() == 1);
@@ -1430,9 +1440,10 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                                 {a1});
                             {
                                 LedgerTxn ltx(app->getLedgerTxnRoot());
-                                TransactionMeta txm(2);
-                                REQUIRE(
-                                    insideSignerTx->checkValid(ltx, 0, 0, 0));
+                                TransactionMetaFrame txm(
+                                    ltx.loadHeader().current().ledgerVersion);
+                                REQUIRE(insideSignerTx->checkValid(*app, ltx, 0,
+                                                                   0, 0));
                                 REQUIRE(insideSignerTx->apply(*app, ltx, txm));
                                 REQUIRE(insideSignerTx->getResultCode() ==
                                         txSUCCESS);
@@ -1448,9 +1459,10 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                                 {a1});
                             {
                                 LedgerTxn ltx(app->getLedgerTxnRoot());
-                                TransactionMeta txm(2);
-                                REQUIRE(
-                                    outsideSignerTx->checkValid(ltx, 0, 0, 0));
+                                TransactionMetaFrame txm(
+                                    ltx.loadHeader().current().ledgerVersion);
+                                REQUIRE(outsideSignerTx->checkValid(*app, ltx,
+                                                                    0, 0, 0));
                                 REQUIRE(outsideSignerTx->apply(*app, ltx, txm));
                                 REQUIRE(outsideSignerTx->getResultCode() ==
                                         txSUCCESS);
@@ -1674,7 +1686,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
 
                 {
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    REQUIRE(!tx->checkValid(ltx, 0, 0, 0));
+                    REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
                 }
 
                 applyCheck(tx, *app);
@@ -1698,7 +1710,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
 
                         {
                             LedgerTxn ltx(app->getLedgerTxnRoot());
-                            REQUIRE(!tx->checkValid(ltx, 0, 0, 0));
+                            REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
                         }
                         applyCheck(tx, *app);
                         REQUIRE(tx->getResultCode() == txFAILED);
@@ -1712,7 +1724,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
 
                         {
                             LedgerTxn ltx(app->getLedgerTxnRoot());
-                            REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                         }
                         applyCheck(tx, *app);
                         REQUIRE(tx->getResultCode() == txSUCCESS);
@@ -1729,7 +1741,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
 
                         {
                             LedgerTxn ltx(app->getLedgerTxnRoot());
-                            REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                         }
                         applyCheck(tx, *app);
                         REQUIRE(tx->getResultCode() == txSUCCESS);
@@ -1754,7 +1766,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
 
                         {
                             LedgerTxn ltx(app->getLedgerTxnRoot());
-                            REQUIRE(!tx->checkValid(ltx, 0, 0, 0));
+                            REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
                         }
 
                         applyCheck(tx, *app);
@@ -1781,7 +1793,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
 
                         {
                             LedgerTxn ltx(app->getLedgerTxnRoot());
-                            REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                         }
 
                         applyCheck(tx, *app);
@@ -1807,7 +1819,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
 
                         {
                             LedgerTxn ltx(app->getLedgerTxnRoot());
-                            REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                         }
 
                         applyCheck(tx, *app);
@@ -1899,7 +1911,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                     setup();
                     {
                         LedgerTxn ltx(app->getLedgerTxnRoot());
-                        REQUIRE(!txFrame->checkValid(ltx, 0, 0, 0));
+                        REQUIRE(!txFrame->checkValid(*app, ltx, 0, 0, 0));
                     }
                     REQUIRE(txFrame->getResultCode() == txBAD_SEQ);
                 });
@@ -1988,7 +2000,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                                 {
                                     LedgerTxn ltx(app->getLedgerTxnRoot());
                                     REQUIRE(txFrame->checkValid(
-                                                ltx, 0, lowerBound, 0) ==
+                                                *app, ltx, 0, lowerBound, 0) ==
                                             expectSuccess);
                                 }
                                 REQUIRE(
@@ -2068,8 +2080,8 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
 
                                 {
                                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                                    REQUIRE(
-                                        txFrame->checkValid(ltx, 0, 0, offset));
+                                    REQUIRE(txFrame->checkValid(*app, ltx, 0, 0,
+                                                                offset));
                                 }
 
                                 REQUIRE(txFrame->getResultCode() == txSUCCESS);
@@ -2081,8 +2093,8 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
 
                                 {
                                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                                    REQUIRE(!txFrame->checkValid(ltx, 0, 0,
-                                                                 offset));
+                                    REQUIRE(!txFrame->checkValid(*app, ltx, 0,
+                                                                 0, offset));
                                 }
 
                                 REQUIRE(txFrame->getResultCode() == txTOO_LATE);
@@ -2110,7 +2122,7 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                     setSeqNum(txFrame, txFrame->getSeqNum() - 1);
                     {
                         LedgerTxn ltx(app->getLedgerTxnRoot());
-                        REQUIRE(!txFrame->checkValid(ltx, 0, 0, 0));
+                        REQUIRE(!txFrame->checkValid(*app, ltx, 0, 0, 0));
                     }
 
                     REQUIRE(txFrame->getResultCode() == txBAD_SEQ);
@@ -2382,7 +2394,8 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                     REQUIRE(PaymentOpFrame::getInnerCode(
                                 r[1].first.result.result.results()[0]) ==
                             PAYMENT_SUCCESS);
-                    REQUIRE(r[1].first.result.result.code() == opBAD_AUTH);
+                    REQUIRE(r[1].first.result.result.results()[1].code() ==
+                            opBAD_AUTH);
                 });
             }
         }
@@ -2453,3 +2466,264 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
         for_versions_from(13, *app, [&] { doChecks(txSUCCESS); });
     }
 }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+TEST_CASE("soroban txs not allowed before protocol upgrade",
+          "[tx][envelope][soroban]")
+{
+    VirtualClock clock;
+    auto cfg = getTestConfig();
+    cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION =
+        static_cast<uint32_t>(SOROBAN_PROTOCOL_VERSION) - 1;
+    auto app = createTestApplication(clock, cfg);
+    auto root = TestAccount::createRoot(*app);
+    Operation op;
+    op.body.type(INVOKE_HOST_FUNCTION);
+    op.body.invokeHostFunctionOp().functions.emplace_back();
+
+    auto tx =
+        sorobanTransactionFrameFromOps(app->getNetworkID(), root, {op}, {},
+                                       SorobanResources(), 1'000'000, 100'000);
+    LedgerTxn ltx(app->getLedgerTxnRoot());
+    REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+    REQUIRE(tx->getResult().result.code() == txMALFORMED);
+}
+
+TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
+{
+    VirtualClock clock;
+    auto app = createTestApplication(clock, getTestConfig());
+    auto root = TestAccount::createRoot(*app);
+    Operation op0;
+    op0.body.type(INVOKE_HOST_FUNCTION);
+    auto& ihf0 = op0.body.invokeHostFunctionOp().functions.emplace_back();
+    ihf0.args.type(HOST_FUNCTION_TYPE_CREATE_CONTRACT);
+
+    auto validateResources = [&](SorobanResources const& resources,
+                                 bool valid) {
+        auto tx =
+            sorobanTransactionFrameFromOps(app->getNetworkID(), root, {op0}, {},
+                                           resources, 3'500'000, 100'000);
+        LedgerTxn ltx(app->getLedgerTxnRoot());
+        REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0) == valid);
+        if (!valid)
+        {
+            REQUIRE(tx->getResult().result.code() ==
+                    txSOROBAN_RESOURCE_LIMIT_EXCEEDED);
+        }
+    };
+
+    SECTION("no soroban extension")
+    {
+        auto tx = transactionFrameFromOps(app->getNetworkID(), root, {op0}, {});
+        LedgerTxn ltx(app->getLedgerTxnRoot());
+        REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+        REQUIRE(tx->getResult().result.code() == txMALFORMED);
+    }
+    SorobanResources resources;
+    SECTION("minimal resources are valid")
+    {
+        validateResources(resources, true);
+    }
+    resources.instructions = InitialSorobanNetworkConfig::TX_MAX_INSTRUCTIONS;
+    resources.readBytes = InitialSorobanNetworkConfig::TX_MAX_READ_BYTES;
+    resources.writeBytes = InitialSorobanNetworkConfig::TX_MAX_WRITE_BYTES;
+    resources.extendedMetaDataSizeBytes =
+        InitialSorobanNetworkConfig::TX_MAX_EXTENDED_META_DATA_SIZE_BYTES;
+    resources.footprint.readOnly.resize(
+        InitialSorobanNetworkConfig::TX_MAX_READ_LEDGER_ENTRIES -
+        InitialSorobanNetworkConfig::TX_MAX_WRITE_LEDGER_ENTRIES);
+    resources.footprint.readWrite.resize(
+        InitialSorobanNetworkConfig::TX_MAX_WRITE_LEDGER_ENTRIES);
+    SECTION("instructions exceeded")
+    {
+        resources.instructions += 1;
+        validateResources(resources, false);
+    }
+    SECTION("read bytes exceeded")
+    {
+        resources.readBytes += 1;
+        validateResources(resources, false);
+    }
+    SECTION("write bytes exceeded")
+    {
+        resources.writeBytes += 1;
+        validateResources(resources, false);
+    }
+    SECTION("metadata size exceeded")
+    {
+        resources.extendedMetaDataSizeBytes += 1;
+        validateResources(resources, false);
+    }
+    SECTION("max read entries exceeded")
+    {
+        resources.footprint.readOnly.emplace_back();
+        validateResources(resources, false);
+    }
+    SECTION("max write entries exceeded")
+    {
+        // Make sure that read entries limit is not exceeded.
+        resources.footprint.readOnly.pop_back();
+        resources.footprint.readWrite.emplace_back();
+        validateResources(resources, false);
+    }
+    SECTION("maximal resources are valid")
+    {
+        validateResources(resources, true);
+    }
+    SECTION("transaction size")
+    {
+        Operation op;
+        op.body.type(INVOKE_HOST_FUNCTION);
+        auto& ihf = op.body.invokeHostFunctionOp().functions.emplace_back();
+        ihf.args.type(HOST_FUNCTION_TYPE_INVOKE_CONTRACT);
+        SCVal largeVal(SCV_BYTES);
+        largeVal.bytes().resize(InitialSorobanNetworkConfig::TX_MAX_SIZE_BYTES -
+                                2000);
+        ihf.args.invokeContract().push_back(largeVal);
+        SECTION("near limit")
+        {
+            auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                     {op}, {}, resources,
+                                                     4'000'000, 100'000);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
+        }
+        SECTION("limit exceeded")
+        {
+            ihf.args.invokeContract().back().bytes().resize(
+                InitialSorobanNetworkConfig::TX_MAX_SIZE_BYTES);
+            auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                     {op}, {}, resources,
+                                                     1'000'000, 100'000);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+            REQUIRE(tx->getResult().result.code() ==
+                    txSOROBAN_RESOURCE_LIMIT_EXCEEDED);
+        }
+    }
+    SECTION("fees")
+    {
+        SECTION("resource fee exceeds tx fee")
+        {
+            auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                     {op0}, {}, resources,
+                                                     1'000'000, 100'000);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+            REQUIRE(tx->getResult().result.code() == txINSUFFICIENT_FEE);
+        }
+        SECTION("tx fee is lower than tx refundable fee")
+        {
+            auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                     {op0}, {}, resources,
+                                                     4'000'000, 4'000'001);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+            REQUIRE(tx->getResult().result.code() == txINSUFFICIENT_FEE);
+        }
+        SECTION("refundable fee exceeds tx refundable fee")
+        {
+            auto tx =
+                sorobanTransactionFrameFromOps(app->getNetworkID(), root, {op0},
+                                               {}, resources, 4'000'000, 100);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+            REQUIRE(tx->getResult().result.code() == txINSUFFICIENT_FEE);
+        }
+    }
+
+    SECTION("multiple ops are not allowed")
+    {
+        auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                 {op0, op0}, {}, resources,
+                                                 100'000, 1200);
+        LedgerTxn ltx(app->getLedgerTxnRoot());
+        REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+        REQUIRE(tx->getResult().result.code() == txMALFORMED);
+    }
+    SECTION("contract size")
+    {
+        Operation op;
+        op.body.type(INVOKE_HOST_FUNCTION);
+        auto& ihf = op.body.invokeHostFunctionOp().functions.emplace_back();
+        ihf.args.type(HOST_FUNCTION_TYPE_UPLOAD_CONTRACT_WASM);
+        auto& uploadArgs = ihf.args.uploadContractWasm();
+        uploadArgs.code.resize(InitialSorobanNetworkConfig::MAX_CONTRACT_SIZE);
+        SECTION("at limit")
+        {
+            auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                     {op}, {}, resources,
+                                                     3'500'000, 100'000);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
+        }
+        SECTION("over limit")
+        {
+            uploadArgs.code.resize(
+                InitialSorobanNetworkConfig::MAX_CONTRACT_SIZE + 1);
+            auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                     {op}, {}, resources,
+                                                     3'500'000, 100'000);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+        }
+    }
+
+    auto makeSymbol = [](std::string const& str) -> SCVal {
+        SCVal val(SCV_SYMBOL);
+        val.sym().assign(str.begin(), str.end());
+        return val;
+    };
+
+    SECTION("footprint limit")
+    {
+        Operation op;
+        op.body.type(INVOKE_HOST_FUNCTION);
+        auto& ihf = op.body.invokeHostFunctionOp().functions.emplace_back();
+        ihf.args.type(HOST_FUNCTION_TYPE_INVOKE_CONTRACT);
+        ihf.args.invokeContract() = {makeSymbol("dummy")};
+        SorobanNetworkConfig refConfig;
+        {
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            refConfig = app->getLedgerManager().getSorobanNetworkConfig(ltx);
+        }
+        SECTION("success with default limits")
+        {
+            resources.footprint.readOnly.back() = contractDataKey(
+                Hash{}, makeSymbol("abcdefghijklmnopqrstuvwxyz012345"));
+            auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                     {op}, {}, resources,
+                                                     3'500'000, 100'000);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
+        }
+        SECTION("read-only key over size limit")
+        {
+            resources.footprint.readOnly.resize(1);
+            resources.footprint.readOnly.back() = contractDataKey(
+                Hash{}, makeSymbol("abcdefghijklmnopqrstuvwxyz012345"));
+            refConfig.maxContractDataKeySizeBytes() = 64;
+            app->getLedgerManager().setSorobanNetworkConfig(refConfig);
+            auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                     {op}, {}, resources,
+                                                     3'500'000, 100'000);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+        }
+        SECTION("read-write key over size limit")
+        {
+            resources.footprint.readWrite.resize(1);
+            resources.footprint.readWrite.back() = contractDataKey(
+                Hash{}, makeSymbol("abcdefghijklmnopqrstuvwxyz012345"));
+            refConfig.maxContractDataKeySizeBytes() = 64;
+            app->getLedgerManager().setSorobanNetworkConfig(refConfig);
+            auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
+                                                     {op}, {}, resources,
+                                                     3'500'000, 100'000);
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            REQUIRE(!tx->checkValid(*app, ltx, 0, 0, 0));
+        }
+    }
+}
+#endif

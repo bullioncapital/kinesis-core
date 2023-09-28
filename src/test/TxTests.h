@@ -100,6 +100,8 @@ closeLedgerOn(Application& app, uint32 ledgerSeq, TimePoint closeTime,
               std::vector<TransactionFrameBasePtr> const& txs = {},
               bool strictOrder = false);
 
+TxSetResultMeta closeLedger(Application& app, TxSetFrameConstPtr txSet);
+
 TxSetResultMeta closeLedgerOn(Application& app, uint32 ledgerSeq,
                               time_t closeTime, TxSetFrameConstPtr txSet);
 
@@ -141,6 +143,9 @@ TransactionFramePtr transactionWithV2Precondition(Application& app,
                                                   uint32_t fee,
                                                   PreconditionsV2 const& cond);
 
+TransactionFrameBasePtr feeBump(Application& app, TestAccount& feeSource,
+                                TransactionFrameBasePtr tx, int64_t fee);
+
 Operation changeTrust(Asset const& asset, int64_t limit);
 Operation changeTrust(ChangeTrustAsset const& asset, int64_t limit);
 
@@ -177,6 +182,9 @@ TransactionFramePtr createCreditPaymentTx(Application& app,
                                           SecretKey const& from,
                                           PublicKey const& to, Asset const& ci,
                                           SequenceNumber seq, int64_t amount);
+
+TransactionFramePtr createSimpleDexTx(Application& app, TestAccount& account,
+                                      uint32 nbOps, uint32_t fee);
 
 Operation pathPayment(PublicKey const& to, Asset const& sendCur,
                       int64_t sendMax, Asset const& destCur, int64_t destAmount,
@@ -270,13 +278,21 @@ transactionFrameFromOps(Hash const& networkID, TestAccount& source,
                         std::vector<Operation> const& ops,
                         std::vector<SecretKey> const& opKeys,
                         std::optional<PreconditionsV2> cond = std::nullopt);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+TransactionFrameBasePtr sorobanTransactionFrameFromOps(
+    Hash const& networkID, TestAccount& source,
+    std::vector<Operation> const& ops, std::vector<SecretKey> const& opKeys,
+    SorobanResources const& resources, uint32_t fee, uint32_t refundableFee);
+#endif
 
 LedgerUpgrade makeBaseReserveUpgrade(int baseReserve);
 
 LedgerHeader executeUpgrades(Application& app,
-                             xdr::xvector<UpgradeType, 6> const& upgrades);
+                             xdr::xvector<UpgradeType, 6> const& upgrades,
+                             bool upgradesIgnored = false);
 
-LedgerHeader executeUpgrade(Application& app, LedgerUpgrade const& lupgrade);
+LedgerHeader executeUpgrade(Application& app, LedgerUpgrade const& lupgrade,
+                            bool upgradeIgnored = false);
 
 void
 depositTradeWithdrawTest(Application& app, TestAccount& root, int depositSize,

@@ -14,6 +14,7 @@
 #include "overlay/OverlayMetrics.h"
 #include "overlay/PeerDoor.h"
 #include "overlay/TCPPeer.h"
+#include "overlay/test/OverlayTestUtils.h"
 #include "simulation/Simulation.h"
 #include "simulation/Topologies.h"
 #include "test/TestAccount.h"
@@ -114,7 +115,7 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
         };
 
         // see if the transactions got propagated properly
-        simulation->crankUntil(checkSim, std::chrono::seconds(60), true);
+        simulation->crankUntil(checkSim, std::chrono::seconds(60), false);
 
         for (auto n : nodes)
         {
@@ -139,6 +140,7 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
 
     SECTION("transaction flooding")
     {
+        TransactionFramePtr testTransaction = nullptr;
         auto injectTransaction = [&](int i) {
             const int64 txAmount = 10000000;
 
@@ -150,7 +152,10 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
             auto account = TestAccount{*inApp, sources[i]};
             auto tx1 = account.tx(
                 {createAccount(dest.getPublicKey(), txAmount)}, expectedSeq);
-
+            if (!testTransaction)
+            {
+                testTransaction = tx1;
+            }
             // this is basically a modified version of Peer::recvTransaction
             auto msg = tx1->toStellarMessage();
             auto res = inApp->getHerder().recvTransaction(tx1, false);
@@ -179,16 +184,17 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
 
         auto cfgGen2 = [&](int n) {
             auto cfg = getTestConfig(n);
-            // adjust delayed tx flooding
+            // adjust delayed tx flooding and how often to pull
             cfg.FLOOD_TX_PERIOD_MS = 10;
+            cfg.FLOOD_DEMAND_PERIOD_MS = std::chrono::milliseconds(10);
             return cfg;
         };
         SECTION("core")
         {
             SECTION("loopback")
             {
-                simulation = Topologies::core(
-                    4, .666f, Simulation::OVER_LOOPBACK, networkID, cfgGen2);
+                simulation = Topologies::core(4, 1, Simulation::OVER_LOOPBACK,
+                                              networkID, cfgGen2);
                 test(injectTransaction, ackedTransactions, true);
             }
             SECTION("tcp")
@@ -207,7 +213,6 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
                 // While there's no strict requirement for batching,
                 // it seems more useful to test more realistic settings.
                 cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 1000;
-                cfg.ENABLE_PULL_MODE = true;
                 return cfg;
             };
             SECTION("pull mode with 2 nodes")
@@ -231,26 +236,11 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
                     auto advertsRecvd = om.mRecvFloodAdvertTimer.count();
                     auto demandsSent = om.mSendFloodDemandMeter.count();
                     auto hashesQueued =
-                        app->getMetrics()
-                            .NewMeter({"overlay", "flood", "advertised"},
-                                      "message")
-                            .count();
+                        overlaytestutils::getAdvertisedHashCount(app);
                     auto demandFulfilled =
-                        app->getMetrics()
-                            .NewMeter({"overlay", "flood", "fulfilled"},
-                                      "message")
-                            .count();
+                        overlaytestutils::getFulfilledDemandCount(app);
                     auto messagesUnfulfilled =
-                        app->getMetrics()
-                            .NewMeter(
-                                {"overlay", "flood", "unfulfilled-unknown"},
-                                "message")
-                            .count() +
-                        app->getMetrics()
-                            .NewMeter(
-                                {"overlay", "flood", "unfulfilled-banned"},
-                                "message")
-                            .count();
+                        overlaytestutils::getUnfulfilledDemandCount(app);
 
                     LOG_DEBUG(
                         DEFAULT_LOG,
@@ -276,6 +266,45 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
                     return res;
                 };
                 test(injectTransaction, advertCheck, true);
+
+                SECTION("advertise same transaction after some time")
+                {
+                    for (auto const& node : nodes)
+                    {
+                        auto before =
+                            overlaytestutils::getAdvertisedHashCount(node);
+                        node->getOverlayManager().broadcastMessage(
+                            testTransaction->toStellarMessage(), false,
+                            testTransaction->getFullHash());
+                        REQUIRE(before ==
+                                overlaytestutils::getAdvertisedHashCount(node));
+                    }
+
+                    // Now crank for some time and trigger cleanups
+                    auto numLedgers =
+                        nodes[0]->getConfig().MAX_SLOTS_TO_REMEMBER +
+                        nodes[0]->getLedgerManager().getLastClosedLedgerNum();
+                    simulation->crankUntil(
+                        [&] {
+                            return simulation->haveAllExternalized(numLedgers,
+                                                                   1);
+                        },
+                        numLedgers * Herder::EXP_LEDGER_TIMESPAN_SECONDS,
+                        false);
+
+                    // Ensure old transaction gets re-broadcasted
+                    for (auto const& node : nodes)
+                    {
+                        auto before =
+                            overlaytestutils::getAdvertisedHashCount(node);
+                        node->getOverlayManager().broadcastMessage(
+                            testTransaction->toStellarMessage(), false,
+                            testTransaction->getFullHash());
+
+                        REQUIRE(before + 1 ==
+                                overlaytestutils::getAdvertisedHashCount(node));
+                    }
+                }
             }
             SECTION("pull mode with 4 nodes")
             {
@@ -296,26 +325,11 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
                     auto advertsRecvd = om.mRecvFloodAdvertTimer.count();
                     auto demandsSent = om.mSendFloodDemandMeter.count();
                     auto hashesQueued =
-                        app->getMetrics()
-                            .NewMeter({"overlay", "flood", "advertised"},
-                                      "message")
-                            .count();
+                        overlaytestutils::getAdvertisedHashCount(app);
                     auto demandFulfilled =
-                        app->getMetrics()
-                            .NewMeter({"overlay", "flood", "fulfilled"},
-                                      "message")
-                            .count();
+                        overlaytestutils::getFulfilledDemandCount(app);
                     auto messagesUnfulfilled =
-                        app->getMetrics()
-                            .NewMeter(
-                                {"overlay", "flood", "unfulfilled-unknown"},
-                                "message")
-                            .count() +
-                        app->getMetrics()
-                            .NewMeter(
-                                {"overlay", "flood", "unfulfilled-banned"},
-                                "message")
-                            .count();
+                        overlaytestutils::getUnfulfilledDemandCount(app);
 
                     LOG_DEBUG(
                         DEFAULT_LOG,

@@ -56,11 +56,10 @@ class TxSetFrame : public NonMovableOrCopyable
 
     // Creates a TxSetFrame from the XDR message.
     // As the message is not trusted, it has to be validated via `checkValid`.
-    static TxSetFrameConstPtr makeFromWire(Hash const& networkID,
+    static TxSetFrameConstPtr makeFromWire(Application& app,
                                            TransactionSet const& xdrTxSet);
     static TxSetFrameConstPtr
-    makeFromWire(Hash const& networkID,
-                 GeneralizedTransactionSet const& xdrTxSet);
+    makeFromWire(Application& app, GeneralizedTransactionSet const& xdrTxSet);
 
     // Creates a TxSetFrame from StoredTransactionSet (internally persisted tx
     // set format).
@@ -138,7 +137,8 @@ class TxSetFrame : public NonMovableOrCopyable
     TxSetFrame(bool isGeneralized, Hash const& previousLedgerHash,
                Transactions const& txs);
 
-    // Computes the fees for transactions in this set.
+    // Computes the fees for transactions in this set based on information from
+    // the non-generalized tx set.
     // This has to be `const` in combination with `mutable` fee-related fields
     // in order to accommodate one specific case: legacy (non-generalized) tx
     // sets received from the peers don't include the fee information and we
@@ -146,20 +146,30 @@ class TxSetFrame : public NonMovableOrCopyable
     // Hence we lazily compute the fees in `getTxBaseFee` for such TxSetFrames.
     // This can be cleaned up after the protocol migration as non-generalized tx
     // sets won't exist in the network anymore.
-    void computeTxFees(LedgerHeader const& lclHeader) const;
+    void computeTxFeesForNonGeneralizedSet(LedgerHeader const& lclHeader) const;
+
     void computeContentsHash();
 
     std::optional<Hash> mHash;
     std::optional<size_t> mutable mEncodedSize;
 
   private:
-    bool addTxsFromXdr(Hash const& networkID,
+    bool addTxsFromXdr(Application& app,
                        xdr::xvector<TransactionEnvelope> const& txs,
                        bool useBaseFee, std::optional<int64_t> baseFee);
     void applySurgePricing(Application& app);
 
+    void computeTxFeesForNonGeneralizedSet(LedgerHeader const& lclHeader,
+                                           int64_t lowestBaseFee,
+                                           bool enableLogging) const;
+
     void computeTxFees(LedgerHeader const& lclHeader, int64_t lowestBaseFee,
                        bool enableLogging) const;
+
+    void computeTxFees(LedgerHeader const& ledgerHeader,
+                       SurgePricingLaneConfig const& surgePricingConfig,
+                       std::vector<int64_t> const& lowestLaneFee,
+                       std::vector<bool> const& hadTxNotFittingLane);
 
     bool const mIsGeneralized;
 

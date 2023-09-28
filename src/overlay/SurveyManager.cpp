@@ -19,7 +19,7 @@ uint32_t const SurveyManager::SURVEY_THROTTLE_TIMEOUT_MULT(3);
 SurveyManager::SurveyManager(Application& app)
     : mApp(app)
     , mSurveyThrottleTimer(std::make_unique<VirtualTimer>(mApp))
-    , NUM_LEDGERS_BEFORE_IGNORE(6)
+    , NUM_LEDGERS_BEFORE_IGNORE(12) // ~60 seconds
     , MAX_REQUEST_LIMIT_PER_LEDGER(10)
     , mMessageLimiter(app, NUM_LEDGERS_BEFORE_IGNORE,
                       MAX_REQUEST_LIMIT_PER_LEDGER)
@@ -253,20 +253,34 @@ void
 SurveyManager::processTopologyResponse(NodeID const& surveyedPeerID,
                                        SurveyResponseBody const& body)
 {
-    releaseAssert(body.type() == SURVEY_TOPOLOGY);
-
-    auto const& topologyBody = body.topologyResponseBody();
     auto& peerResults =
         mResults["topology"][KeyUtils::toStrKey(surveyedPeerID)];
+    auto populatePeerResults = [&](auto const& topologyBody) {
+        auto& inboundResults = peerResults["inboundPeers"];
+        auto& outboundResults = peerResults["outboundPeers"];
 
-    auto& inboundResults = peerResults["inboundPeers"];
-    auto& outboundResults = peerResults["outboundPeers"];
+        peerResults["numTotalInboundPeers"] =
+            topologyBody.totalInboundPeerCount;
+        peerResults["numTotalOutboundPeers"] =
+            topologyBody.totalOutboundPeerCount;
 
-    peerResults["numTotalInboundPeers"] = topologyBody.totalInboundPeerCount;
-    peerResults["numTotalOutboundPeers"] = topologyBody.totalOutboundPeerCount;
+        recordResults(inboundResults, topologyBody.inboundPeers);
+        recordResults(outboundResults, topologyBody.outboundPeers);
+    };
 
-    recordResults(inboundResults, topologyBody.inboundPeers);
-    recordResults(outboundResults, topologyBody.outboundPeers);
+    bool extendedSurveyType = body.type() == SURVEY_TOPOLOGY_RESPONSE_V1;
+    if (extendedSurveyType)
+    {
+        auto const& topologyBody = body.topologyResponseBodyV1();
+        populatePeerResults(topologyBody);
+        peerResults["maxInboundPeerCount"] = topologyBody.maxInboundPeerCount;
+        peerResults["maxOutboundPeerCount"] = topologyBody.maxOutboundPeerCount;
+    }
+    else
+    {
+        auto const& topologyBody = body.topologyResponseBodyV0();
+        populatePeerResults(topologyBody);
+    }
 }
 
 void
@@ -287,9 +301,9 @@ SurveyManager::processTopologyRequest(SurveyRequestMessage const& request) const
     response.commandType = SURVEY_TOPOLOGY;
 
     SurveyResponseBody body;
-    body.type(SURVEY_TOPOLOGY);
+    body.type(SURVEY_TOPOLOGY_RESPONSE_V1);
 
-    auto& topologyBody = body.topologyResponseBody();
+    auto& topologyBody = body.topologyResponseBodyV1();
 
     auto const& randomInboundPeers =
         mApp.getOverlayManager().getRandomInboundAuthenticatedPeers();
@@ -306,6 +320,10 @@ SurveyManager::processTopologyRequest(SurveyRequestMessage const& request) const
         static_cast<uint32_t>(randomInboundPeers.size());
     topologyBody.totalOutboundPeerCount =
         static_cast<uint32_t>(randomOutboundPeers.size());
+    topologyBody.maxInboundPeerCount =
+        mApp.getConfig().MAX_ADDITIONAL_PEER_CONNECTIONS;
+    topologyBody.maxOutboundPeerCount =
+        mApp.getConfig().TARGET_PEER_CONNECTIONS;
 
     try
     {
@@ -466,7 +484,8 @@ SurveyManager::getMsgSummary(StellarMessage const& msg)
 void
 SurveyManager::topOffRequests(SurveyMessageCommandType type)
 {
-    if (mApp.getClock().now() > mSurveyExpirationTime)
+    // Only stop the survey if all pending requests have been processed
+    if (mApp.getClock().now() > mSurveyExpirationTime && mPeersToSurvey.empty())
     {
         stopSurvey();
         return;
@@ -563,13 +582,6 @@ SurveyManager::dropPeerIfSigInvalid(PublicKey const& key,
 std::string
 SurveyManager::commandTypeName(SurveyMessageCommandType type)
 {
-    switch (type)
-    {
-    case SURVEY_TOPOLOGY:
-        return "SURVEY_TOPOLOGY";
-    default:
-        throw std::runtime_error(
-            fmt::format(FMT_STRING("Unknown commandType={}"), type));
-    }
+    return xdr::xdr_traits<SurveyMessageCommandType>::enum_name(type);
 }
 }

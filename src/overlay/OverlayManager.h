@@ -54,6 +54,8 @@ class SurveyManager;
 class OverlayManager
 {
   public:
+    static int constexpr MIN_INBOUND_FACTOR = 3;
+
     static std::unique_ptr<OverlayManager> create(Application& app);
 
     // Drop all PeerRecords from the Database
@@ -159,9 +161,6 @@ class OverlayManager
     // Return number of authenticated peers
     virtual int getAuthenticatedPeersCount() const = 0;
 
-    // Return the percentage [0,100] of connections with pull-mode enabled
-    virtual int64_t getPullModePercentage() const = 0;
-
     // Attempt to connect to a peer identified by peer address.
     virtual void connectTo(PeerBareAddress const& address) = 0;
 
@@ -189,10 +188,8 @@ class OverlayManager
     virtual void recordMessageMetric(StellarMessage const& stellarMsg,
                                      Peer::pointer peer) = 0;
 
-    virtual void updateFloodRecord(StellarMessage const& oldMsg,
-                                   StellarMessage const& newMsg) = 0;
-
-    virtual void recordTxPullLatency(Hash const& hash) = 0;
+    virtual void recordTxPullLatency(Hash const& hash,
+                                     std::shared_ptr<Peer> peer) = 0;
 
     virtual size_t getMaxAdvertSize() const = 0;
 

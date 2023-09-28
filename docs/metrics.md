@@ -31,6 +31,13 @@ bucket.batch.objectsadded                | meter     | number of objects added p
 bucket.memory.shared                     | counter   | number of buckets referenced (excluding publish queue)
 bucket.merge-time.level-<X>              | timer     | time to merge two buckets on level <X>
 bucket.snap.merge                        | timer     | time to merge two buckets
+bucketlistDB.bloom.lookups               | meter     | number of bloom filter lookups
+bucketlistDB.bloom.misses                | meter     | number of bloom filter false positives
+bucketlistDB.query.loads                 | meter     | number of BucketListDB load queries
+bucketlistDB.bulk.inflationWinners       | timer     | time to load inflation winners
+bucketlistDB.bulk.poolshareTrustlines    | timer     | time to load poolshare trustlines by accountID and assetID
+bucketlistDB.bulk.prefetch               | timer     | time to prefetch
+bucketlistDB.point.<X>                   | timer     | time to load single entry of type <X>
 herder.pending-txs.age0                  | counter   | number of gen0 pending transactions
 herder.pending-txs.age1                  | counter   | number of gen1 pending transactions
 herder.pending-txs.age2                  | counter   | number of gen2 pending transactions
@@ -69,7 +76,6 @@ overlay.byte.write                       | meter     | number of bytes sent
 overlay.async.read                       | meter     | number of async read requests issued
 overlay.async.write                      | meter     | number of async write requests issued
 overlay.connection.authenticated         | counter   | number of authenticated peers
-overlay.pull-mode.percentage             | counter   | percentage of authenticated connections that enable pull mode
 overlay.connection.latency               | timer     | estimated latency between peers
 overlay.connection.pending               | counter   | number of pending connections
 overlay.delay.async-write                | timer     | time between each message's async write issue and completion
@@ -84,6 +90,11 @@ overlay.flood.fulfilled                  | meter     | demanded transactions ful
 overlay.flood.unfulfilled-banned         | meter     | transactions we failed to fulfilled since they are banned
 overlay.flood.unfulfilled-unknown        | meter     | transactions we failed to fulfilled since they are unknown
 overlay.flood.tx-pull-latency            | timer     | time between the first demand and the first time we receive the txn
+overlay.flood.peer-tx-pull-latency       | timer     | time to pull a transaction from a peer
+overlay.demand.timeout                   | meter     | pull mode timeouts
+overlay.flood.relevant-txs               | meter     | relevant transactions pulled from peers
+overlay.flood.irrelevant-txs             | meter     | irrelevant transactions pulled from peers
+overlay.flood.advert-delay               | timer     | time each advert sits in the inbound queue
 overlay.flood.abandoned-demands          | meter     | tx hash pull demands that no peers responded
 overlay.flood.broadcast                  | meter     | message sent as broadcast per peer
 overlay.flood.duplicate_recv             | meter     | number of bytes of flooded messages that have already been received
@@ -134,4 +145,5 @@ scp.timing.first-to-self-externalize-lag | timer     | delay between first exter
 scp.timing.self-to-others-externalize-lag| timer     | delay between local node externalizing and later externalize messages from other nodes
 scp.value.invalid                        | meter     | SCP value is invalid
 scp.value.valid                          | meter     | SCP value is valid
+scp.slot.values-referenced               | histogram | number of values referenced per consensus round
 

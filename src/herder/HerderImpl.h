@@ -83,7 +83,7 @@ class HerderImpl : public Herder
     }
 
     bool
-    isTracking() const
+    isTracking() const override
     {
         return mState == State::HERDER_TRACKING_NETWORK_STATE;
     }
@@ -136,6 +136,8 @@ class HerderImpl : public Herder
 
     SequenceNumber getMaxSeqInPendingTxs(AccountID const&) override;
 
+    uint32_t getMostRecentCheckpointSeq() override;
+
     void triggerNextLedger(uint32_t ledgerSeqToTrigger,
                            bool checkTrackingSCP) override;
 
@@ -168,7 +170,7 @@ class HerderImpl : public Herder
     // used for testing
     PendingEnvelopes& getPendingEnvelopes();
 
-    TransactionQueue& getTransactionQueue();
+    TransactionQueue& getTransactionQueue() override;
 #endif
 
     // helper function to verify envelopes are signed
@@ -250,6 +252,8 @@ class HerderImpl : public Herder
 
     VirtualTimer mTxSetGarbageCollectTimer;
 
+    VirtualTimer mEarlyCatchupTimer;
+
     Application& mApp;
     LedgerManager& mLedgerManager;
 
@@ -277,7 +281,9 @@ class HerderImpl : public Herder
     // run a background job that re-analyzes the current quorum map.
     void checkAndMaybeReanalyzeQuorumMap();
 
-    // erase all data for ledgers strictly less than ledgerSeq
+    // erase all data for ledgers strictly less than ledgerSeq except for the
+    // first ledger on the current checkpoint. Hold onto this ledger so
+    // peers can catchup without waiting for the next checkpoint.
     void eraseBelow(uint32 ledgerSeq);
 
     struct QuorumMapIntersectionState

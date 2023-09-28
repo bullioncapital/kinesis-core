@@ -19,6 +19,7 @@
 #include "util/XDROperators.h"
 #include "util/types.h"
 
+#include "overlay/OverlayManager.h"
 #include "util/UnorderedSet.h"
 #include <fmt/chrono.h>
 #include <fmt/format.h>
@@ -53,7 +54,8 @@ static const std::unordered_set<std::string> TESTING_ONLY_OPTIONS = {
     "LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING",
     "CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING",
     "ARTIFICIALLY_DELAY_BUCKET_APPLICATION_FOR_TESTING",
-    "ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING"};
+    "ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING",
+    "ARTIFICIALLY_SKIP_CONNECTION_ADJUSTMENT_FOR_TESTING"};
 
 // Options that should only be used for testing
 static const std::unordered_set<std::string> TESTING_SUGGESTED_OPTIONS = {
@@ -125,10 +127,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
     LEDGER_PROTOCOL_VERSION = CURRENT_LEDGER_PROTOCOL_VERSION;
     LEDGER_PROTOCOL_MIN_VERSION_INTERNAL_ERROR_REPORT = 18;
 
-    MAXIMUM_LEDGER_CLOSETIME_DRIFT = 50;
-
-    OVERLAY_PROTOCOL_MIN_VERSION = 21;
-    OVERLAY_PROTOCOL_VERSION = 24;
+    OVERLAY_PROTOCOL_MIN_VERSION = 27;
+    OVERLAY_PROTOCOL_VERSION = 28;
 
     VERSION_STR = STELLAR_CORE_VERSION;
 
@@ -142,6 +142,10 @@ Config::Config() : NODE_SEED(SecretKey::random())
     CATCHUP_COMPLETE = false;
     CATCHUP_RECENT = 0;
     EXPERIMENTAL_PRECAUTION_DELAY_META = false;
+    EXPERIMENTAL_BUCKETLIST_DB = false;
+    EXPERIMENTAL_BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT = 14; // 2^14 == 16 kb
+    EXPERIMENTAL_BUCKETLIST_DB_INDEX_CUTOFF = 20;             // 20 mb
+    EXPERIMENTAL_BUCKETLIST_DB_PERSIST_INDEX = true;
     // automatic maintenance settings:
     // short and prime with 1 hour which will cause automatic maintenance to
     // rarely conflict with any other scheduled tasks on a machine (that tend to
@@ -159,6 +163,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     ARTIFICIALLY_SET_CLOSE_TIME_FOR_TESTING = 0;
     ARTIFICIALLY_PESSIMIZE_MERGES_FOR_TESTING = false;
     ARTIFICIALLY_REDUCE_MERGE_COUNTS_FOR_TESTING = false;
+    ARTIFICIALLY_SKIP_CONNECTION_ADJUSTMENT_FOR_TESTING = false;
     ARTIFICIALLY_REPLAY_WITH_NEWEST_BUCKET_LOGIC_FOR_TESTING = false;
     ARTIFICIALLY_DELAY_BUCKET_APPLICATION_FOR_TESTING =
         std::chrono::seconds::zero();
@@ -166,9 +171,19 @@ Config::Config() : NODE_SEED(SecretKey::random())
     USE_CONFIG_FOR_GENESIS = false;
     FAILURE_SAFETY = -1;
     UNSAFE_QUORUM = false;
+    LIMIT_TX_QUEUE_SOURCE_ACCOUNT = false;
     DISABLE_BUCKET_GC = false;
     DISABLE_XDR_FSYNC = false;
     MAX_SLOTS_TO_REMEMBER = 12;
+    // Configure MAXIMUM_LEDGER_CLOSETIME_DRIFT based on MAX_SLOTS_TO_REMEMBER
+    // (plus a small buffer) to make sure we don't reject SCP state sent to us
+    // by default. Limit allowed drift to 90 seconds as to not overwhelm the
+    // node too much.
+    uint32_t CLOSETIME_DRIFT_LIMIT = 90;
+    MAXIMUM_LEDGER_CLOSETIME_DRIFT =
+        std::min<uint32_t>((MAX_SLOTS_TO_REMEMBER + 2) *
+                               Herder::EXP_LEDGER_TIMESPAN_SECONDS.count(),
+                           CLOSETIME_DRIFT_LIMIT);
     METADATA_OUTPUT_STREAM = "";
     METADATA_DEBUG_LEDGERS = 0;
 
@@ -207,7 +222,6 @@ Config::Config() : NODE_SEED(SecretKey::random())
     FLOOD_DEMAND_PERIOD_MS = std::chrono::milliseconds(200);
     FLOOD_ADVERT_PERIOD_MS = std::chrono::milliseconds(100);
     FLOOD_DEMAND_BACKOFF_DELAY_MS = std::chrono::milliseconds(500);
-    ENABLE_PULL_MODE = false;
 
     MAX_BATCH_WRITE_COUNT = 1024;
     MAX_BATCH_WRITE_BYTES = 1 * 1024 * 1024;
@@ -216,6 +230,11 @@ Config::Config() : NODE_SEED(SecretKey::random())
     PEER_READING_CAPACITY = 200;
     PEER_FLOOD_READING_CAPACITY = 200;
     FLOW_CONTROL_SEND_MORE_BATCH_SIZE = 40;
+
+    PEER_FLOOD_READING_CAPACITY_BYTES = 300000;
+    FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = 100000;
+    OUTBOUND_TX_QUEUE_BYTE_LIMIT = 1024 * 1024 * 3;
+    ENABLE_FLOW_CONTROL_BYTES = true;
 
     // WORKER_THREADS: setting this too low risks a form of priority inversion
     // where a long-running background task occupies all worker threads and
@@ -239,6 +258,12 @@ Config::Config() : NODE_SEED(SecretKey::random())
     HISTOGRAM_WINDOW_SIZE = std::chrono::seconds(30);
 
     HALT_ON_INTERNAL_TRANSACTION_ERROR = false;
+
+    MAX_DEX_TX_OPERATIONS_IN_TX_SET = std::nullopt;
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    ENABLE_SOROBAN_DIAGNOSTIC_EVENTS = false;
+#endif
 
 #ifdef BUILD_TESTS
     TEST_CASES_ENABLED = false;
@@ -937,11 +962,32 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
 
             if (item.first == "PEER_READING_CAPACITY")
             {
-                PEER_READING_CAPACITY = readInt<uint32_t>(item, 2);
+                PEER_READING_CAPACITY = readInt<uint32_t>(item, 1);
             }
             else if (item.first == "PEER_FLOOD_READING_CAPACITY")
             {
                 PEER_FLOOD_READING_CAPACITY = readInt<uint32_t>(item, 1);
+            }
+            else if (item.first == "FLOW_CONTROL_SEND_MORE_BATCH_SIZE")
+            {
+                FLOW_CONTROL_SEND_MORE_BATCH_SIZE = readInt<uint32_t>(item, 1);
+            }
+            else if (item.first == "PEER_FLOOD_READING_CAPACITY_BYTES")
+            {
+                PEER_FLOOD_READING_CAPACITY_BYTES = readInt<uint32_t>(item, 1);
+            }
+            else if (item.first == "FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES")
+            {
+                FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES =
+                    readInt<uint32_t>(item, 1);
+            }
+            else if (item.first == "ENABLE_FLOW_CONTROL_BYTES")
+            {
+                ENABLE_FLOW_CONTROL_BYTES = readBool(item);
+            }
+            else if (item.first == "OUTBOUND_TX_QUEUE_BYTE_LIMIT")
+            {
+                OUTBOUND_TX_QUEUE_BYTE_LIMIT = readInt<uint32_t>(item, 1);
             }
             else if (item.first == "PEER_PORT")
             {
@@ -967,6 +1013,10 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             {
                 UNSAFE_QUORUM = readBool(item);
             }
+            else if (item.first == "LIMIT_TX_QUEUE_SOURCE_ACCOUNT")
+            {
+                LIMIT_TX_QUEUE_SOURCE_ACCOUNT = readBool(item);
+            }
             else if (item.first == "DISABLE_XDR_FSYNC")
             {
                 DISABLE_XDR_FSYNC = readBool(item);
@@ -978,6 +1028,24 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             else if (item.first == "EXPERIMENTAL_PRECAUTION_DELAY_META")
             {
                 EXPERIMENTAL_PRECAUTION_DELAY_META = readBool(item);
+            }
+            else if (item.first == "EXPERIMENTAL_BUCKETLIST_DB")
+            {
+                EXPERIMENTAL_BUCKETLIST_DB = readBool(item);
+            }
+            else if (item.first ==
+                     "EXPERIMENTAL_BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT")
+            {
+                EXPERIMENTAL_BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT =
+                    readInt<size_t>(item);
+            }
+            else if (item.first == "EXPERIMENTAL_BUCKETLIST_DB_INDEX_CUTOFF")
+            {
+                EXPERIMENTAL_BUCKETLIST_DB_INDEX_CUTOFF = readInt<size_t>(item);
+            }
+            else if (item.first == "EXPERIMENTAL_BUCKETLIST_DB_PERSIST_INDEX")
+            {
+                EXPERIMENTAL_BUCKETLIST_DB_PERSIST_INDEX = readBool(item);
             }
             else if (item.first == "METADATA_DEBUG_LEDGERS")
             {
@@ -1156,10 +1224,6 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             {
                 FLOOD_DEMAND_BACKOFF_DELAY_MS =
                     std::chrono::milliseconds(readInt<int>(item, 1));
-            }
-            else if (item.first == "ENABLE_PULL_MODE")
-            {
-                ENABLE_PULL_MODE = readBool(item);
             }
             else if (item.first == "FLOOD_ARB_TX_BASE_ALLOWANCE")
             {
@@ -1352,14 +1416,29 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             {
                 HALT_ON_INTERNAL_TRANSACTION_ERROR = readBool(item);
             }
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+            else if (item.first == "ENABLE_SOROBAN_DIAGNOSTIC_EVENTS")
+            {
+                ENABLE_SOROBAN_DIAGNOSTIC_EVENTS = readBool(item);
+            }
+#endif
             else if (item.first == "ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING")
             {
                 ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING =
                     std::chrono::microseconds(readInt<uint32_t>(item));
             }
-            else if (item.first == "FLOW_CONTROL_SEND_MORE_BATCH_SIZE")
+            else if (item.first == "MAX_DEX_TX_OPERATIONS_IN_TX_SET")
             {
-                FLOW_CONTROL_SEND_MORE_BATCH_SIZE = readInt<uint32_t>(item, 1);
+                auto value = readInt<uint32_t>(item);
+                if (value > 0 && value < MAX_OPS_PER_TX + 2)
+                {
+                    throw std::invalid_argument(fmt::format(
+                        "MAX_DEX_TX_OPERATIONS_IN_TX_SET must be either 0 or "
+                        "at least {} in order to not drop any transactions.",
+                        MAX_OPS_PER_TX + 2));
+                }
+                MAX_DEX_TX_OPERATIONS_IN_TX_SET =
+                    value == 0 ? std::nullopt : std::make_optional(value);
             }
             else
             {
@@ -1381,6 +1460,61 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             std::string msg =
                 "Invalid configuration: FLOW_CONTROL_SEND_MORE_BATCH_SIZE "
                 "can't be greater than PEER_FLOOD_READING_CAPACITY";
+            throw std::runtime_error(msg);
+        }
+
+        if (FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES >
+            PEER_FLOOD_READING_CAPACITY_BYTES)
+        {
+            std::string msg =
+                "Invalid configuration: "
+                "FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES "
+                "can't be greater than PEER_FLOOD_READING_CAPACITY_BYTES";
+            throw std::runtime_error(msg);
+        }
+
+        // PEER_FLOOD_READING_CAPACITY_BYTES (C): This is the initial credit
+        // given to the sender. It is the maximum number of bytes that the
+        // sender can transmit to the receiver before it needs to wait for
+        // an acknowledgement from the receiver. It represents the initial
+        // 'capacity' of the connection.
+
+        // MAX_CLASSIC_TX_SIZE_BYTES (M): This is the maximum size, in bytes, of
+        // a single message that can be sent by the sender. The sender can send
+        // messages of any size up to this limit, provided it has enough credit.
+
+        // FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES (A): This is the number of
+        // bytes that the receiver must process before it sends an
+        // acknowledgement back to the sender. The acknowledgement also serves
+        // to replenish the sender's credit by this amount, enabling it to send
+        // more data.
+
+        // The relationship between these three parameters should satisfy: C - A
+        // >= M. This ensures that the sender can always continue sending
+        // messages until it receives an acknowledgement for the previous data,
+        // thus preventing the system from getting stuck.
+
+        // Start with initial PEER_FLOOD_READING_CAPACITY_BYTES (C) credit
+        // Sender (C) -------- M1 bytes ----------> Receiver
+        //          \-- C-M1 --/
+
+        // Receiver processes received bytes and once
+        // FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES (A) or more is processed, an
+        // acknowledgement is sent, which replenishes the sender's credit
+        // Sender (C-M1+A) <-- A bytes ---------- Receiver
+        //             \--- (C-M1+A)-M2 --->/
+
+        // Note:  M1, M2... are message sizes such that M <=
+        // MAX_CLASSIC_TX_SIZE_BYTES
+        if (!(PEER_FLOOD_READING_CAPACITY_BYTES -
+                  FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES >=
+              MAX_CLASSIC_TX_SIZE_BYTES))
+        {
+            std::string msg =
+                "Invalid configuration: the difference between "
+                "PEER_FLOOD_READING_CAPACITY_BYTES and "
+                "FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES must be at least "
+                "(MAX_CLASSIC_TX_SIZE_BYTES)";
             throw std::runtime_error(msg);
         }
 
@@ -1486,6 +1620,24 @@ Config::adjust()
         }
     }
 
+    // Ensure outbound connections are capped based on inbound rate
+    int limit =
+        MAX_ADDITIONAL_PEER_CONNECTIONS / OverlayManager::MIN_INBOUND_FACTOR +
+        OverlayManager::MIN_INBOUND_FACTOR;
+    if (static_cast<int>(TARGET_PEER_CONNECTIONS) > limit)
+    {
+        TARGET_PEER_CONNECTIONS = static_cast<unsigned short>(limit);
+        LOG_WARNING(DEFAULT_LOG,
+                    "Adjusted TARGET_PEER_CONNECTIONS to {} due to "
+                    "insufficient MAX_ADDITIONAL_PEER_CONNECTIONS={}",
+                    limit, MAX_ADDITIONAL_PEER_CONNECTIONS);
+    }
+
+    auto const originalMaxAdditionalPeerConnections =
+        MAX_ADDITIONAL_PEER_CONNECTIONS;
+    auto const originalTargetPeerConnections = TARGET_PEER_CONNECTIONS;
+    auto const originalMaxPendingConnections = MAX_PENDING_CONNECTIONS;
+
     int maxFsConnections = std::min<int>(
         std::numeric_limits<unsigned short>::max(), fs::getMaxConnections());
 
@@ -1567,6 +1719,23 @@ Config::adjust()
         MAX_OUTBOUND_PENDING_CONNECTIONS = 0;
         MAX_INBOUND_PENDING_CONNECTIONS = 0;
     }
+    auto warnIfChanged = [&](std::string const name, auto const originalValue,
+                             auto const newValue) {
+        if (originalValue != newValue)
+        {
+            LOG_WARNING(DEFAULT_LOG,
+                        "Adjusted {} from {} to {} due to OS limits (the "
+                        "maximum number of file descriptors)",
+                        name, originalValue, newValue);
+        }
+    };
+    warnIfChanged("MAX_ADDITIONAL_PEER_CONNECTIONS",
+                  originalMaxAdditionalPeerConnections,
+                  MAX_ADDITIONAL_PEER_CONNECTIONS);
+    warnIfChanged("TARGET_PEER_CONNECTIONS", originalTargetPeerConnections,
+                  TARGET_PEER_CONNECTIONS);
+    warnIfChanged("MAX_PENDING_CONNECTIONS", originalMaxPendingConnections,
+                  MAX_PENDING_CONNECTIONS);
 }
 
 void
@@ -1873,6 +2042,20 @@ bool
 Config::isInMemoryMode() const
 {
     return MODE_USES_IN_MEMORY_LEDGER;
+}
+
+bool
+Config::isUsingBucketListDB() const
+{
+    return EXPERIMENTAL_BUCKETLIST_DB && !MODE_USES_IN_MEMORY_LEDGER &&
+           MODE_ENABLES_BUCKETLIST;
+}
+
+bool
+Config::isPersistingBucketListDBIndexes() const
+{
+    return isUsingBucketListDB() && EXPERIMENTAL_BUCKETLIST_DB_PERSIST_INDEX &&
+           !NODE_IS_VALIDATOR;
 }
 
 bool

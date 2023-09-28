@@ -339,8 +339,9 @@ NominationProtocol::getNewValueFromNomination(SCPNomination const& nom)
     // sorted using hashValue.
     ValueWrapperPtr newVote;
     uint64 newHash = 0;
+    bool foundValidValue = false;
 
-    applyAll(nom, [&](Value const& value) {
+    auto pickValue = [&](Value const& value) {
         ValueWrapperPtr valueToNominate;
         auto vl = validateValue(value);
         if (vl == SCPDriver::kFullyValidatedValue)
@@ -353,6 +354,7 @@ NominationProtocol::getNewValueFromNomination(SCPNomination const& nom)
         }
         if (valueToNominate)
         {
+            foundValidValue = true;
             if (mVotes.find(valueToNominate) == mVotes.end())
             {
                 uint64 curHash = hashValue(valueToNominate->getValue());
@@ -363,7 +365,22 @@ NominationProtocol::getNewValueFromNomination(SCPNomination const& nom)
                 }
             }
         }
-    });
+    };
+
+    for (auto const& val : nom.accepted)
+    {
+        pickValue(val);
+    }
+
+    // Move on to votes if we have not found a valid accepted value
+    if (!foundValidValue)
+    {
+        for (auto const& val : nom.votes)
+        {
+            pickValue(val);
+        }
+    }
+
     return newVote;
 }
 
@@ -447,6 +464,12 @@ NominationProtocol::processEnvelope(SCPEnvelopeWrapperPtr envelope)
             {
                 mCandidates.emplace(a);
                 newCandidates = true;
+                // Stop the timer, as there's no need to continue nominating,
+                // per the whitepaper:
+                // "As soon as `v` has a candidate value, however, it must cease
+                // voting to nominate `x` for any new values `x`"
+                mSlot.getSCPDriver().stopTimer(mSlot.getSlotIndex(),
+                                               Slot::NOMINATION_TIMER);
             }
         }
 
@@ -499,6 +522,17 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
                              bool timedout)
 {
     ZoneScoped;
+
+    // No need to continue nominating, as per the whitepaper:
+    // "As soon as `v` has a candidate value, however, it must cease
+    // voting to nominate `x` for any new values `x`"
+    if (!mCandidates.empty())
+    {
+        CLOG_DEBUG(SCP, "Skip nomination round {}, already have a candidate",
+                   mRoundNumber);
+        return false;
+    }
+
     CLOG_DEBUG(SCP, "NominationProtocol::nominate ({}) {}", mRoundNumber,
                mSlot.getSCP().getValueString(value->getValue()));
 
@@ -525,18 +559,6 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
     std::chrono::milliseconds timeout =
         mSlot.getSCPDriver().computeTimeout(mRoundNumber);
 
-    // if we're leader, add our value
-    if (mRoundLeaders.find(mSlot.getLocalNode()->getNodeID()) !=
-        mRoundLeaders.end())
-    {
-        auto ins = mVotes.insert(value);
-        if (ins.second)
-        {
-            updated = true;
-            mSlot.getSCPDriver().nominatingValue(mSlot.getSlotIndex(),
-                                                 value->getValue());
-        }
-    }
     // add a few more values from other leaders
     for (auto const& leader : mRoundLeaders)
     {
@@ -552,6 +574,20 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
                 mSlot.getSCPDriver().nominatingValue(mSlot.getSlotIndex(),
                                                      lnmV->getValue());
             }
+        }
+    }
+
+    // if we're leader, add our value if we haven't added any votes yet
+    if (mRoundLeaders.find(mSlot.getLocalNode()->getNodeID()) !=
+            mRoundLeaders.end() &&
+        mVotes.empty())
+    {
+        auto ins = mVotes.insert(value);
+        if (ins.second)
+        {
+            updated = true;
+            mSlot.getSCPDriver().nominatingValue(mSlot.getSlotIndex(),
+                                                 value->getValue());
         }
     }
 

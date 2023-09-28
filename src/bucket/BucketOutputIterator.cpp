@@ -4,32 +4,15 @@
 
 #include "bucket/BucketOutputIterator.h"
 #include "bucket/Bucket.h"
+#include "bucket/BucketIndex.h"
 #include "bucket/BucketManager.h"
 #include "crypto/Random.h"
 #include "util/GlobalChecks.h"
 #include <Tracy.hpp>
+#include <filesystem>
 
 namespace stellar
 {
-
-namespace
-{
-std::string
-randomBucketName(std::string const& tmpDir)
-{
-    ZoneScoped;
-    for (;;)
-    {
-        std::string name =
-            tmpDir + "/tmp-bucket-" + binToHex(randomBytes(8)) + ".xdr";
-        std::ifstream ifile(name);
-        if (!ifile)
-        {
-            return name;
-        }
-    }
-}
-}
 
 /**
  * Helper class that points to an output tempfile. Absorbs BucketEntries and
@@ -40,7 +23,7 @@ BucketOutputIterator::BucketOutputIterator(std::string const& tmpDir,
                                            BucketMetadata const& meta,
                                            MergeCounters& mc,
                                            asio::io_context& ctx, bool doFsync)
-    : mFilename(randomBucketName(tmpDir))
+    : mFilename(Bucket::randomBucketName(tmpDir))
     , mOut(ctx, doFsync)
     , mBuf(nullptr)
     , mKeepDeadEntries(keepDeadEntries)
@@ -51,7 +34,7 @@ BucketOutputIterator::BucketOutputIterator(std::string const& tmpDir,
     CLOG_TRACE(Bucket, "BucketOutputIterator opening file to write: {}",
                mFilename);
     // Will throw if unable to open the file
-    mOut.open(mFilename);
+    mOut.open(mFilename.string());
 
     if (protocolVersionStartsFrom(
             meta.ledgerVersion,
@@ -113,6 +96,7 @@ BucketOutputIterator::put(BucketEntry const& e)
 
 std::shared_ptr<Bucket>
 BucketOutputIterator::getBucket(BucketManager& bucketManager,
+                                bool shouldSynchronouslyIndex,
                                 MergeKey* mergeKey)
 {
     ZoneScoped;
@@ -129,14 +113,31 @@ BucketOutputIterator::getBucket(BucketManager& bucketManager,
         releaseAssert(mObjectsPut == 0);
         releaseAssert(mBytesPut == 0);
         CLOG_DEBUG(Bucket, "Deleting empty bucket file {}", mFilename);
-        std::remove(mFilename.c_str());
+        std::filesystem::remove(mFilename);
         if (mergeKey)
         {
             bucketManager.noteEmptyMergeOutput(*mergeKey);
         }
         return std::make_shared<Bucket>();
     }
-    return bucketManager.adoptFileAsBucket(mFilename, mHasher.finish(),
-                                           mObjectsPut, mBytesPut, mergeKey);
+
+    auto hash = mHasher.finish();
+    std::unique_ptr<BucketIndex const> index{};
+
+    // If this bucket needs to be indexed and is not already indexed
+    if (shouldSynchronouslyIndex)
+    {
+        // either it's a new bucket or we just reconstructed a bucket
+        // we already have, in any case ensure we have an index
+        if (auto b = bucketManager.getBucketIfExists(hash);
+            !b || !b->isIndexed())
+        {
+            index = BucketIndex::createIndex(bucketManager, mFilename, hash);
+        }
+    }
+
+    return bucketManager.adoptFileAsBucket(mFilename.string(), hash,
+                                           mObjectsPut, mBytesPut, mergeKey,
+                                           std::move(index));
 }
 }

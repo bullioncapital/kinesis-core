@@ -15,6 +15,7 @@
 #include "ledger/LedgerManager.h"
 #include "main/Application.h"
 #include "main/Config.h"
+#include "overlay/FlowControl.h"
 #include "overlay/OverlayManager.h"
 #include "overlay/OverlayMetrics.h"
 #include "overlay/PeerAuth.h"
@@ -43,6 +44,8 @@
 namespace stellar
 {
 
+constexpr uint32 const ADVERT_CACHE_SIZE = 50000;
+
 using namespace std;
 using namespace soci;
 
@@ -53,21 +56,18 @@ Peer::Peer(Application& app, PeerRole role)
     : mApp(app)
     , mRole(role)
     , mState(role == WE_CALLED_REMOTE ? CONNECTING : CONNECTED)
+    , mFlowControl(std::make_shared<FlowControl>(mApp))
     , mRemoteOverlayMinVersion(0)
     , mRemoteOverlayVersion(0)
     , mCreationTime(app.getClock().now())
     , mRecurringTimer(app)
     , mLastRead(app.getClock().now())
     , mLastWrite(app.getClock().now())
-    , mNoOutboundCapacity(
-          std::make_optional<VirtualClock::time_point>(app.getClock().now()))
     , mEnqueueTimeOfLastWrite(app.getClock().now())
     , mPeerMetrics(app.getClock().now())
-    , mFlowControlState(Peer::FlowControlState::DONT_KNOW)
-    , mCapacity{app.getConfig().PEER_FLOOD_READING_CAPACITY,
-                app.getConfig().PEER_READING_CAPACITY}
     , mTxAdvertQueue(app)
     , mAdvertTimer(app)
+    , mAdvertHistory(ADVERT_CACHE_SIZE)
 {
     mPingSentTime = PING_NOT_SENT;
     mLastPing = std::chrono::hours(24); // some default very high value
@@ -75,33 +75,16 @@ Peer::Peer(Application& app, PeerRole role)
     std::copy(bytes.begin(), bytes.end(), mSendNonce.begin());
 }
 
-void
-Peer::beginMesssageProcessing(StellarMessage const& msg)
+bool
+Peer::peerKnowsHash(Hash const& hash)
 {
-    // Check if flow control is enabled on the local node
-    if (flowControlEnabled() == Peer::FlowControlState::ENABLED)
-    {
-        releaseAssert(mCapacity.mTotalCapacity > 0);
-        mCapacity.mTotalCapacity--;
+    return mAdvertHistory.exists(hash);
+}
 
-        if (mApp.getOverlayManager().isFloodMessage(msg))
-        {
-            if (mCapacity.mFloodCapacity == 0)
-            {
-                drop("unexpected flood message, peer at capacity",
-                     Peer::DropDirection::WE_DROPPED_REMOTE,
-                     Peer::DropMode::IGNORE_WRITE_QUEUE);
-                return;
-            }
-
-            mCapacity.mFloodCapacity--;
-            if (mCapacity.mFloodCapacity == 0)
-            {
-                CLOG_DEBUG(Overlay, "No flood capacity for peer {}",
-                           mApp.getConfig().toShortString(getPeerID()));
-            }
-        }
-    }
+void
+Peer::rememberHash(Hash const& hash, uint32_t ledgerSeq)
+{
+    mAdvertHistory.put(hash, ledgerSeq);
 }
 
 Peer::MsgCapacityTracker::MsgCapacityTracker(std::weak_ptr<Peer> peer,
@@ -113,7 +96,7 @@ Peer::MsgCapacityTracker::MsgCapacityTracker(std::weak_ptr<Peer> peer,
     {
         throw std::runtime_error("Invalid peer");
     }
-    self->beginMesssageProcessing(mMsg);
+    self->beginMessageProcessing(mMsg);
 }
 
 Peer::MsgCapacityTracker::~MsgCapacityTracker()
@@ -158,6 +141,41 @@ Peer::sendHello()
 
     auto msgPtr = std::make_shared<StellarMessage const>(msg);
     sendMessage(msgPtr);
+}
+
+void
+Peer::beginMessageProcessing(StellarMessage const& msg)
+{
+    releaseAssert(mFlowControl);
+    auto success = mFlowControl->beginMessageProcessing(msg);
+    if (!success)
+    {
+        drop("unexpected flood message, peer at capacity",
+             Peer::DropDirection::WE_DROPPED_REMOTE,
+             Peer::DropMode::IGNORE_WRITE_QUEUE);
+    }
+}
+
+void
+Peer::endMessageProcessing(StellarMessage const& msg)
+{
+    if (shouldAbort())
+    {
+        return;
+    }
+
+    releaseAssert(mFlowControl);
+    std::weak_ptr<Peer> self = shared_from_this();
+    mFlowControl->endMessageProcessing(msg, self);
+
+    releaseAssert(canRead());
+    if (mIsPeerThrottled)
+    {
+        CLOG_DEBUG(Overlay, "Stop throttling reading from peer {}",
+                   mApp.getConfig().toShortString(getPeerID()));
+        mIsPeerThrottled = false;
+        scheduleRead();
+    }
 }
 
 AuthCert
@@ -242,9 +260,8 @@ Peer::recurrentTimerExpired(asio::error_code const& error)
             drop("idle timeout", Peer::DropDirection::WE_DROPPED_REMOTE,
                  Peer::DropMode::IGNORE_WRITE_QUEUE);
         }
-        else if (flowControlEnabled() == Peer::FlowControlState::ENABLED &&
-                 mNoOutboundCapacity &&
-                 (now - *mNoOutboundCapacity) >=
+        else if (mFlowControl && mFlowControl->getOutboundCapacityTimestamp() &&
+                 (now - *(mFlowControl->getOutboundCapacityTimestamp())) >=
                      Peer::PEER_SEND_MODE_IDLE_TIMEOUT)
         {
             drop("idle timeout (no new flood requests)",
@@ -266,43 +283,6 @@ Peer::recurrentTimerExpired(asio::error_code const& error)
 }
 
 Json::Value
-Peer::getFlowControlJsonInfo(bool compact) const
-{
-    Json::Value res;
-    std::string stateStr;
-    bool reportCapacity =
-        flowControlEnabled() == Peer::FlowControlState::ENABLED;
-    if (reportCapacity)
-    {
-        res["local_capacity"]["reading"] =
-            (Json::UInt64)mCapacity.mTotalCapacity;
-        res["local_capacity"]["flood"] = (Json::UInt64)mCapacity.mFloodCapacity;
-        res["peer_capacity"] = (Json::UInt64)mOutboundCapacity;
-    }
-
-    if (!compact)
-    {
-        res["outbound_queue_delay_scp_p75"] = static_cast<Json::UInt64>(
-            mPeerMetrics.mOutboundQueueDelaySCP.GetSnapshot()
-                .get75thPercentile());
-        res["outbound_queue_delay_txs_p75"] = static_cast<Json::UInt64>(
-            mPeerMetrics.mOutboundQueueDelayTxs.GetSnapshot()
-                .get75thPercentile());
-        if (mPullModeEnabled)
-        {
-            res["outbound_queue_delay_advert_p75"] = static_cast<Json::UInt64>(
-                mPeerMetrics.mOutboundQueueDelayAdvert.GetSnapshot()
-                    .get75thPercentile());
-            res["outbound_queue_delay_demand_p75"] = static_cast<Json::UInt64>(
-                mPeerMetrics.mOutboundQueueDelayDemand.GetSnapshot()
-                    .get75thPercentile());
-        }
-    }
-
-    return res;
-}
-
-Json::Value
 Peer::getJsonInfo(bool compact) const
 {
     Json::Value res;
@@ -311,10 +291,18 @@ Peer::getJsonInfo(bool compact) const
     res["latency"] = (int)getPing().count();
     res["ver"] = getRemoteVersion();
     res["olver"] = (int)getRemoteOverlayVersion();
-    res["flow_control"] = getFlowControlJsonInfo(compact);
-    res["pull_mode"] = isPullModeEnabled();
+    if (mFlowControl)
+    {
+        res["flow_control"] = mFlowControl->getFlowControlJsonInfo(compact);
+    }
     if (!compact)
     {
+        res["pull_mode"]["advert_delay"] = static_cast<Json::UInt64>(
+            mPeerMetrics.mAdvertQueueDelay.GetSnapshot().get75thPercentile());
+        res["pull_mode"]["pull_latency"] = static_cast<Json::UInt64>(
+            mPeerMetrics.mPullLatency.GetSnapshot().get75thPercentile());
+        res["pull_mode"]["demand_timeouts"] =
+            static_cast<Json::UInt64>(mPeerMetrics.mDemandTimeouts);
         res["message_read"] =
             static_cast<Json::UInt64>(mPeerMetrics.mMessageRead);
         res["message_write"] =
@@ -355,9 +343,9 @@ Peer::sendAuth()
     ZoneScoped;
     StellarMessage msg;
     msg.type(AUTH);
-    if (mApp.getConfig().ENABLE_PULL_MODE)
+    if (mApp.getConfig().ENABLE_FLOW_CONTROL_BYTES)
     {
-        msg.auth().flags = AUTH_MSG_FLAG_PULL_MODE_REQUESTED;
+        msg.auth().flags = AUTH_MSG_FLAG_FLOW_CONTROL_BYTES_REQUESTED;
     }
     auto msgPtr = std::make_shared<StellarMessage const>(msg);
     sendMessage(msgPtr);
@@ -580,6 +568,8 @@ Peer::msgSummary(StellarMessage const& msg)
         return SurveyManager::getMsgSummary(msg);
     case SEND_MORE:
         return "SENDMORE";
+    case SEND_MORE_EXTENDED:
+        return "SENDMORE_EXTENDED";
     case FLOOD_ADVERT:
         return "FLODADVERT";
     case FLOOD_DEMAND:
@@ -660,6 +650,7 @@ Peer::sendMessage(std::shared_ptr<StellarMessage const> msg, bool log)
         getOverlayMetrics().mSendSurveyResponseMeter.Mark();
         break;
     case SEND_MORE:
+    case SEND_MORE_EXTENDED:
         getOverlayMetrics().mSendSendMoreMeter.Mark();
         break;
     case FLOOD_ADVERT:
@@ -670,23 +661,12 @@ Peer::sendMessage(std::shared_ptr<StellarMessage const> msg, bool log)
         break;
     };
 
-    if (mApp.getOverlayManager().isFloodMessage(*msg))
+    releaseAssert(mFlowControl);
+    if (!mFlowControl->maybeSendMessage(msg))
     {
-        auto flowControl = flowControlEnabled();
-        if (flowControl == Peer::FlowControlState::DONT_KNOW)
-        {
-            // Drop any flood messages while flow control is being set
-            return;
-        }
-        else if (flowControl == Peer::FlowControlState::ENABLED)
-        {
-            addMsgAndMaybeTrimQueue(msg);
-            maybeSendNextBatch();
-            return;
-        }
+        // Outgoing message is not flow-controlled, send it directly
+        sendAuthenticatedMessage(*msg);
     }
-
-    sendAuthenticatedMessage(*msg);
 }
 
 void
@@ -817,81 +797,19 @@ Peer::recvMessage(StellarMessage const& stellarMsg)
     case AUTH:
         Peer::recvRawMessage(stellarMsg);
         return;
-    case SEND_MORE:
-    {
-        if (mRemoteOverlayVersion < Peer::FIRST_VERSION_SUPPORTING_FLOW_CONTROL)
-        {
-            drop("Peer sent SEND_MORE that it doesn't support",
-                 Peer::DropDirection::WE_DROPPED_REMOTE,
-                 Peer::DropMode::IGNORE_WRITE_QUEUE);
-            return;
-        }
-
-        if (mApp.getConfig().OVERLAY_PROTOCOL_VERSION <
-            Peer::FIRST_VERSION_SUPPORTING_FLOW_CONTROL)
-        {
-            drop("does not support SEND_MORE",
-                 Peer::DropDirection::WE_DROPPED_REMOTE,
-                 Peer::DropMode::IGNORE_WRITE_QUEUE);
-            return;
-        }
-
-        cat = "CTRL";
-
-        if (stellarMsg.sendMoreMessage().numMessages == 0)
-        {
-            auto msg = flowControlEnabled() == Peer::FlowControlState::ENABLED
-                           ? "unexpected SEND_MORE message"
-                           : "must enable flow control";
-            drop(msg, Peer::DropDirection::WE_DROPPED_REMOTE,
-                 Peer::DropMode::IGNORE_WRITE_QUEUE);
-            return;
-        }
-
-        mFlowControlState = Peer::FlowControlState::ENABLED;
-
-        if (stellarMsg.sendMoreMessage().numMessages >
-            UINT64_MAX - mOutboundCapacity)
-        {
-            drop("Peer capacity overflow",
-                 Peer::DropDirection::WE_DROPPED_REMOTE,
-                 Peer::DropMode::IGNORE_WRITE_QUEUE);
-            return;
-        }
-
-        mNoOutboundCapacity.reset();
-        if (mOutboundCapacity == 0 &&
-            stellarMsg.sendMoreMessage().numMessages != 0)
-        {
-            CLOG_DEBUG(Overlay, "Got outbound capacity for peer {}",
-                       mApp.getConfig().toShortString(getPeerID()));
-        }
-        mOutboundCapacity += stellarMsg.sendMoreMessage().numMessages;
-        break;
-    }
-
     // control messages
     case GET_PEERS:
     case PEERS:
     case ERROR_MSG:
+    case SEND_MORE:
+    case SEND_MORE_EXTENDED:
         cat = "CTRL";
         break;
-
     // high volume flooding
     case TRANSACTION:
     case FLOOD_ADVERT:
     case FLOOD_DEMAND:
     {
-        if (!mPullModeEnabled &&
-            (msgType == FLOOD_ADVERT || msgType == FLOOD_DEMAND))
-        {
-            drop(fmt::format("Peer sent {}, but pull mode is disabled",
-                             xdr::xdr_traits<MessageType>::enum_name(msgType)),
-                 Peer::DropDirection::WE_DROPPED_REMOTE,
-                 Peer::DropMode::IGNORE_WRITE_QUEUE);
-            return;
-        }
-
         cat = "TX";
         type = Scheduler::ActionType::DROPPABLE_ACTION;
         ignoreIfOutOfSync = true;
@@ -919,17 +837,16 @@ Peer::recvMessage(StellarMessage const& stellarMsg)
         cat = "MISC";
     }
 
+    auto self = shared_from_this();
+    std::weak_ptr<Peer> weak(static_pointer_cast<Peer>(self));
+    auto msgTracker = std::make_shared<MsgCapacityTracker>(weak, stellarMsg);
+
     if (!mApp.getLedgerManager().isSynced() && ignoreIfOutOfSync)
     {
         // For transactions, exit early during the state rebuild, as we can't
         // properly verify them
         return;
     }
-
-    auto self = shared_from_this();
-    std::weak_ptr<Peer> weak(static_pointer_cast<Peer>(self));
-
-    auto msgTracker = std::make_shared<MsgCapacityTracker>(weak, stellarMsg);
 
     mApp.postOnMainThread(
         [weak, msgTracker, cat, port = mApp.getConfig().PEER_PORT]() {
@@ -962,287 +879,10 @@ Peer::recvMessage(StellarMessage const& stellarMsg)
 }
 
 void
-Peer::sendSendMore(uint32_t numMessages)
-{
-    ZoneScoped;
-    StellarMessage m;
-    m.type(SEND_MORE);
-    m.sendMoreMessage().numMessages = numMessages;
-    auto msgPtr = std::make_shared<StellarMessage const>(m);
-    sendMessage(msgPtr);
-}
-
-void
 Peer::recvSendMore(StellarMessage const& msg)
 {
-    ZoneScoped;
-    // Flow control must be "on"
-    auto fc = flowControlEnabled();
-    releaseAssert(fc != Peer::FlowControlState::DONT_KNOW);
-    releaseAssert(msg.sendMoreMessage().numMessages > 0);
-
-    CLOG_TRACE(Overlay, "Peer {} sent SEND_MORE {}",
-               mApp.getConfig().toShortString(getPeerID()),
-               msg.sendMoreMessage().numMessages);
-
-    // SEND_MORE means we can free some capacity, and dump the next batch of
-    // messages onto the writing queue
-    if (fc == Peer::FlowControlState::ENABLED)
-    {
-        maybeSendNextBatch();
-    }
-}
-
-bool
-Peer::hasReadingCapacity() const
-{
-    return flowControlEnabled() != Peer::FlowControlState::ENABLED ||
-           mCapacity.mTotalCapacity > 0;
-}
-
-Peer::FlowControlState
-Peer::flowControlEnabled() const
-{
-    if (mFlowControlState == Peer::FlowControlState::DONT_KNOW)
-    {
-        return Peer::FlowControlState::DONT_KNOW;
-    }
-    if (mApp.getConfig().OVERLAY_PROTOCOL_VERSION <
-        Peer::FIRST_VERSION_SUPPORTING_FLOW_CONTROL)
-    {
-        return Peer::FlowControlState::DISABLED;
-    }
-    return mFlowControlState;
-}
-
-void
-Peer::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
-{
-    ZoneScoped;
-
-    releaseAssert(msg);
-    auto type = msg->type();
-    size_t msgQInd = 0;
-    switch (type)
-    {
-    case SCP_MESSAGE:
-    {
-        msgQInd = 0;
-    }
-    break;
-    case TRANSACTION:
-    {
-        msgQInd = 1;
-    }
-    break;
-    case FLOOD_DEMAND:
-    {
-        msgQInd = 2;
-        size_t s = msg->floodDemand().txHashes.size();
-        mDemandQueueTxHashCount += s;
-    }
-    break;
-    case FLOOD_ADVERT:
-    {
-        msgQInd = 3;
-        size_t s = msg->floodAdvert().txHashes.size();
-        mAdvertQueueTxHashCount += s;
-    }
-    break;
-    default:
-        abort();
-    }
-    auto& queue = mOutboundQueues[msgQInd];
-
-    queue.emplace_back(QueuedOutboundMessage{msg, mApp.getClock().now()});
-
-    size_t dropped = 0;
-
-    uint32_t const limit = mApp.getLedgerManager().getLastMaxTxSetSizeOps();
-    if (type == TRANSACTION)
-    {
-        if (queue.size() > limit)
-        {
-            dropped = queue.size() - limit;
-            queue.erase(queue.begin(), queue.begin() + dropped);
-            getOverlayMetrics().mOutboundQueueDropTxs.Mark(dropped);
-        }
-    }
-    else if (type == SCP_MESSAGE)
-    {
-        // Iterate over the message queue. If we found any messages for slots we
-        // don't keep in-memory anymore, delete those. Otherwise, compare
-        // messages for the same slot and validator against the latest SCP
-        // message and drop
-        auto minSlotToRemember = mApp.getHerder().getMinLedgerSeqToRemember();
-        bool valueReplaced = false;
-
-        for (auto it = queue.begin(); it != queue.end();)
-        {
-            if (it->mMessage->envelope().statement.slotIndex <
-                minSlotToRemember)
-            {
-                it = queue.erase(it);
-                dropped++;
-            }
-            else if (!valueReplaced && it != queue.end() - 1 &&
-                     mApp.getHerder().isNewerNominationOrBallotSt(
-                         it->mMessage->envelope().statement,
-                         queue.back().mMessage->envelope().statement))
-            {
-                valueReplaced = true;
-                *it = std::move(queue.back());
-                queue.pop_back();
-                dropped++;
-                ++it;
-            }
-            else
-            {
-                ++it;
-            }
-        }
-        getOverlayMetrics().mOutboundQueueDropSCP.Mark(dropped);
-    }
-    else if (type == FLOOD_ADVERT)
-    {
-        while (mAdvertQueueTxHashCount > limit)
-        {
-            dropped++;
-            size_t s = queue.front().mMessage->floodAdvert().txHashes.size();
-            releaseAssert(mAdvertQueueTxHashCount >= s);
-            mAdvertQueueTxHashCount -= s;
-            queue.pop_front();
-        }
-        getOverlayMetrics().mOutboundQueueDropAdvert.Mark(dropped);
-    }
-    else if (type == FLOOD_DEMAND)
-    {
-        while (mDemandQueueTxHashCount > limit)
-        {
-            dropped++;
-            size_t s = queue.front().mMessage->floodDemand().txHashes.size();
-            releaseAssert(mDemandQueueTxHashCount >= s);
-            mDemandQueueTxHashCount -= s;
-            queue.pop_front();
-        }
-        getOverlayMetrics().mOutboundQueueDropDemand.Mark(dropped);
-    }
-
-    if (dropped && Logging::logTrace("Overlay"))
-    {
-        CLOG_TRACE(Overlay, "Dropped {} {} messages to peer {}", dropped,
-                   xdr::xdr_traits<MessageType>::enum_name(type),
-                   mApp.getConfig().toShortString(getPeerID()));
-    }
-}
-
-void
-Peer::maybeSendNextBatch()
-{
-    ZoneScoped;
-
-    releaseAssert(flowControlEnabled() == Peer::FlowControlState::ENABLED);
-
-    auto oldOutboundCapacity = mOutboundCapacity;
-    for (int i = 0; i < mOutboundQueues.size(); i++)
-    {
-        auto& queue = mOutboundQueues[i];
-        while (!queue.empty() && mOutboundCapacity > 0)
-        {
-            auto& front = queue.front();
-            sendAuthenticatedMessage(*(front.mMessage));
-            auto& om = mApp.getOverlayManager().getOverlayMetrics();
-
-            auto const& diff = mApp.getClock().now() - front.mTimeEmplaced;
-            mOutboundCapacity--;
-            switch (front.mMessage->type())
-            {
-            case TRANSACTION:
-            {
-                om.mOutboundQueueDelayTxs.Update(diff);
-                mPeerMetrics.mOutboundQueueDelayTxs.Update(diff);
-            }
-            break;
-            case SCP_MESSAGE:
-            {
-                om.mOutboundQueueDelaySCP.Update(diff);
-                mPeerMetrics.mOutboundQueueDelaySCP.Update(diff);
-            }
-            break;
-            case FLOOD_DEMAND:
-            {
-                om.mOutboundQueueDelayDemand.Update(diff);
-                mPeerMetrics.mOutboundQueueDelayDemand.Update(diff);
-                size_t s = front.mMessage->floodDemand().txHashes.size();
-                releaseAssert(mDemandQueueTxHashCount >= s);
-                mDemandQueueTxHashCount -= s;
-            }
-            break;
-            case FLOOD_ADVERT:
-            {
-                om.mOutboundQueueDelayAdvert.Update(diff);
-                mPeerMetrics.mOutboundQueueDelayAdvert.Update(diff);
-                size_t s = front.mMessage->floodAdvert().txHashes.size();
-                releaseAssert(mAdvertQueueTxHashCount >= s);
-                mAdvertQueueTxHashCount -= s;
-            }
-            break;
-            default:
-                abort();
-            }
-            if (mOutboundCapacity == 0)
-            {
-                CLOG_DEBUG(Overlay, "No outbound capacity for peer {}",
-                           mApp.getConfig().toShortString(getPeerID()));
-                mNoOutboundCapacity =
-                    std::make_optional<VirtualClock::time_point>(
-                        mApp.getClock().now());
-            }
-            queue.pop_front();
-        }
-    }
-
-    CLOG_TRACE(Overlay, "Peer {}: send next flood batch of {}",
-               mApp.getConfig().toShortString(getPeerID()),
-               (oldOutboundCapacity - mOutboundCapacity));
-}
-
-void
-Peer::endMessageProcessing(StellarMessage const& msg)
-{
-    if (shouldAbort() ||
-        flowControlEnabled() != Peer::FlowControlState::ENABLED)
-    {
-        return;
-    }
-
-    mCapacity.mTotalCapacity++;
-    if (mApp.getOverlayManager().isFloodMessage(msg))
-    {
-        if (mCapacity.mFloodCapacity == 0)
-        {
-            CLOG_DEBUG(Overlay, "Got flood capacity for peer {}",
-                       mApp.getConfig().toShortString(getPeerID()));
-        }
-        mCapacity.mFloodCapacity++;
-        mFloodMsgsProcessed++;
-
-        if (mFloodMsgsProcessed ==
-            mApp.getConfig().FLOW_CONTROL_SEND_MORE_BATCH_SIZE)
-        {
-            sendSendMore(mApp.getConfig().FLOW_CONTROL_SEND_MORE_BATCH_SIZE);
-            mFloodMsgsProcessed = 0;
-        }
-    }
-
-    // Got some capacity back, can schedule more reads now
-    if (mIsPeerThrottled)
-    {
-        CLOG_DEBUG(Overlay, "Stop throttling reading from peer {}",
-                   mApp.getConfig().toShortString(getPeerID()));
-        mIsPeerThrottled = false;
-        scheduleRead();
-    }
+    releaseAssert(mFlowControl);
+    mFlowControl->maybeReleaseCapacityAndTriggerSend(msg);
 }
 
 void
@@ -1386,7 +1026,16 @@ Peer::recvRawMessage(StellarMessage const& stellarMsg)
     }
     break;
     case SEND_MORE:
+    case SEND_MORE_EXTENDED:
     {
+        std::string errorMsg;
+        releaseAssert(mFlowControl);
+        if (!mFlowControl->isSendMoreValid(stellarMsg, errorMsg))
+        {
+            drop(errorMsg, Peer::DropDirection::WE_DROPPED_REMOTE,
+                 Peer::DropMode::IGNORE_WRITE_QUEUE);
+            return;
+        }
         auto t = getOverlayMetrics().mRecvSendMoreTimer.TimeScope();
         recvSendMore(stellarMsg);
     }
@@ -1479,7 +1128,7 @@ void
 Peer::recvTxSet(StellarMessage const& msg)
 {
     ZoneScoped;
-    auto frame = TxSetFrame::makeFromWire(mApp.getNetworkID(), msg.txSet());
+    auto frame = TxSetFrame::makeFromWire(mApp, msg.txSet());
     mApp.getHerder().recvTxSet(frame->getContentsHash(), frame);
 }
 
@@ -1487,8 +1136,7 @@ void
 Peer::recvGeneralizedTxSet(StellarMessage const& msg)
 {
     ZoneScoped;
-    auto frame =
-        TxSetFrame::makeFromWire(mApp.getNetworkID(), msg.generalizedTxSet());
+    auto frame = TxSetFrame::makeFromWire(mApp, msg.generalizedTxSet());
     mApp.getHerder().recvTxSet(frame->getContentsHash(), frame);
 }
 
@@ -1506,24 +1154,40 @@ Peer::recvTransaction(StellarMessage const& msg)
         mApp.getOverlayManager().recvFloodedMsgID(msg, shared_from_this(),
                                                   msgID);
 
-        if (isPullModeEnabled())
-        {
-            // It does not make sense to record the latency if the transaction
-            // is coming from a node that we didn't demand it from.
-            // Peers with pull mode enabled should send txns only if demanded.
-            mApp.getOverlayManager().recordTxPullLatency(
-                transaction->getFullHash());
-        }
+        mApp.getOverlayManager().recordTxPullLatency(transaction->getFullHash(),
+                                                     shared_from_this());
 
         // add it to our current set
         // and make sure it is valid
         auto recvRes = mApp.getHerder().recvTransaction(transaction, false);
-
+        bool pulledRelevantTx = false;
         if (!(recvRes == TransactionQueue::AddResult::ADD_STATUS_PENDING ||
               recvRes == TransactionQueue::AddResult::ADD_STATUS_DUPLICATE))
         {
             mApp.getOverlayManager().forgetFloodedMsg(msgID);
+            CLOG_DEBUG(Overlay,
+                       "Peer::recvTransaction Discarded transaction {} from {}",
+                       hexAbbrev(transaction->getFullHash()), toString());
         }
+        else
+        {
+            bool dup =
+                recvRes == TransactionQueue::AddResult::ADD_STATUS_DUPLICATE;
+            if (!dup)
+            {
+                pulledRelevantTx = true;
+            }
+            CLOG_DEBUG(
+                Overlay,
+                "Peer::recvTransaction Received {} transaction {} from {}",
+                (dup ? "duplicate" : "unique"),
+                hexAbbrev(transaction->getFullHash()), toString());
+        }
+
+        auto const& om = mApp.getOverlayManager().getOverlayMetrics();
+        auto& meter =
+            pulledRelevantTx ? om.mPulledRelevantTxs : om.mPulledIrrelevantTxs;
+        meter.Mark();
     }
 }
 
@@ -1571,6 +1235,13 @@ std::chrono::milliseconds
 Peer::getPing() const
 {
     return mLastPing;
+}
+
+bool
+Peer::canRead() const
+{
+    releaseAssert(mFlowControl);
+    return mFlowControl->canRead();
 }
 
 void
@@ -1801,8 +1472,7 @@ Peer::recvHello(Hello const& elo)
 
     if (mRemoteOverlayMinVersion > mRemoteOverlayVersion ||
         mRemoteOverlayVersion < mApp.getConfig().OVERLAY_PROTOCOL_MIN_VERSION ||
-        mRemoteOverlayMinVersion > mApp.getConfig().OVERLAY_PROTOCOL_VERSION ||
-        mRemoteOverlayVersion < Peer::FIRST_VERSION_SUPPORTING_FLOW_CONTROL)
+        mRemoteOverlayMinVersion > mApp.getConfig().OVERLAY_PROTOCOL_VERSION)
     {
         CLOG_DEBUG(Overlay, "Protocol = [{},{}] expected: [{},{}]",
                    mRemoteOverlayMinVersion, mRemoteOverlayVersion,
@@ -1914,22 +1584,27 @@ Peer::recvAuth(StellarMessage const& msg)
     }
 
     // Subtle: after successful auth, must send sendMore message first to tell
-    // the other peer if this node prefers to flow control the traffic or not
-    if (mRemoteOverlayVersion >= Peer::FIRST_VERSION_SUPPORTING_FLOW_CONTROL &&
-        mApp.getConfig().OVERLAY_PROTOCOL_VERSION >=
-            Peer::FIRST_VERSION_SUPPORTING_FLOW_CONTROL)
-    {
-        sendSendMore(mApp.getConfig().PEER_FLOOD_READING_CAPACITY);
-    }
+    // the other peer about the local node's reading capacity.
+    auto weakSelf = std::weak_ptr<Peer>(self);
+    auto sendCb = [weakSelf](StellarMessage const& msg) {
+        auto self = weakSelf.lock();
+        if (self)
+        {
+            self->sendAuthenticatedMessage(msg);
+        }
+    };
 
-    if (mRemoteOverlayVersion >= Peer::FIRST_VERSION_SUPPORTING_PULL_MODE &&
-        mApp.getConfig().OVERLAY_PROTOCOL_VERSION >=
-            Peer::FIRST_VERSION_SUPPORTING_PULL_MODE &&
-        msg.auth().flags == AUTH_MSG_FLAG_PULL_MODE_REQUESTED &&
-        mApp.getConfig().ENABLE_PULL_MODE)
-    {
-        mPullModeEnabled = true;
-    }
+    bool enableBytes =
+        (mApp.getConfig().OVERLAY_PROTOCOL_VERSION >=
+             Peer::FIRST_VERSION_SUPPORTING_FLOW_CONTROL_IN_BYTES &&
+         getRemoteOverlayVersion() >=
+             Peer::FIRST_VERSION_SUPPORTING_FLOW_CONTROL_IN_BYTES);
+    bool bothWantBytes =
+        enableBytes &&
+        msg.auth().flags == AUTH_MSG_FLAG_FLOW_CONTROL_BYTES_REQUESTED &&
+        mApp.getConfig().ENABLE_FLOW_CONTROL_BYTES;
+
+    mFlowControl->start(weakSelf, sendCb, bothWantBytes);
 
     // Ask for SCP data _after_ the flow control message
     auto low = mApp.getHerder().getMinLedgerSeqToAskPeers();
@@ -2009,7 +1684,19 @@ Peer::recvSurveyResponseMessage(StellarMessage const& msg)
 void
 Peer::recvFloodAdvert(StellarMessage const& msg)
 {
+    auto seq = mApp.getHerder().trackingConsensusLedgerIndex();
+    for (auto const& hash : msg.floodAdvert().txHashes)
+    {
+        rememberHash(hash, seq);
+    }
     mTxAdvertQueue.queueAndMaybeTrim(msg.floodAdvert().txHashes);
+}
+
+void
+Peer::clearBelow(uint32_t ledgerSeq)
+{
+    mAdvertHistory.erase_if(
+        [&](uint32_t const& seq) { return seq < ledgerSeq; });
 }
 
 void
@@ -2032,18 +1719,13 @@ Peer::PeerMetrics::PeerMetrics(VirtualClock::time_point connectedTime)
     , mMessageDelayInAsyncWriteTimer(medida::Timer(PEER_METRICS_DURATION_UNIT,
                                                    PEER_METRICS_RATE_UNIT,
                                                    PEER_METRICS_WINDOW_SIZE))
-    , mOutboundQueueDelaySCP(medida::Timer(PEER_METRICS_DURATION_UNIT,
-                                           PEER_METRICS_RATE_UNIT,
-                                           PEER_METRICS_WINDOW_SIZE))
-    , mOutboundQueueDelayTxs(medida::Timer(PEER_METRICS_DURATION_UNIT,
-                                           PEER_METRICS_RATE_UNIT,
-                                           PEER_METRICS_WINDOW_SIZE))
-    , mOutboundQueueDelayAdvert(medida::Timer(PEER_METRICS_DURATION_UNIT,
-                                              PEER_METRICS_RATE_UNIT,
-                                              PEER_METRICS_WINDOW_SIZE))
-    , mOutboundQueueDelayDemand(medida::Timer(PEER_METRICS_DURATION_UNIT,
-                                              PEER_METRICS_RATE_UNIT,
-                                              PEER_METRICS_WINDOW_SIZE))
+    , mAdvertQueueDelay(medida::Timer(PEER_METRICS_DURATION_UNIT,
+                                      PEER_METRICS_RATE_UNIT,
+                                      PEER_METRICS_WINDOW_SIZE))
+    , mPullLatency(medida::Timer(PEER_METRICS_DURATION_UNIT,
+                                 PEER_METRICS_RATE_UNIT,
+                                 PEER_METRICS_WINDOW_SIZE))
+    , mDemandTimeouts(0)
     , mUniqueFloodBytesRecv(0)
     , mDuplicateFloodBytesRecv(0)
     , mUniqueFetchBytesRecv(0)
@@ -2060,12 +1742,6 @@ Peer::PeerMetrics::PeerMetrics(VirtualClock::time_point connectedTime)
 {
 }
 
-bool
-Peer::isPullModeEnabled() const
-{
-    return mPullModeEnabled;
-}
-
 void
 Peer::queueTxHashToAdvertise(Hash const& txHash)
 {
@@ -2077,7 +1753,8 @@ Peer::queueTxHashToAdvertise(Hash const& txHash)
     if (mTxHashesToAdvertise.size() == TX_ADVERT_VECTOR_MAX_SIZE)
     {
         CLOG_TRACE(Overlay,
-                   "mTxHashesToAdvertise is full, dropping the txn hash");
+                   "mTxHashesToAdvertise is full, dropping the txn hash {}",
+                   hexAbbrev(txHash));
         return;
     }
 
@@ -2118,9 +1795,6 @@ Peer::sendTxDemand(TxDemandVector&& demands)
         msg->type(FLOOD_DEMAND);
         msg->floodDemand().txHashes = std::move(demands);
         std::weak_ptr<Peer> weak(static_pointer_cast<Peer>(shared_from_this()));
-        CLOG_TRACE(Overlay, "Peer::sendTxDemand -- demanding {} txns from {}",
-                   msg->floodDemand().txHashes.size(),
-                   mApp.getConfig().toShortString(getPeerID()));
         getOverlayMetrics().mMessagesDemanded.Mark(
             msg->floodDemand().txHashes.size());
         mApp.postOnMainThread(
@@ -2148,9 +1822,6 @@ Peer::flushAdvert()
         mTxHashesToAdvertise.clear();
         auto msg = std::make_shared<StellarMessage>(adv);
         std::weak_ptr<Peer> weak(static_pointer_cast<Peer>(shared_from_this()));
-        CLOG_TRACE(Overlay, "Peer::flushAdvert -- flushing {} tx hashes to {}",
-                   msg->floodAdvert().txHashes.size(),
-                   mApp.getConfig().toShortString(getPeerID()));
         mApp.postOnMainThread(
             [weak, msg = std::move(msg)]() {
                 auto strong = weak.lock();

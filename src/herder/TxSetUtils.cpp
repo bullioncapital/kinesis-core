@@ -178,7 +178,7 @@ TxSetUtils::getInvalidTxList(TxSetFrame::Transactions const& txs,
                 iter != accountQueue->mTxs.begin() &&
                 (tx->getMinSeqAge() != 0 || tx->getMinSeqLedgerGap() != 0);
             if (minSeqCheckIsInvalid ||
-                !tx->checkValid(ltx, lastSeq, lowerBoundCloseTimeOffset,
+                !tx->checkValid(app, ltx, lastSeq, lowerBoundCloseTimeOffset,
                                 upperBoundCloseTimeOffset))
             {
                 invalidTxs.emplace_back(tx);
@@ -211,13 +211,13 @@ TxSetUtils::getInvalidTxList(TxSetFrame::Transactions const& txs,
             {
                 lastSeq = tx->getSeqNum();
                 int64_t& accFee = accountFeeMap[tx->getFeeSourceID()];
-                if (INT64_MAX - accFee < tx->getFeeBid())
+                if (INT64_MAX - accFee < tx->getFullFee())
                 {
                     accFee = INT64_MAX;
                 }
                 else
                 {
-                    accFee += tx->getFeeBid();
+                    accFee += tx->getFullFee();
                 }
                 ++iter;
             }

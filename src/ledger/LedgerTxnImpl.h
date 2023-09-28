@@ -20,8 +20,9 @@ namespace stellar
 
 // Precondition: The keys associated with entries are unique and constitute a
 // subset of keys
+template <typename KeySetT>
 UnorderedMap<LedgerKey, std::shared_ptr<LedgerEntry const>>
-populateLoadedEntries(UnorderedSet<LedgerKey> const& keys,
+populateLoadedEntries(KeySetT const& keys,
                       std::vector<LedgerEntry> const& entries);
 
 class EntryIterator::AbstractImpl
@@ -72,8 +73,9 @@ class BulkLedgerEntryChangeAccumulator
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     std::vector<EntryIterator> mContractDataToUpsert;
     std::vector<EntryIterator> mContractDataToDelete;
+    std::vector<EntryIterator> mContractCodeToUpsert;
+    std::vector<EntryIterator> mContractCodeToDelete;
     std::vector<EntryIterator> mConfigSettingsToUpsert;
-    std::vector<EntryIterator> mConfigSettingsToDelete;
 #endif
 
   public:
@@ -157,12 +159,6 @@ class BulkLedgerEntryChangeAccumulator
     }
 
     std::vector<EntryIterator>&
-    getConfigSettingsToDelete()
-    {
-        return mConfigSettingsToDelete;
-    }
-
-    std::vector<EntryIterator>&
     getContractDataToUpsert()
     {
         return mContractDataToUpsert;
@@ -173,9 +169,21 @@ class BulkLedgerEntryChangeAccumulator
     {
         return mContractDataToDelete;
     }
+
+    std::vector<EntryIterator>&
+    getContractCodeToUpsert()
+    {
+        return mContractCodeToUpsert;
+    }
+
+    std::vector<EntryIterator>&
+    getContractCodeToDelete()
+    {
+        return mContractCodeToDelete;
+    }
 #endif
 
-    void accumulate(EntryIterator const& iter);
+    bool accumulate(EntryIterator const& iter, bool bucketListDBEnabled);
 };
 
 // Many functions in LedgerTxn::Impl provide a basic exception safety
@@ -377,6 +385,7 @@ class LedgerTxn::Impl
     void throwIfChild() const;
     void throwIfSealed() const;
     void throwIfNotExactConsistency() const;
+    void throwIfErasingConfig(InternalLedgerKey const& key) const;
 
     // getDeltaVotes has the basic exception safety guarantee. If it throws an
     // exception, then
@@ -711,7 +720,7 @@ class LedgerTxnRoot::Impl
     static size_t const MIN_BEST_OFFERS_BATCH_SIZE;
     size_t const mMaxBestOffersBatchSize;
 
-    Database& mDatabase;
+    Application& mApp;
     std::unique_ptr<LedgerHeader> mHeader;
     mutable EntryCache mEntryCache;
     mutable BestOffers mBestOffers;
@@ -760,6 +769,8 @@ class LedgerTxnRoot::Impl
     std::shared_ptr<LedgerEntry const>
     loadContractData(LedgerKey const& key) const;
     std::shared_ptr<LedgerEntry const>
+    loadContractCode(LedgerKey const& key) const;
+    std::shared_ptr<LedgerEntry const>
     loadConfigSetting(LedgerKey const& key) const;
 #endif
 
@@ -787,9 +798,10 @@ class LedgerTxnRoot::Impl
     void bulkUpsertContractData(std::vector<EntryIterator> const& entries);
     void bulkDeleteContractData(std::vector<EntryIterator> const& entries,
                                 LedgerTxnConsistency cons);
+    void bulkUpsertContractCode(std::vector<EntryIterator> const& entries);
+    void bulkDeleteContractCode(std::vector<EntryIterator> const& entries,
+                                LedgerTxnConsistency cons);
     void bulkUpsertConfigSettings(std::vector<EntryIterator> const& entries);
-    void bulkDeleteConfigSettings(std::vector<EntryIterator> const& entries,
-                                  LedgerTxnConsistency cons);
 #endif
 
     static std::string tableFromLedgerEntryType(LedgerEntryType let);
@@ -832,6 +844,8 @@ class LedgerTxnRoot::Impl
     UnorderedMap<LedgerKey, std::shared_ptr<LedgerEntry const>>
     bulkLoadContractData(UnorderedSet<LedgerKey> const& keys) const;
     UnorderedMap<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    bulkLoadContractCode(UnorderedSet<LedgerKey> const& keys) const;
+    UnorderedMap<LedgerKey, std::shared_ptr<LedgerEntry const>>
     bulkLoadConfigSettings(UnorderedSet<LedgerKey> const& keys) const;
 #endif
 
@@ -846,7 +860,7 @@ class LedgerTxnRoot::Impl
 
   public:
     // Constructor has the strong exception safety guarantee
-    Impl(Database& db, size_t entryCacheSize, size_t prefetchBatchSize
+    Impl(Application& app, size_t entryCacheSize, size_t prefetchBatchSize
 #ifdef BEST_OFFER_DEBUGGING
          ,
          bool bestOfferDebuggingEnabled
@@ -870,15 +884,16 @@ class LedgerTxnRoot::Impl
 
     // dropAccounts, dropData, dropOffers, and dropTrustLines have no exception
     // safety guarantees.
-    void dropAccounts();
-    void dropData();
-    void dropOffers();
-    void dropTrustLines();
-    void dropClaimableBalances();
-    void dropLiquidityPools();
+    void dropAccounts(bool rebuild);
+    void dropData(bool rebuild);
+    void dropOffers(bool rebuild);
+    void dropTrustLines(bool rebuild);
+    void dropClaimableBalances(bool rebuild);
+    void dropLiquidityPools(bool rebuild);
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
-    void dropContractData();
-    void dropConfigSettings();
+    void dropContractData(bool rebuild);
+    void dropContractCode(bool rebuild);
+    void dropConfigSettings(bool rebuild);
 #endif
 
 #ifdef BUILD_TESTS

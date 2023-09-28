@@ -86,8 +86,10 @@ class OverlayManagerImpl : public OverlayManager
     RandomEvictionCache<uint64_t, bool> mMessageCache;
 
     void tick();
+    void updateTimerAndMaybeDropRandomPeer(bool shouldDrop);
     VirtualTimer mTimer;
     VirtualTimer mPeerIPTimer;
+    std::optional<VirtualClock::time_point> mLastOutOfSyncReconnect;
 
     friend class OverlayManagerTests;
 
@@ -103,7 +105,7 @@ class OverlayManagerImpl : public OverlayManager
     {
         VirtualClock::time_point firstDemanded;
         VirtualClock::time_point lastDemanded;
-        UnorderedSet<NodeID> peers;
+        UnorderedMap<NodeID, VirtualClock::time_point> peers;
         bool latencyRecorded{false};
     };
     UnorderedMap<Hash, DemandHistory> mDemandHistoryMap;
@@ -123,6 +125,7 @@ class OverlayManagerImpl : public OverlayManager
     int const MAX_RETRY_COUNT = 15;
     std::chrono::milliseconds retryDelayDemand(int numAttemptsMade) const;
     size_t getMaxDemandSize() const;
+    int availableOutboundPendingSlots() const;
 
   public:
     OverlayManagerImpl(Application& app);
@@ -156,7 +159,6 @@ class OverlayManagerImpl : public OverlayManager
     getOutboundAuthenticatedPeers() const override;
     std::map<NodeID, Peer::pointer> getAuthenticatedPeers() const override;
     int getAuthenticatedPeersCount() const override;
-    int64_t getPullModePercentage() const override;
 
     // returns nullptr if the passed peer isn't found
     Peer::pointer getConnectedPeer(PeerBareAddress const& address) override;
@@ -182,10 +184,8 @@ class OverlayManagerImpl : public OverlayManager
     void recordMessageMetric(StellarMessage const& stellarMsg,
                              Peer::pointer peer) override;
 
-    void updateFloodRecord(StellarMessage const& oldMsg,
-                           StellarMessage const& newMsg) override;
-
-    void recordTxPullLatency(Hash const& hash) override;
+    void recordTxPullLatency(Hash const& hash,
+                             std::shared_ptr<Peer> peer) override;
     size_t getMaxAdvertSize() const override;
 
   private:
@@ -217,7 +217,6 @@ class OverlayManagerImpl : public OverlayManager
 
     bool moveToAuthenticated(Peer::pointer peer);
 
-    int availableOutboundPendingSlots() const;
     int availableOutboundAuthenticatedSlots() const;
     int nonPreferredAuthenticatedCount() const;
 

@@ -104,8 +104,8 @@ generateLedgerEntryWithSameKey(LedgerEntry const& leBase)
         case CONFIG_SETTING:
             le.data.configSetting() =
                 LedgerTestUtils::generateValidConfigSettingEntry();
-            le.data.configSetting().configSettingID =
-                leBase.data.configSetting().configSettingID;
+            le.data.configSetting().configSettingID(
+                leBase.data.configSetting().configSettingID());
             break;
         case CONTRACT_DATA:
             le.data.contractData() =
@@ -114,9 +114,12 @@ generateLedgerEntryWithSameKey(LedgerEntry const& leBase)
                 leBase.data.contractData().contractID;
             le.data.contractData().key = leBase.data.contractData().key;
             break;
+        case CONTRACT_CODE:
+            le.data.contractCode() =
+                LedgerTestUtils::generateValidContractCodeEntry();
+            le.data.contractCode().hash = leBase.data.contractCode().hash;
+            break;
 #endif
-        default:
-            REQUIRE(false);
         }
     } while (le == leBase);
     return le;
@@ -160,7 +163,11 @@ TEST_CASE("LedgerTxn commit into LedgerTxn", "[ledgertxn]")
     VirtualClock clock;
     auto app = createTestApplication(clock, getTestConfig());
 
-    LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     le1.lastModifiedLedgerSeq = 1;
     LedgerKey key = LedgerEntryKey(le1);
 
@@ -213,6 +220,7 @@ TEST_CASE("LedgerTxn commit into LedgerTxn", "[ledgertxn]")
 
         SECTION("erased in child")
         {
+            le2 = generateLedgerEntryWithSameKey(le1);
             LedgerTxn ltx1(app->getLedgerTxnRoot());
             REQUIRE(ltx1.create(le1));
 
@@ -231,7 +239,12 @@ TEST_CASE("LedgerTxn rollback into LedgerTxn", "[ledgertxn]")
         VirtualClock clock;
         auto app = createTestApplication(clock, getTestConfig(0, mode));
 
-        LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntry();
+        LedgerEntry le1 =
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
         le1.lastModifiedLedgerSeq = 1;
         LedgerKey key = LedgerEntryKey(le1);
 
@@ -284,6 +297,14 @@ TEST_CASE("LedgerTxn rollback into LedgerTxn", "[ledgertxn]")
 
             SECTION("erased in child")
             {
+                le1 = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    CONFIG_SETTING
+#endif
+                });
+                le1.lastModifiedLedgerSeq = 1;
+                key = LedgerEntryKey(le1);
+                le2 = generateLedgerEntryWithSameKey(le1);
                 LedgerTxn ltx1(app->getLedgerTxnRoot());
                 REQUIRE(ltx1.create(le1));
 
@@ -322,7 +343,11 @@ TEST_CASE("LedgerTxn round trip", "[ledgertxn]")
         UnorderedMap<LedgerKey, LedgerEntry> newBatch;
         while (newBatch.size() < NEW_ENTRIES)
         {
-            auto le = LedgerTestUtils::generateValidLedgerEntry();
+            auto le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
             auto key = LedgerEntryKey(le);
             if (entries.find(LedgerEntryKey(le)) == entries.end())
             {
@@ -370,6 +395,12 @@ TEST_CASE("LedgerTxn round trip", "[ledgertxn]")
         {
             auto iter = entries.begin();
             std::advance(iter, dist(gRandomEngine));
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+            if (iter->first.type() == CONFIG_SETTING)
+            {
+                continue;
+            }
+#endif
             eraseBatch.insert(iter->first);
         }
 
@@ -478,7 +509,11 @@ TEST_CASE("LedgerTxn rollback and commit deactivate", "[ledgertxn]")
     auto& root = app->getLedgerTxnRoot();
     auto lh = root.getHeader();
 
-    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     LedgerKey key = LedgerEntryKey(le);
 
     auto checkDeactivate = [&](std::function<void(LedgerTxn & ltx)> f) {
@@ -527,7 +562,11 @@ TEST_CASE("LedgerTxn create", "[ledgertxn]")
     VirtualClock clock;
     auto app = createTestApplication(clock, getTestConfig());
 
-    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     le.lastModifiedLedgerSeq = 1;
     LedgerKey key = LedgerEntryKey(le);
 
@@ -588,7 +627,12 @@ TEST_CASE("LedgerTxn createWithoutLoading and updateWithoutLoading",
         VirtualClock clock;
         auto app = createTestApplication(clock, getTestConfig(0, mode));
 
-        LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+        LedgerEntry le =
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
         le.lastModifiedLedgerSeq = 1;
         LedgerKey key = LedgerEntryKey(le);
 
@@ -681,7 +725,12 @@ TEST_CASE("LedgerTxn erase", "[ledgertxn]")
         VirtualClock clock;
         auto app = createTestApplication(clock, getTestConfig(0, mode));
 
-        LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+        LedgerEntry le =
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
         le.lastModifiedLedgerSeq = 1;
         LedgerKey key = LedgerEntryKey(le);
 
@@ -701,6 +750,19 @@ TEST_CASE("LedgerTxn erase", "[ledgertxn]")
             ltx1.getDelta();
             REQUIRE_THROWS_AS(ltx1.erase(key), std::runtime_error);
         }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        SECTION("fails for configuration")
+        {
+            auto configLe =
+                LedgerTestUtils::generateValidLedgerEntryOfType(CONFIG_SETTING);
+            LedgerTxn ltx1(app->getLedgerTxnRoot());
+            // The config entry should already be present in ledger in starting
+            // with vNext.
+            REQUIRE_THROWS_AS(ltx1.erase(LedgerEntryKey(configLe)),
+                              std::runtime_error);
+        }
+#endif
 
         SECTION("when key does not exist")
         {
@@ -724,6 +786,13 @@ TEST_CASE("LedgerTxn erase", "[ledgertxn]")
 
         SECTION("when key exists in grandparent, erased in parent")
         {
+            le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
+            le.lastModifiedLedgerSeq = 1;
+            key = LedgerEntryKey(le);
             LedgerTxn ltx1(app->getLedgerTxnRoot());
             REQUIRE(ltx1.create(le));
 
@@ -754,7 +823,12 @@ TEST_CASE("LedgerTxn eraseWithoutLoading", "[ledgertxn]")
         VirtualClock clock;
         auto app = createTestApplication(clock, getTestConfig(0, mode));
 
-        LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+        LedgerEntry le =
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
         le.lastModifiedLedgerSeq = 1;
         LedgerKey key = LedgerEntryKey(le);
 
@@ -778,7 +852,18 @@ TEST_CASE("LedgerTxn eraseWithoutLoading", "[ledgertxn]")
             REQUIRE_THROWS_AS(ltx1.eraseWithoutLoading(key),
                               std::runtime_error);
         }
-
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        SECTION("fails for configuration")
+        {
+            auto configLe =
+                LedgerTestUtils::generateValidLedgerEntryOfType(CONFIG_SETTING);
+            LedgerTxn ltx1(app->getLedgerTxnRoot());
+            // The config entry should already be present in ledger in starting
+            // with vNext.
+            REQUIRE_THROWS_AS(ltx1.erase(LedgerEntryKey(configLe)),
+                              std::runtime_error);
+        }
+#endif
         SECTION("when key does not exist")
         {
             LedgerTxn ltx1(app->getLedgerTxnRoot());
@@ -800,6 +885,13 @@ TEST_CASE("LedgerTxn eraseWithoutLoading", "[ledgertxn]")
 
         SECTION("when key exists in grandparent, erased in parent")
         {
+            le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
+            le.lastModifiedLedgerSeq = 1;
+            key = LedgerEntryKey(le);
             LedgerTxn ltx1(app->getLedgerTxnRoot());
             REQUIRE(ltx1.create(le));
 
@@ -1288,7 +1380,12 @@ TEST_CASE_VERSIONS("LedgerTxn load", "[ledgertxn]")
 
         SECTION("use generated entry")
         {
-            LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+            LedgerEntry le =
+                LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    CONFIG_SETTING
+#endif
+                });
             le.lastModifiedLedgerSeq = 1;
             LedgerKey key = LedgerEntryKey(le);
 
@@ -1330,6 +1427,7 @@ TEST_CASE_VERSIONS("LedgerTxn load", "[ledgertxn]")
 
                 SECTION("when key exists in grandparent, erased in parent")
                 {
+                    key = LedgerEntryKey(le);
                     LedgerTxn ltx1(app->getLedgerTxnRoot());
                     REQUIRE(ltx1.create(le));
 
@@ -1407,8 +1505,7 @@ TEST_CASE_VERSIONS("LedgerTxn load", "[ledgertxn]")
                     {
                         for (int i = 0; i < 1000; ++i)
                         {
-                            LedgerKey lk =
-                                LedgerTestUtils::generateLedgerKey(5);
+                            LedgerKey lk = autocheck::generator<LedgerKey>()(5);
 
                             try
                             {
@@ -1447,7 +1544,11 @@ TEST_CASE("LedgerTxn loadWithoutRecord", "[ledgertxn]")
     VirtualClock clock;
     auto app = createTestApplication(clock, getTestConfig());
 
-    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     le.lastModifiedLedgerSeq = 1;
     LedgerKey key = LedgerEntryKey(le);
 
@@ -1950,8 +2051,12 @@ TEST_CASE("LedgerTxn loadBestOffer", "[ledgertxn]")
             auto app = createTestApplication(clock, getTestConfig(0, mode));
 
             LedgerTxn ltx1(app->getLedgerTxnRoot());
-            auto ltxe =
-                ltx1.create(LedgerTestUtils::generateValidLedgerEntry());
+            auto ltxe = ltx1.create(
+                LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    CONFIG_SETTING
+#endif
+                }));
             REQUIRE_THROWS_AS(ltx1.getBestOffer(buying, selling),
                               std::runtime_error);
             REQUIRE_THROWS_AS(
@@ -2452,9 +2557,17 @@ TEST_CASE("LedgerTxnEntry and LedgerTxnHeader move assignment", "[ledgertxn]")
     auto& root = app->getLedgerTxnRoot();
     auto lh = root.getHeader();
 
-    LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     LedgerKey key1 = LedgerEntryKey(le1);
-    LedgerEntry le2 = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le2 = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     LedgerKey key2 = LedgerEntryKey(le2);
 
     SECTION("assign self")
@@ -3582,8 +3695,12 @@ TEST_CASE("Access deactivated entry", "[ledgertxn]")
             ltx.commit();
         }
 
-        LedgerKey missingEntryKey =
-            LedgerEntryKey(LedgerTestUtils::generateValidLedgerEntry());
+        LedgerKey missingEntryKey = LedgerEntryKey(
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            }));
 
         LedgerTxn ltx1(app->getLedgerTxnRoot());
 
@@ -4269,7 +4386,11 @@ TEST_CASE("InMemoryLedgerTxn filtering", "[ledgertxn]")
     entry2.maxSeqNumToApplyEntry().sourceAccount = a1;
     entry2.maxSeqNumToApplyEntry().maxSeqNum = 1;
 
-    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
 
     LedgerTxn ltx(app->getLedgerTxnRoot());
 

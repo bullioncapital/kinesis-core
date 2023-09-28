@@ -93,6 +93,10 @@ Command options can only by placed after command.
   HISTORY-LABEL. HISTORY-LABEL should be one of the history archives you have
   specified in the stellar-core.cfg. This will write a
   `.well-known/stellar-history.json` file in the archive root.
+* **offline-close**: Forces stellar-core to close a specified number of empty
+  ledgers, strictly offline and starting from its current state, generating and
+  publishing history as it goes. Should only be used for special scenarios like
+  setting up test networks with artificial history.
 * **offline-info**: Returns an output similar to `--c info` for an offline
   instance, but written directly to standard output (ignoring log levels).
 * **print-xdr <FILE-NAME>**:  Pretty-print a binary file containing an XDR
@@ -184,9 +188,9 @@ format.
   `droppeer?node=NODE_ID[&ban=D]`<br>
   Drops peer identified by NODE_ID, when D is 1 the peer is also banned.
 
-* **info**
+* **info[?compact=true]**
   Returns information about the server in JSON format (sync state, connected
-  peers, etc).
+  peers, etc). When `compact` is set to `false`, adds additional information
 
 * **ll**  
   `ll?level=L[&partition=P]`<br>
@@ -296,6 +300,12 @@ format.
         When specified it must match one of the protocol versions supported
         by the node and should be greater than ledgerVersion from the current
         ledger<br>
+    * `configupgradesetkey` (base64 encoded XDR serialized `ConfigUpgradeSetKey`)
+        this key will be converted to a ContractData LedgerKey, and the
+        ContractData LedgerEntry retrieved with that will have a val of SCV_BYTES
+        containing a serialized ConfigUpgradeSet. Each ConfigSettingEntry in the
+        ConfigUpgradeSet will be used to update the existing network ConfigSettingEntry
+        that exists at the corresponding CONFIG_SETTING LedgerKey.
 
 * **surveytopology**
   `surveytopology?duration=DURATION&node=NODE_ID`<br>
@@ -320,24 +330,37 @@ format.
   is started
 
 ### The following HTTP commands are exposed on test instances
-* **generateload**
-  `generateload[?mode=(create|pay|pretend)&accounts=N&offset=K&txs=M&txrate=R&batchsize=L&spikesize=S&spikeinterval=I]`<br>
-  Artificially generate load for testing; must be used with
-  `ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING` set to true.
-  * `create` mode creates new accounts.
-    Additionally, allows batching up to 100 account creations per transaction via 'batchsize'.
+* **generateload** `generateload[?mode=
+    (create|pay|pretend|mixed_txs)&accounts=N&offset=K&txs=M&txrate=R&batchsize=L&spikesize=S&spikeinterval=I&maxfeerate=F&skiplowfeetxs=(0|1)&dextxpercent=D]`
+
+    Artificially generate load for testing; must be used with
+    `ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING` set to true.
+  * `create` mode creates new accounts. Additionally, allows batching up to 100
+    account creations per transaction via `batchsize`.
   * `pay` mode generates `PaymentOp` transactions on accounts specified
     (where the number of accounts can be offset).
-  * `pretend` mode generates transactions on accounts specified
-    (where the number of accounts can be offset). Operations in `pretend` mode are
-    designed to have a realistic size to help users "pretend" that they have real traffic.
+  * `pretend` mode generates transactions on accounts specified(where the number
+    of accounts can be offset). Operations in `pretend` mode are designed to
+    have a realistic size to help users "pretend" that they have real traffic.
     You can add optional configs `LOADGEN_OP_COUNT_FOR_TESTING` and
     `LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING` in the config file to specify
-    the # of ops / tx and how often they appear. More specifically, the probability
-    that a transaction contains `COUNT[i]` ops is
-    `DISTRIBUTION[i] / (DISTRIBUTION[0] + DISTRIBUTION[1] + ...)`.
+    the # of ops / tx and how often they appear. More specifically, the
+    probability that a transaction contains `COUNT[i]` ops is `DISTRIBUTION
+    [i] / (DISTRIBUTION[0] + DISTRIBUTION[1] + ...)`.
+  * `mixed_txs` mode generates a mix of DEX and non-DEX transactions
+    (containing `PaymentOp` and `ManageBuyOfferOp` operations respectively).
+    The fraction of DEX transactions generated is defined by the `dextxpercent`
+    parameter (accepts integer value from 0 to 100).
 
-  For `pay` and `pretend`, when a nonzero I is given, a spike will occur every I seconds injecting S transactions on top of `txrate`.
+  Non-`create` load generation makes use of the additional parameters:
+  * when a nonzero `spikeinterval` is given, a spike will occur every
+    `spikeinterval` seconds injecting `spikesize` transactions on top of
+    `txrate`
+  * `maxfeerate` defines the maximum per-operation fee for generated
+    transactions (when not specified only minimum base fee is used)
+  * when `skiplowfeetxs` is set to `true` the transactions that are not accepted by
+    the node due to having too low fee to pass the rate limiting are silently
+    skipped. Otherwise (by default), such transactions would cause load generation to fail.
 
 * **manualclose**
   If MANUAL_CLOSE is set to true in the .cfg file, this will cause the current

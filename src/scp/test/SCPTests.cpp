@@ -222,6 +222,12 @@ class TestSCP : public SCPDriver
                       cb};
     }
 
+    void
+    stopTimer(uint64 slotIndex, int timerID) override
+    {
+        mTimers.erase(timerID);
+    }
+
     TimerData
     getBallotProtocolTimer()
     {
@@ -2735,19 +2741,18 @@ TEST_CASE("nomination tests core5", "[scp][nominationprotocol]")
                             0,
                             scp2.wrapEnvelope(makeNominate(
                                 v0SecretKey, qSetHash0, 0, votes, accepted)));
-                        // tries to start nomination with yValue
-                        REQUIRE(scp2.nominate(0, yValue, false));
+                        // tries to start nomination with yValue, but picks
+                        // xValue since it was already in the votes
+                        REQUIRE(!scp2.nominate(0, yValue, false));
 
                         checkLeaders(scp2, {v0SecretKey.getPublicKey()});
 
-                        REQUIRE(scp2.mEnvs.size() == 1);
-                        verifyNominate(scp2.mEnvs[0], v0SecretKey, qSetHash0, 0,
-                                       votes2, accepted);
+                        REQUIRE(scp2.mEnvs.size() == 0);
 
                         // other nodes vote for 'x'
                         scp2.receiveEnvelope(nom1);
                         scp2.receiveEnvelope(nom2);
-                        REQUIRE(scp2.mEnvs.size() == 1);
+                        REQUIRE(scp2.mEnvs.size() == 0);
                         // 'x' is accepted (quorum)
                         // but because the restored state already included
                         // 'x' in the accepted set, no new message is emitted
@@ -2759,7 +2764,7 @@ TEST_CASE("nomination tests core5", "[scp][nominationprotocol]")
                         // other nodes not emit 'x' as accepted
                         scp2.receiveEnvelope(acc1);
                         scp2.receiveEnvelope(acc2);
-                        REQUIRE(scp2.mEnvs.size() == 1);
+                        REQUIRE(scp2.mEnvs.size() == 0);
 
                         scp2.mCompositeValue = xValue;
                         // this causes the node to update its composite value to
@@ -2771,9 +2776,9 @@ TEST_CASE("nomination tests core5", "[scp][nominationprotocol]")
                     {
                         nominationRestore();
                         // nomination ended up starting the ballot protocol
-                        REQUIRE(scp2.mEnvs.size() == 2);
+                        REQUIRE(scp2.mEnvs.size() == 1);
 
-                        verifyPrepare(scp2.mEnvs[1], v0SecretKey, qSetHash0, 0,
+                        verifyPrepare(scp2.mEnvs[0], v0SecretKey, qSetHash0, 0,
                                       SCPBallot(1, xValue));
                     }
                     SECTION("ballot protocol started (on value k)")
@@ -2784,7 +2789,7 @@ TEST_CASE("nomination tests core5", "[scp][nominationprotocol]")
                                                SCPBallot(1, kValue))));
                         nominationRestore();
                         // nomination didn't do anything (already working on k)
-                        REQUIRE(scp2.mEnvs.size() == 1);
+                        REQUIRE(scp2.mEnvs.size() == 0);
                     }
                 }
             }
@@ -2814,6 +2819,57 @@ TEST_CASE("nomination tests core5", "[scp][nominationprotocol]")
                 std::sort(votesXK.begin(), votesXK.end());
 
                 verifyNominate(scp.mEnvs[1], v0SecretKey, qSetHash0, 0, votesXK,
+                               {});
+            }
+            SECTION("select accepted value from leader")
+            {
+                REQUIRE(xValue < yValue);
+                REQUIRE(yValue < zValue);
+                REQUIRE(scp.mEnvs.size() == 1);
+
+                // Update round leader to v1
+                scp.mPriorityLookup = [&](NodeID const& n) {
+                    return (n == v1NodeID) ? 1000 : 1;
+                };
+
+                SCPEnvelope nom1 = makeNominate(v1SecretKey, qSetHash, 0,
+                                                {yValue, zValue}, {yValue});
+
+                SECTION("receive accepted before timeout")
+                {
+                    // nothing more happens, v0 is leader
+                    scp.receiveEnvelope(nom1);
+                    REQUIRE(scp.mEnvs.size() == 1);
+
+                    // Update round leaders, vote for accepted value (y)
+                    REQUIRE(scp.nominate(0, xValue, true));
+                    REQUIRE(scp.mEnvs.size() == 2);
+                }
+                SECTION("receive accepted after timeout")
+                {
+                    REQUIRE(!scp.nominate(0, xValue, true));
+                    REQUIRE(scp.mEnvs.size() == 1);
+
+                    // Vote for accepted value (y)
+                    scp.receiveEnvelope(nom1);
+                    REQUIRE(scp.mEnvs.size() == 2);
+                }
+
+                std::vector<Value> votesXY;
+                votesXY.emplace_back(xValue);
+                votesXY.emplace_back(yValue);
+
+                verifyNominate(scp.mEnvs[1], v0SecretKey, qSetHash0, 0, votesXY,
+                               {});
+
+                SCPEnvelope nom2 =
+                    makeNominate(v1SecretKey, qSetHash, 0,
+                                 {yValue, zValue, zzValue}, {yValue});
+                scp.receiveEnvelope(nom2);
+                // Nothing happens, as v0 already voted for the accepted value
+                // (y)
+                REQUIRE(scp.mEnvs.size() == 2);
+                verifyNominate(scp.mEnvs[1], v0SecretKey, qSetHash0, 0, votesXY,
                                {});
             }
         }
@@ -2945,6 +3001,58 @@ TEST_CASE("nomination tests core5", "[scp][nominationprotocol]")
         SCPEnvelope nom2 =
             makeNominate(v2SecretKey, qSetHash, 0, votesXK, emptyV);
 
+        SECTION("value from v1 is a candidate, self should not introduce new "
+                "value on timeout")
+        {
+            REQUIRE(!scp.nominate(0, xValue, false));
+            checkLeaders(scp, {v1SecretKey.getPublicKey()});
+
+            REQUIRE(scp.mEnvs.size() == 0);
+            nom1 = makeNominate(v1SecretKey, qSetHash, 0, votesX, emptyV);
+            nom2 = makeNominate(v2SecretKey, qSetHash, 0, votesX, emptyV);
+            SCPEnvelope nom3 =
+                makeNominate(v3SecretKey, qSetHash, 0, votesX, emptyV);
+
+            // Receive `x` from v1, vote for it
+            scp.receiveEnvelope(nom1);
+            REQUIRE(scp.mEnvs.size() == 1);
+            verifyNominate(scp.mEnvs[0], v0SecretKey, qSetHash0, 0, votesX,
+                           emptyV);
+
+            scp.receiveEnvelope(nom2);
+            scp.receiveEnvelope(nom3);
+            REQUIRE(scp.mEnvs.size() == 2);
+            verifyNominate(scp.mEnvs[1], v0SecretKey, qSetHash0, 0, votesX,
+                           votesX);
+
+            SCPEnvelope acc1 =
+                makeNominate(v1SecretKey, qSetHash, 0, votesX, votesX);
+            SCPEnvelope acc2 =
+                makeNominate(v2SecretKey, qSetHash, 0, votesX, votesX);
+            SCPEnvelope acc3 =
+                makeNominate(v3SecretKey, qSetHash, 0, votesX, votesX);
+
+            scp.receiveEnvelope(acc1);
+            scp.receiveEnvelope(acc2);
+            REQUIRE(scp.mEnvs.size() == 2);
+
+            // Receive accept from quorum, ratify and generate a candidate value
+            REQUIRE(scp.mTimers.find(Slot::NOMINATION_TIMER) !=
+                    scp.mTimers.end());
+            scp.mCompositeValue = xValue;
+            scp.mExpectedCandidates.emplace(xValue);
+            scp.receiveEnvelope(acc3);
+            REQUIRE(scp.mEnvs.size() == 3);
+            // Timer is cancelled
+            REQUIRE(scp.mTimers.find(Slot::NOMINATION_TIMER) ==
+                    scp.mTimers.end());
+
+            // v0 is the new leader, but we already have a candidate
+            scp.mPriorityLookup = [&](NodeID const& n) {
+                return (n == v0NodeID) ? 1000 : 1;
+            };
+            REQUIRE(!scp.nominate(0, kValue, true));
+        }
         SECTION("nomination waits for v1")
         {
             REQUIRE(!scp.nominate(0, xValue, false));

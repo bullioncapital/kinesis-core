@@ -100,12 +100,18 @@ struct OverlayMetrics
     medida::Meter& mBannedMessageUnfulfilledMeter;
     medida::Meter& mUnknownMessageUnfulfilledMeter;
     medida::Timer& mTxPullLatency;
+    medida::Timer& mPeerTxPullLatency;
+    medida::Timer& mAdvertQueueDelay;
+
+    medida::Meter& mDemandTimeouts;
+    medida::Meter& mPulledRelevantTxs;
+    medida::Meter& mPulledIrrelevantTxs;
+
     medida::Meter& mAbandonedDemandMeter;
 
     medida::Meter& mMessagesBroadcast;
     medida::Counter& mPendingPeersSize;
     medida::Counter& mAuthenticatedPeersSize;
-    medida::Counter& mPullModePercent;
 
     medida::Meter& mUniqueFloodBytesRecv;
     medida::Meter& mDuplicateFloodBytesRecv;

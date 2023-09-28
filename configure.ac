@@ -250,7 +250,7 @@ if test "$FS_WORKS" = "no"; then
 fi
 
 # prefer 10 as it's the one we use
-AC_CHECK_PROGS(CLANG_FORMAT, [clang-format-10 clang-format])
+AC_CHECK_PROGS(CLANG_FORMAT, [clang-format-12 clang-format])
 AM_CONDITIONAL([USE_CLANG_FORMAT], [test "x$CLANG_FORMAT" != "x"])
 
 AX_VALGRIND_CHECK
@@ -384,6 +384,12 @@ AC_ARG_ENABLE(next-protocol-version-unsafe-for-production,
         [Enable next protocol version UNSAFE FOR PRODUCTION]))
 AM_CONDITIONAL(ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION,
     [test x$enable_next_protocol_version_unsafe_for_production = xyes])
+
+AC_ARG_ENABLE(protocol-upgrade-via-soroban-env-host-prev,
+    AS_HELP_STRING([--enable-protocol-upgrade-via-soroban-env-host-prev],
+        [Pass "--feature=soroban-env-host-prev" to "cargo build" to enable protocol upgrades]))
+AM_CONDITIONAL(ENABLE_PROTOCOL_UPGRADE_VIA_SOROBAN_ENV_HOST_PREV,
+    [test x$enable_protocol_upgrade_via_soroban_env_host_prev = xyes])
 
 AC_ARG_ENABLE(libunwind,
     AS_HELP_STRING([--disable-libunwind],
