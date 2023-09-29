@@ -33,7 +33,7 @@ RUN ./setup.sh
 # See https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
 # For STELLAR_CORE_VERSION, refer https://apt.stellar.org/pool/stable/s/stellar-core/
 ARG DISTRO=focal
-ARG STELLAR_CORE_VERSION=19.4.0-1075.39bee1a2b.focal
+ARG STELLAR_CORE_VERSION=19.11.0-1323.7fb6d5e88.focal
 
 #install stellar-core
 RUN wget -qO - https://apt.stellar.org/SDF.asc | apt-key add -
