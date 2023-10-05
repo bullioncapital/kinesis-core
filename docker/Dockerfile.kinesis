@@ -1,0 +1,50 @@
+ARG DISTRO=focal
+#ARG CORE_BUILDER_IMAGE=core-builder:local19.4.0
+ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:latest
+
+##########################################################################################################
+# # Build stage, includes everything needed to build.
+FROM ${CORE_BUILDER_IMAGE} as buildstage
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG NPROC=2
+ARG BUILD="enable-tests"
+
+COPY . /stellar-core
+
+WORKDIR /stellar-core
+RUN git submodule init && git submodule update
+RUN  ./docker/ci-kinesis "${BUILD}" ${NPROC}
+
+##########################################################################################################
+# replace stellar-core
+FROM ubuntu:${DISTRO}
+
+EXPOSE 11625
+EXPOSE 11626
+
+VOLUME /data
+VOLUME /postgresql-unix-sockets
+
+ADD docker/setup /setup.sh
+RUN ./setup.sh
+
+# We need to repeat ARG here to make it available inside build context
+# See https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
+# For STELLAR_CORE_VERSION, refer https://apt.stellar.org/pool/stable/s/stellar-core/
+ARG DISTRO=focal
+ARG STELLAR_CORE_VERSION=19.11.0-1323.7fb6d5e88.focal
+
+#install stellar-core
+RUN wget -qO - https://apt.stellar.org/SDF.asc | apt-key add -
+RUN echo "deb https://apt.stellar.org ${DISTRO} unstable" | tee -a /etc/apt/sources.list.d/SDF-unstable.list
+RUN apt-get update && apt-get install -y stellar-core=${STELLAR_CORE_VERSION}
+
+WORKDIR "/etc/stellar"
+
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install jq -y && apt-get autoclean
+
+COPY --from=buildstage /usr/local/bin/stellar-core /usr/bin/stellar-core
+
+ENTRYPOINT ["stellar-core"]

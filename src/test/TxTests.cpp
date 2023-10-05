@@ -30,6 +30,7 @@
 #include "util/types.h"
 #include "xdrpp/autocheck.h"
 
+#include "util/XDRCereal.h"
 #include <lib/catch.hpp>
 
 using namespace stellar;
@@ -318,7 +319,6 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
                             REQUIRE(previous);
                             REQUIRE(previous->type() ==
                                     InternalLedgerEntryType::LEDGER_ENTRY);
-
                             // From V13, it's possible to remove one-time
                             // signers on early failures
                             if (protocolVersionStartsFrom(
@@ -624,6 +624,7 @@ transactionFromOperationsV0(Application& app, SecretKey const& from,
                  : static_cast<uint32_t>(
                        (ops.size() * app.getLedgerManager().getLastTxFee()) &
                        UINT32_MAX);
+
     e.v0().tx.seqNum = seq;
     std::copy(std::begin(ops), std::end(ops),
               std::back_inserter(e.v0().tx.operations));

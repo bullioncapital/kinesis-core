@@ -7,6 +7,7 @@
 #include "ledger/LedgerHashUtils.h"
 #include "ledger/LedgerManager.h"
 #include "ledger/NetworkConfig.h"
+#include "main/Application.h"
 #include "overlay/StellarXDR.h"
 #include "util/types.h"
 #include <medida/metrics_registry.h>

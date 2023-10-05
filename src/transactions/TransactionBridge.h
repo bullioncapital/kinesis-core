@@ -28,7 +28,7 @@ xdr::xvector<DecoratedSignature, 20>& getSignatures(TransactionFramePtr tx);
 
 void setSeqNum(TransactionFramePtr tx, int64_t seq);
 
-void setFee(TransactionFramePtr tx, uint32_t fee);
+void setFee(TransactionFramePtr tx, uint64_t fee);
 
 void setMemo(TransactionFramePtr tx, Memo memo);
 

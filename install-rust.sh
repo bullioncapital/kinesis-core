@@ -27,6 +27,9 @@ RUST_VERSION=$(perl -ne 'if (/channel\s+=\s+"(\d+\.\d+)"/) { print $1 }' rust-to
 # either manually or via one of the Docker image build processes.
 RUSTUP_VERSION=1.25.1
 
+# The host triple should basically never change. But just in case.
+HOST_TRIPLE=x86_64-unknown-linux-gnu
+
 # This is the SHA256 if the rustup-init binary (which is the same as rustup --
 # it renames itself) and should be retrieved from a trusted source (eg. the rust
 # website and/or by running sha256sum on a local copy of rustup you believe to
