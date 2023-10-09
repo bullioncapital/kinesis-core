@@ -595,7 +595,6 @@ TEST_CASE("Ledger Manager applies upgrades properly", "[upgrades]")
     auto app = createTestApplication(clock, cfg);
 
     auto const& lcl = app->getLedgerManager().getLastClosedLedgerHeader();
-    auto const& lastHash = lcl.hash;
 
     REQUIRE(lcl.header.ledgerVersion == LedgerManager::GENESIS_LEDGER_VERSION);
     REQUIRE(lcl.header.baseFee == LedgerManager::GENESIS_LEDGER_BASE_FEE);
@@ -905,7 +904,6 @@ TEST_CASE("upgrade to version 10", "[upgrades]")
     auto& lm = app->getLedgerManager();
     auto txFee = lm.getLastTxFee();
 
-    auto const& lcl = lm.getLastClosedLedgerHeader();
     auto root = TestAccount::createRoot(*app);
     auto issuer = root.create("issuer", lm.getLastMinBalance(0) + 100 * txFee);
     auto native = txtest::makeNativeAsset();

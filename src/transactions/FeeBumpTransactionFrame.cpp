@@ -18,9 +18,7 @@
 #include "transactions/TransactionMetaFrame.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
-#include "util/Logging.h"
 #include "util/ProtocolVersion.h"
-#include "util/XDRCereal.h"
 #include "util/numeric128.h"
 #include "xdrpp/marshal.h"
 

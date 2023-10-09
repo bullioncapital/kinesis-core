@@ -1,5 +1,4 @@
 ARG DISTRO=focal
-#ARG CORE_BUILDER_IMAGE=core-builder:local19.4.0
 ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:latest
 
 ##########################################################################################################

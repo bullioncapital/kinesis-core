@@ -1,5 +1,3 @@
 #include "main/StellarCoreVersion.h"
 
-//const std::string STELLAR_CORE_VERSION = "%%VERSION%%";
-const std::string STELLAR_CORE_VERSION = "v19.11.0-1323.7fb6d5e88";
-
+const std::string STELLAR_CORE_VERSION = "%%VERSION%%";
