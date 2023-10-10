@@ -1822,9 +1822,6 @@ int64_t
 getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
           std::optional<int64_t> baseFee)
 {
-    // auto innerTxMinFee = tx.getMinFee(header);
-    // auto feeBumpMinFee = ((int64_t)header.baseFee) + innerTxMinFee;
-    // return feeBumpMinFee;
     int64_t effectiveBaseFee = header.baseFee;
 
     if (baseFee)
@@ -1867,20 +1864,9 @@ getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
     accumulatedBasePercentageFee +=
         (int64_t)(totalAmount * basePercentageFeeRate);
     int64_t totalFee = effectiveBaseFee + accumulatedBasePercentageFee;
-    //  CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getMinFee() -
-    //  header.baseFee: {}, baseFee: {}, amount: {}, totalFee: {}",
-    //   header.baseFee, baseFee, totalAmount, totalFee
-    //);
     int64_t headerMaxFee = (int64_t)header.maxFee;
     totalFee = totalFee > headerMaxFee ? headerMaxFee : totalFee;
     return totalFee;
-
-    //     // return totalFee;
-    //     auto feeBumpMinFee = ((int64_t)header.baseFee) + totalFee;
-    //     // CLOG_DEBUG(Tx, "FeeBumpTransactionFrame - {} getMinFee {}",
-    //     //       xdr_to_string(getFullHash(), "fullHash"),
-    //     //     feeBumpMinFee);
-    //     return feeBumpMinFee;
 }
 #else
 int64_t

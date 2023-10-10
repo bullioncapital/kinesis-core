@@ -29,7 +29,6 @@
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
 #include "util/ProtocolVersion.h"
-#include "util/XDRCereal.h"
 #include "util/XDROperators.h"
 #include "util/XDRStream.h"
 #include "xdr/Stellar-ledger.h"
@@ -202,8 +201,6 @@ TransactionFrame::getFullFee() const
     auto feeBid = mEnvelope.type() == ENVELOPE_TYPE_TX_V0
                       ? mEnvelope.v0().tx.fee
                       : mEnvelope.v1().tx.fee;
-    //  CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getFeeBid() - feeBid: {}",
-    //  feeBid);
     return feeBid;
 }
 
@@ -442,10 +439,6 @@ TransactionFrame::resetResults(LedgerHeader const& header,
     // feeCharged is updated accordingly to represent the cost of the
     // transaction regardless of the failure modes.
     auto feeCharged = getFee(header, baseFee, applying);
-    //   CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::resetResults() Fee
-    //   charged: {}, ops: {}, baseFee: {}, applying: {}",
-    //     feeCharged, ops.size(), baseFee, applying
-    //   );
     getResult().feeCharged = feeCharged;
 }
 
@@ -1158,9 +1151,6 @@ TransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx,
 {
     ZoneScoped;
     mCachedAccount.reset();
-
-    // CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::processFeeSeqNum() -
-    // baseFee: {}", baseFee);
 
     auto header = ltx.loadHeader();
     resetResults(header.current(), baseFee, true);

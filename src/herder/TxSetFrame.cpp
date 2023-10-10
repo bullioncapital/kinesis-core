@@ -615,9 +615,6 @@ TxSetFrame::computeTxFees(LedgerHeader const& lclHeader, int64_t lowestBaseFee,
             surgeOpsCutoff = lclHeader.maxTxSetSize - MAX_OPS_PER_TX;
         }
 
-        CLOG_DEBUG(Tx,
-                   "**Kinesis** TxSetFrame::getBaseFee() - surgeOpsCutOff: {}",
-                   surgeOpsCutoff);
         if (sizeOp() > surgeOpsCutoff)
         {
             baseFee = lowestBaseFee;
