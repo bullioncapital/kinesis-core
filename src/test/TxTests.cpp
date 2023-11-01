@@ -318,7 +318,7 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
                             REQUIRE(previous);
                             REQUIRE(previous->type() ==
                                     InternalLedgerEntryType::LEDGER_ENTRY);
-
+                                    
                             // From V13, it's possible to remove one-time
                             // signers on early failures
                             if (protocolVersionStartsFrom(

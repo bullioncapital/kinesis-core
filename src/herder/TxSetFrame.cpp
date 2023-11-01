@@ -614,6 +614,7 @@ TxSetFrame::computeTxFees(LedgerHeader const& lclHeader, int64_t lowestBaseFee,
         {
             surgeOpsCutoff = lclHeader.maxTxSetSize - MAX_OPS_PER_TX;
         }
+
         if (sizeOp() > surgeOpsCutoff)
         {
             baseFee = lowestBaseFee;
@@ -625,6 +626,8 @@ TxSetFrame::computeTxFees(LedgerHeader const& lclHeader, int64_t lowestBaseFee,
         }
     }
 
+    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getBaseFee() - baseFee: {}",
+               baseFee);
     for (auto const& tx : mTxs)
     {
         mTxBaseFee[tx] = baseFee;
@@ -701,11 +704,14 @@ int64_t
 TxSetFrame::getTotalFees(LedgerHeader const& lh) const
 {
     ZoneScoped;
-    return std::accumulate(mTxs.begin(), mTxs.end(), int64_t(0),
-                           [&](int64_t t, TransactionFrameBasePtr const& tx) {
-                               return t + tx->getFee(lh, getTxBaseFee(tx, lh),
-                                                     true);
-                           });
+    auto totalFee = std::accumulate(
+        mTxs.begin(), mTxs.end(), int64_t(0),
+        [&](int64_t t, TransactionFrameBasePtr const& tx) {
+            return t + tx->getFee(lh, getTxBaseFee(tx, lh), true);
+        });
+    CLOG_DEBUG(Tx, "**Kinesis** TxSetFrame::getTotalFees() - totalFee: {}",
+               totalFee);
+    return totalFee;
 }
 
 int64_t

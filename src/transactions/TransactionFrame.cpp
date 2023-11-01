@@ -198,8 +198,10 @@ TransactionFrame::getRawOperations() const
 int64_t
 TransactionFrame::getFullFee() const
 {
-    return mEnvelope.type() == ENVELOPE_TYPE_TX_V0 ? mEnvelope.v0().tx.fee
-                                                   : mEnvelope.v1().tx.fee;
+    auto feeBid = mEnvelope.type() == ENVELOPE_TYPE_TX_V0
+                      ? mEnvelope.v0().tx.fee
+                      : mEnvelope.v1().tx.fee;
+    return feeBid;
 }
 
 int64_t

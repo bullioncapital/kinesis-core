@@ -329,6 +329,10 @@ class Config : public std::enable_shared_from_this<Config>
     // not setable in config file - only tests are allowed to do this
     bool USE_CONFIG_FOR_GENESIS;
 
+#ifdef _KINESIS
+    bool KINESIS_TESTING_DEFAULT_LEDGER;
+#endif
+
     // This is the number of failures you want to be able to tolerate.
     // You will need at least 3f+1 nodes in your quorum set.
     // If you don't have enough in your quorum set to tolerate the level you
@@ -434,8 +438,10 @@ class Config : public std::enable_shared_from_this<Config>
     // the genesis ledger version (only when USE_CONFIG_FOR_GENESIS is true) 2.
     // as the protocol version for Upgrades.
     uint32_t TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION;
-    uint32_t TESTING_UPGRADE_DESIRED_FEE; // in stroops
-    uint32_t TESTING_UPGRADE_RESERVE;     // in stroops
+    uint32_t TESTING_UPGRADE_DESIRED_FEE;            // in stroops
+    uint32_t TESTING_UPGRADE_RESERVE;                // in stroops
+    uint32_t TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE; // in basis points
+    uint64_t TESTING_UPGRADE_DESIRED_MAX_FEE;        // max fee in stroops
     uint32_t TESTING_UPGRADE_MAX_TX_SET_SIZE;
     uint32_t TESTING_UPGRADE_FLAGS;
     unsigned short HTTP_PORT; // what port to listen for commands

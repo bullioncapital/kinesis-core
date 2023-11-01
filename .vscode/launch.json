@@ -1,0 +1,66 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "clang++-10 - build & lldb debug",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/stellar-core",
+            "args": [
+                "test",
+                "[tx][envelope]",
+                "-r",
+                "junit",
+                "-o",
+                "testResults.xml"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "preLaunchTask": "Clang++-10 build",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for lldb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "MIMode": "lldb",
+            "miDebuggerPath": "/usr/bin/lldb-10",
+            "logging": { "engineLogging": true, "trace": true, "traceResponse": true }
+        },
+        {
+            "name": "clang++-10 - lldb debug",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/stellar-core",
+            "args": [
+                "test",
+                "[herder][txset]",
+                "-r",
+                "junit",
+                "-o",
+                "testResults.xml"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for lldb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "MIMode": "lldb",
+            "miDebuggerPath": "/usr/bin/lldb-10",
+            "logging": { "engineLogging": true, "trace": true, "traceResponse": true }
+        }
+
+    ]
+}
