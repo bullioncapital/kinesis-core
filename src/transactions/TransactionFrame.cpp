@@ -438,8 +438,7 @@ TransactionFrame::resetResults(LedgerHeader const& header,
 
     // feeCharged is updated accordingly to represent the cost of the
     // transaction regardless of the failure modes.
-    auto feeCharged = getFee(header, baseFee, applying);
-    getResult().feeCharged = feeCharged;
+    getResult().feeCharged = getFee(header, baseFee, applying);
 }
 
 std::optional<TimeBounds const> const
