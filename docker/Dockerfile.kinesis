@@ -3,7 +3,7 @@ ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:latest
 
 ##########################################################################################################
 # # Build stage, includes everything needed to build.
-FROM ${CORE_BUILDER_IMAGE} as buildstage
+FROM ${CORE_BUILDER_IMAGE} AS buildstage
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG NPROC=2
