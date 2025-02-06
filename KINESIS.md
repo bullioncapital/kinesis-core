@@ -76,4 +76,3 @@ Building for release:
 export TAG=kinesis-core:local
 docker build --build-arg NPROC=$(nproc) --build-arg BUILD=release -t $TAG . -f docker/Dockerfile.kinesis
 ```
-
