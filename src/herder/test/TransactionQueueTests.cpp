@@ -210,7 +210,7 @@ class TransactionQueueTest
     }
 
   private:
-    TransactionQueue mTransactionQueue;
+    ClassicTransactionQueue mTransactionQueue;
 };
 }
 
@@ -804,6 +804,9 @@ TEST_CASE("TransactionQueue hitting the rate limit",
     auto account1 = root.create("a1", minBalance2);
     auto account2 = root.create("a2", minBalance2);
     auto account3 = root.create("a3", minBalance2);
+    auto account4 = root.create("a4", minBalance2);
+    auto account5 = root.create("a5", minBalance2);
+    auto account6 = root.create("a6", minBalance2);
 
     TransactionQueueTest testQueue{*app};
     std::vector<TransactionFrameBasePtr> txs;
@@ -814,46 +817,48 @@ TEST_CASE("TransactionQueue hitting the rate limit",
     // Fill the queue/limiter with 8 ops (2 * 4) - any further ops should result
     // in eviction (limit is 2 * 4=TESTING_UPGRADE_MAX_TX_SET_SIZE).
     addTx(transaction(*app, account1, 1, 1, 200 * 1, 1));
-    addTx(transaction(*app, account1, 2, 1, 400 * 2, 2));
-    addTx(transaction(*app, account1, 3, 1, 100 * 1, 1));
-    addTx(transaction(*app, account2, 1, 1, 300 * 4, 4));
+    addTx(transaction(*app, account2, 1, 1, 400 * 2, 2));
+    addTx(transaction(*app, account3, 1, 1, 100 * 1, 1));
+    addTx(transaction(*app, account4, 1, 1, 300 * 4, 4));
 
     SECTION("cannot add low fee tx")
     {
-        auto tx = transaction(*app, account3, 1, 1, 300 * 3, 3);
+        auto tx = transaction(*app, account5, 1, 1, 300 * 3, 3);
         testQueue.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
         REQUIRE(tx->getResult().result.code() == txINSUFFICIENT_FEE);
         REQUIRE(tx->getResult().feeCharged == 300 * 3 + 1);
     }
     SECTION("add high fee tx with eviction")
     {
-        auto tx = transaction(*app, account3, 1, 1, 300 * 3 + 1, 3);
+        auto tx = transaction(*app, account5, 1, 1, 300 * 3 + 1, 3);
         testQueue.add(tx, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-        // Evict all txs from `account1` as `tx[2]` can't be applied
-        // after `tx[1]` is evicted.
+        // Evict txs from `account1`, `account3` and `account4`
         testQueue.check(
-            {{{account1}, {account2, 0, {txs[3]}}, {account3, 0, {tx}}},
-             {{txs[0], txs[1], txs[2]}, {}}});
+            {{{account1}, {account2, 0, {txs[1]}}, {account5, 0, {tx}}},
+             {{txs[0], txs[2], txs[3]}, {}}});
 
         SECTION("then cannot add tx with lower fee than evicted")
         {
-            auto nextTx = transaction(*app, account3, 2, 1, 200, 1);
+            auto nextTx = transaction(*app, account6, 1, 1, 300, 1);
             testQueue.add(nextTx,
                           TransactionQueue::AddResult::ADD_STATUS_ERROR);
             REQUIRE(nextTx->getResult().result.code() == txINSUFFICIENT_FEE);
-            REQUIRE(nextTx->getResult().feeCharged == 201);
+            REQUIRE(nextTx->getResult().feeCharged == 301);
         }
         SECTION("then add tx with higher fee than evicted")
         {
             // The last evicted fee rate we accounted for was 200 (tx with fee
             // rate 400 is evicted due to seq num and is not accounted for).
-            auto nextTx = transaction(*app, account3, 2, 1, 201, 1);
+            auto nextTx = transaction(*app, account6, 1, 1, 301, 1);
             testQueue.add(nextTx,
                           TransactionQueue::AddResult::ADD_STATUS_PENDING);
             testQueue.check({{{account1},
-                              {account2, 0, {txs[3]}},
-                              {account3, 0, {tx, nextTx}}},
-                             {{txs[0], txs[1], txs[2]}, {}}});
+                              {account2, 0, {txs[1]}},
+                              {account3},
+                              {account4},
+                              {account5, 0, {tx}},
+                              {account6, 0, {nextTx}}},
+                             {{txs[0], txs[2], txs[3]}, {}}});
         }
     }
 }
@@ -865,493 +870,459 @@ TEST_CASE_VERSIONS("TransactionQueue with PreconditionsV2",
     auto cfg = getTestConfig();
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 4;
     cfg.FLOOD_TX_PERIOD_MS = 100;
+    cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = 19;
+    cfg.LIMIT_TX_QUEUE_SOURCE_ACCOUNT = false;
     auto app = createTestApplication(clock, cfg);
     auto const minBalance2 = app->getLedgerManager().getLastMinBalance(2);
+    // Not applicable for version 20 and onwards due to source account limit in
+    // tx queue
 
-    for_versions_from(19, *app, [&] {
-        auto root = TestAccount::createRoot(*app);
-        auto account1 = root.create("a1", minBalance2);
-        auto account2 = root.create("a2", minBalance2);
+    auto root = TestAccount::createRoot(*app);
+    auto account1 = root.create("a1", minBalance2);
+    auto account2 = root.create("a2", minBalance2);
 
-        // use bumpSequence to update account1's seqLedger
-        account1.bumpSequence(1);
+    // use bumpSequence to update account1's seqLedger
+    account1.bumpSequence(1);
 
-        auto txSeqA1S1 = transaction(*app, account1, 1, 1, 200);
-        auto txSeqA1S2 = transaction(*app, account1, 2, 1, 200);
-        auto txSeqA1S6 = transaction(*app, account1, 6, 1, 200);
+    auto txSeqA1S1 = transaction(*app, account1, 1, 1, 200);
+    auto txSeqA1S2 = transaction(*app, account1, 2, 1, 200);
+    auto txSeqA1S6 = transaction(*app, account1, 6, 1, 200);
 
-        PreconditionsV2 condMinSeqNum;
-        condMinSeqNum.minSeqNum.activate() = 2;
+    PreconditionsV2 condMinSeqNum;
+    condMinSeqNum.minSeqNum.activate() = 2;
 
-        auto txSeqA1S5MinSeqNum = transactionWithV2Precondition(
-            *app, account1, 5, 200, condMinSeqNum);
+    auto txSeqA1S5MinSeqNum =
+        transactionWithV2Precondition(*app, account1, 5, 200, condMinSeqNum);
 
-        auto txSeqA1S4MinSeqNum = transactionWithV2Precondition(
-            *app, account1, 4, 200, condMinSeqNum);
+    auto txSeqA1S4MinSeqNum =
+        transactionWithV2Precondition(*app, account1, 4, 200, condMinSeqNum);
 
-        auto txSeqA1S8MinSeqNum = transactionWithV2Precondition(
-            *app, account1, 8, 200, condMinSeqNum);
+    auto txSeqA1S8MinSeqNum =
+        transactionWithV2Precondition(*app, account1, 8, 200, condMinSeqNum);
 
-        PreconditionsV2 condMinSeqAge;
-        condMinSeqAge.minSeqAge = 1;
-        auto txSeqA1S3MinSeqAge = transactionWithV2Precondition(
-            *app, account1, 3, 200, condMinSeqAge);
+    PreconditionsV2 condMinSeqAge;
+    condMinSeqAge.minSeqAge = 1;
+    auto txSeqA1S3MinSeqAge =
+        transactionWithV2Precondition(*app, account1, 3, 200, condMinSeqAge);
 
-        PreconditionsV2 condMinSeqLedgerGap;
-        condMinSeqLedgerGap.minSeqLedgerGap = 1;
-        auto txSeqA1S3MinSeqLedgerGap = transactionWithV2Precondition(
-            *app, account1, 3, 200, condMinSeqLedgerGap);
+    PreconditionsV2 condMinSeqLedgerGap;
+    condMinSeqLedgerGap.minSeqLedgerGap = 1;
+    auto txSeqA1S3MinSeqLedgerGap = transactionWithV2Precondition(
+        *app, account1, 3, 200, condMinSeqLedgerGap);
 
-        SECTION("gap valid due to minSeqNum")
+    SECTION("gap valid due to minSeqNum")
+    {
+        TransactionQueueTest test{*app};
+        test.add(txSeqA1S1, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
         {
-            TransactionQueueTest test{*app};
-            test.add(txSeqA1S1,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            {
-                // Try tx with a minSeqNum that's not low enough
-                PreconditionsV2 cond;
-                cond.minSeqNum.activate() =
-                    account1.getLastSequenceNumber() + 2;
-                auto tx =
-                    transactionWithV2Precondition(*app, account1, 5, 200, cond);
-
-                test.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
-            }
-
-            test.add(txSeqA1S5MinSeqNum,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S6,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            // make sure duplicates are identified correctly
-            test.add(txSeqA1S1,
-                     TransactionQueue::AddResult::ADD_STATUS_DUPLICATE);
-            test.add(txSeqA1S5MinSeqNum,
-                     TransactionQueue::AddResult::ADD_STATUS_DUPLICATE);
-            test.add(txSeqA1S6,
-                     TransactionQueue::AddResult::ADD_STATUS_DUPLICATE);
-
-            // try to fill in gap with a tx
-            test.add(txSeqA1S2, TransactionQueue::AddResult::ADD_STATUS_ERROR);
-
-            // try to fill in gap with a minSeqNum tx
-            test.add(txSeqA1S4MinSeqNum,
-                     TransactionQueue::AddResult::ADD_STATUS_ERROR);
-
-            test.check(
-                {{{account1, 0, {txSeqA1S1, txSeqA1S5MinSeqNum, txSeqA1S6}},
-                  {account2}},
-                 {}});
-
-            // fee bump the existing minSeqNum tx
-            auto fb = feeBump(*app, account1, txSeqA1S5MinSeqNum, 4000);
-            test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            test.check(
-                {{{account1, 0, {txSeqA1S1, fb, txSeqA1S6}}, {account2}}, {}});
-
-            // fee bump a new minSeqNum tx
-            auto fb2 = feeBump(*app, account1, txSeqA1S8MinSeqNum, 400);
-            test.add(fb2, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            test.check(
-                {{{account1, 0, {txSeqA1S1, fb, txSeqA1S6, fb2}}, {account2}},
-                 {}});
-
-            SECTION("removeApplied")
-            {
-                // seqNum=2 and below should be removed here
-                test.removeApplied({txSeqA1S2});
-                test.check({{{account1, 0, {fb, txSeqA1S6, fb2}}, {account2}},
-                            {{txSeqA1S2}, {}}});
-
-                // seqNum=4. No change
-                test.removeApplied({txSeqA1S4MinSeqNum}, true);
-                test.check({{{account1, 0, {fb, txSeqA1S6, fb2}}, {account2}},
-                            {{txSeqA1S2, txSeqA1S4MinSeqNum}, {}}});
-
-                // seqNum=5 and below should be removed here
-                test.removeApplied({fb});
-                test.check({{{account1, 0, {txSeqA1S6, fb2}}, {account2}},
-                            {{txSeqA1S2, txSeqA1S4MinSeqNum, fb}, {}}});
-
-                SECTION("removeApplied last tx")
-                {
-                    // seqNum=8 and below should be removed here
-                    test.removeApplied({fb2});
-                    test.check(
-                        {{{account1, 0, {}}, {account2}},
-                         {{txSeqA1S2, txSeqA1S4MinSeqNum, fb, fb2}, {}}});
-                }
-                SECTION("removeApplied past last tx")
-                {
-                    // seqNum=9 and below should be removed here
-                    auto txSeqA1S9 = transaction(*app, account1, 9, 1, 200);
-                    test.removeApplied({txSeqA1S9});
-                    test.check(
-                        {{{account1, 0, {}}, {account2}},
-                         {{txSeqA1S2, txSeqA1S4MinSeqNum, fb, txSeqA1S9}, {}}});
-                }
-            }
-            SECTION("ban")
-            {
-                SECTION("ban first tx")
-                {
-                    test.ban({txSeqA1S1});
-                    test.check({{{account1, 0, {}}, {account2}},
-                                {{txSeqA1S1, fb, txSeqA1S6, fb2}}});
-                }
-                SECTION("ban missing tx")
-                {
-                    test.ban({txSeqA1S2});
-                    // no queue change
-                    test.check({{{account1, 0, {txSeqA1S1, fb, txSeqA1S6, fb2}},
-                                 {account2}},
-                                {{txSeqA1S2}}});
-                }
-                SECTION("ban existing tx with larger seqnum first, missing tx "
-                        "second")
-                {
-                    test.ban({fb, txSeqA1S2});
-                    test.check({{{account1, 0, {txSeqA1S1}}, {account2}},
-                                {{txSeqA1S2, fb, txSeqA1S6, fb2}}});
-                }
-            }
-        }
-        SECTION("fee bump new tx with minSeqNum past lastSeq")
-        {
+            // Try tx with a minSeqNum that's not low enough
             PreconditionsV2 cond;
             cond.minSeqNum.activate() = account1.getLastSequenceNumber() + 2;
             auto tx =
                 transactionWithV2Precondition(*app, account1, 5, 200, cond);
 
-            TransactionQueueTest test{*app};
             test.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
         }
-        SECTION("fee bump only existing tx")
+
+        test.add(txSeqA1S5MinSeqNum,
+                 TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S6, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        // make sure duplicates are identified correctly
+        test.add(txSeqA1S1, TransactionQueue::AddResult::ADD_STATUS_DUPLICATE);
+        test.add(txSeqA1S5MinSeqNum,
+                 TransactionQueue::AddResult::ADD_STATUS_DUPLICATE);
+        test.add(txSeqA1S6, TransactionQueue::AddResult::ADD_STATUS_DUPLICATE);
+
+        // try to fill in gap with a tx
+        test.add(txSeqA1S2, TransactionQueue::AddResult::ADD_STATUS_ERROR);
+
+        // try to fill in gap with a minSeqNum tx
+        test.add(txSeqA1S4MinSeqNum,
+                 TransactionQueue::AddResult::ADD_STATUS_ERROR);
+
+        test.check({{{account1, 0, {txSeqA1S1, txSeqA1S5MinSeqNum, txSeqA1S6}},
+                     {account2}},
+                    {}});
+
+        // fee bump the existing minSeqNum tx
+        auto fb = feeBump(*app, account1, txSeqA1S5MinSeqNum, 4000);
+        test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        test.check(
+            {{{account1, 0, {txSeqA1S1, fb, txSeqA1S6}}, {account2}}, {}});
+
+        // fee bump a new minSeqNum tx
+        auto fb2 = feeBump(*app, account1, txSeqA1S8MinSeqNum, 400);
+        test.add(fb2, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        test.check(
+            {{{account1, 0, {txSeqA1S1, fb, txSeqA1S6, fb2}}, {account2}}, {}});
+
+        SECTION("removeApplied")
+        {
+            // seqNum=2 and below should be removed here
+            test.removeApplied({txSeqA1S2});
+            test.check({{{account1, 0, {fb, txSeqA1S6, fb2}}, {account2}},
+                        {{txSeqA1S2}, {}}});
+
+            // seqNum=4. No change
+            test.removeApplied({txSeqA1S4MinSeqNum}, true);
+            test.check({{{account1, 0, {fb, txSeqA1S6, fb2}}, {account2}},
+                        {{txSeqA1S2, txSeqA1S4MinSeqNum}, {}}});
+
+            // seqNum=5 and below should be removed here
+            test.removeApplied({fb});
+            test.check({{{account1, 0, {txSeqA1S6, fb2}}, {account2}},
+                        {{txSeqA1S2, txSeqA1S4MinSeqNum, fb}, {}}});
+
+            SECTION("removeApplied last tx")
+            {
+                // seqNum=8 and below should be removed here
+                test.removeApplied({fb2});
+                test.check({{{account1, 0, {}}, {account2}},
+                            {{txSeqA1S2, txSeqA1S4MinSeqNum, fb, fb2}, {}}});
+            }
+            SECTION("removeApplied past last tx")
+            {
+                // seqNum=9 and below should be removed here
+                auto txSeqA1S9 = transaction(*app, account1, 9, 1, 200);
+                test.removeApplied({txSeqA1S9});
+                test.check(
+                    {{{account1, 0, {}}, {account2}},
+                     {{txSeqA1S2, txSeqA1S4MinSeqNum, fb, txSeqA1S9}, {}}});
+            }
+        }
+        SECTION("ban")
+        {
+            SECTION("ban first tx")
+            {
+                test.ban({txSeqA1S1});
+                test.check({{{account1, 0, {}}, {account2}},
+                            {{txSeqA1S1, fb, txSeqA1S6, fb2}}});
+            }
+            SECTION("ban missing tx")
+            {
+                test.ban({txSeqA1S2});
+                // no queue change
+                test.check({{{account1, 0, {txSeqA1S1, fb, txSeqA1S6, fb2}},
+                             {account2}},
+                            {{txSeqA1S2}}});
+            }
+            SECTION("ban existing tx with larger seqnum first, missing tx "
+                    "second")
+            {
+                test.ban({fb, txSeqA1S2});
+                test.check({{{account1, 0, {txSeqA1S1}}, {account2}},
+                            {{txSeqA1S2, fb, txSeqA1S6, fb2}}});
+            }
+        }
+    }
+    SECTION("fee bump new tx with minSeqNum past lastSeq")
+    {
+        PreconditionsV2 cond;
+        cond.minSeqNum.activate() = account1.getLastSequenceNumber() + 2;
+        auto tx = transactionWithV2Precondition(*app, account1, 5, 200, cond);
+
+        TransactionQueueTest test{*app};
+        test.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
+    }
+    SECTION("fee bump only existing tx")
+    {
+        PreconditionsV2 cond;
+        cond.minSeqNum.activate() = 2;
+        auto tx = transactionWithV2Precondition(*app, account1, 5, 200, cond);
+
+        TransactionQueueTest test{*app};
+        test.add(tx, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        auto fb = feeBump(*app, account1, tx, 4000);
+        test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        test.check({{{account1, 0, {fb}}, {account2}}, {}});
+    }
+    SECTION("fee bump existing tx and add minSeqNum")
+    {
+        TransactionQueueTest test{*app};
+        test.add(txSeqA1S1, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        PreconditionsV2 cond;
+        cond.minSeqNum.activate() = 2;
+
+        auto tx = transactionWithV2Precondition(*app, account1, 1, 200, cond);
+        auto fb = feeBump(*app, account1, tx, 4000);
+        test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        test.check({{{account1, 0, {fb}}, {account2}}, {}});
+    }
+    SECTION("fee bump existing tx and remove minSeqNum")
+    {
+        TransactionQueueTest test{*app};
+
+        PreconditionsV2 cond;
+        cond.minSeqNum.activate() = 2;
+
+        auto tx = transactionWithV2Precondition(*app, account1, 1, 200, cond);
+        test.add(tx, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        auto fb = feeBump(*app, account1, txSeqA1S1, 4000);
+        test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        test.check({{{account1, 0, {fb}}, {account2}}, {}});
+    }
+    SECTION("Try invalidating preconditions with fee bump")
+    {
+        TransactionQueueTest test{*app};
+        test.add(txSeqA1S1, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S5MinSeqNum,
+                 TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        // try removing minSeqNum from second tx
+        {
+            auto txS5 = transaction(*app, account1, 5, 1, 200);
+            auto fb = feeBump(*app, account1, txS5, 4000);
+            test.add(fb, TransactionQueue::AddResult::ADD_STATUS_ERROR);
+        }
+
+        // add minSeqLedgerGap to second tx
         {
             PreconditionsV2 cond;
             cond.minSeqNum.activate() = 2;
+            cond.minSeqLedgerGap = 1;
+
             auto tx =
                 transactionWithV2Precondition(*app, account1, 5, 200, cond);
 
-            TransactionQueueTest test{*app};
-            test.add(tx, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
             auto fb = feeBump(*app, account1, tx, 4000);
-            test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            test.check({{{account1, 0, {fb}}, {account2}}, {}});
+            test.add(fb,
+                     TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
         }
-        SECTION("fee bump existing tx and add minSeqNum")
-        {
-            TransactionQueueTest test{*app};
-            test.add(txSeqA1S1,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
 
+        // add minSeqAge to second tx
+        {
             PreconditionsV2 cond;
             cond.minSeqNum.activate() = 2;
-
-            auto tx =
-                transactionWithV2Precondition(*app, account1, 1, 200, cond);
-            auto fb = feeBump(*app, account1, tx, 4000);
-            test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            test.check({{{account1, 0, {fb}}, {account2}}, {}});
-        }
-        SECTION("fee bump existing tx and remove minSeqNum")
-        {
-            TransactionQueueTest test{*app};
-
-            PreconditionsV2 cond;
-            cond.minSeqNum.activate() = 2;
-
-            auto tx =
-                transactionWithV2Precondition(*app, account1, 1, 200, cond);
-            test.add(tx, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            auto fb = feeBump(*app, account1, txSeqA1S1, 4000);
-            test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            test.check({{{account1, 0, {fb}}, {account2}}, {}});
-        }
-        SECTION("Try invalidating preconditions with fee bump")
-        {
-            TransactionQueueTest test{*app};
-            test.add(txSeqA1S1,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S5MinSeqNum,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            // try removing minSeqNum from second tx
-            {
-                auto txS5 = transaction(*app, account1, 5, 1, 200);
-                auto fb = feeBump(*app, account1, txS5, 4000);
-                test.add(fb, TransactionQueue::AddResult::ADD_STATUS_ERROR);
-            }
-
-            // add minSeqLedgerGap to second tx
-            {
-                PreconditionsV2 cond;
-                cond.minSeqNum.activate() = 2;
-                cond.minSeqLedgerGap = 1;
-
-                auto tx =
-                    transactionWithV2Precondition(*app, account1, 5, 200, cond);
-
-                auto fb = feeBump(*app, account1, tx, 4000);
-                test.add(
-                    fb,
-                    TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
-            }
-
-            // add minSeqAge to second tx
-            {
-                PreconditionsV2 cond;
-                cond.minSeqNum.activate() = 2;
-                cond.minSeqAge = 1;
-
-                auto tx =
-                    transactionWithV2Precondition(*app, account1, 5, 200, cond);
-
-                auto fb = feeBump(*app, account1, tx, 4000);
-                test.add(
-                    fb,
-                    TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
-            }
-
-            test.check(
-                {{{account1, 0, {txSeqA1S1, txSeqA1S5MinSeqNum}}, {account2}},
-                 {}});
-        }
-        SECTION("remove unnecessary minSeqNum with feeBump")
-        {
-            TransactionQueueTest test{*app};
-
-            test.add(txSeqA1S1,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            auto txSeqA1S2MinSeqNum = transactionWithV2Precondition(
-                *app, account1, 2, 200, condMinSeqNum);
-            test.add(txSeqA1S2MinSeqNum,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            auto fb = feeBump(*app, account1, txSeqA1S2, 4000);
-            test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            test.check({{{account1, 0, {txSeqA1S1, fb}}, {account2}}, {}});
-        }
-        SECTION("fee bump existing tx and add all preconditions")
-        {
-            // move lcl forward
-            closeLedgerOn(*app, 1, 1, 2022);
-            TransactionQueueTest test{*app};
-            test.add(txSeqA1S1,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S5MinSeqNum,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-
-            PreconditionsV2 cond;
             cond.minSeqAge = 1;
-            cond.minSeqLedgerGap = 1;
-            cond.minSeqNum.activate() = 1;
 
-            auto lclNum = app->getLedgerManager().getLastClosedLedgerNum();
-            LedgerBounds bounds;
-            bounds.minLedger = lclNum + 1;
-            bounds.maxLedger = lclNum + 2;
-            cond.ledgerBounds.activate() = bounds;
+            auto tx =
+                transactionWithV2Precondition(*app, account1, 5, 200, cond);
 
+            auto fb = feeBump(*app, account1, tx, 4000);
+            test.add(fb,
+                     TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
+        }
+
+        test.check(
+            {{{account1, 0, {txSeqA1S1, txSeqA1S5MinSeqNum}}, {account2}}, {}});
+    }
+    SECTION("remove unnecessary minSeqNum with feeBump")
+    {
+        TransactionQueueTest test{*app};
+
+        test.add(txSeqA1S1, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        auto txSeqA1S2MinSeqNum = transactionWithV2Precondition(
+            *app, account1, 2, 200, condMinSeqNum);
+        test.add(txSeqA1S2MinSeqNum,
+                 TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        auto fb = feeBump(*app, account1, txSeqA1S2, 4000);
+        test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        test.check({{{account1, 0, {txSeqA1S1, fb}}, {account2}}, {}});
+    }
+    SECTION("fee bump existing tx and add all preconditions")
+    {
+        // move lcl forward
+        closeLedgerOn(*app, 1, 1, 2022);
+        TransactionQueueTest test{*app};
+        test.add(txSeqA1S1, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S5MinSeqNum,
+                 TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        PreconditionsV2 cond;
+        cond.minSeqAge = 1;
+        cond.minSeqLedgerGap = 1;
+        cond.minSeqNum.activate() = 1;
+
+        auto lclNum = app->getLedgerManager().getLastClosedLedgerNum();
+        LedgerBounds bounds;
+        bounds.minLedger = lclNum + 1;
+        bounds.maxLedger = lclNum + 2;
+        cond.ledgerBounds.activate() = bounds;
+
+        auto tx = transactionWithV2Precondition(*app, account1, 1, 200, cond);
+
+        auto fb = feeBump(*app, account1, tx, 4000);
+        test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+        test.check({{{account1, 0, {fb, txSeqA1S5MinSeqNum}}, {account2}}, {}});
+    }
+    SECTION("minSeqAge failed due to lower seqNum in queue")
+    {
+        TransactionQueueTest test{*app};
+        test.add(txSeqA1S1, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S2, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S3MinSeqAge,
+                 TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
+
+        // submit as fee bump
+        auto fb = feeBump(*app, account1, txSeqA1S3MinSeqAge, 4000);
+        test.add(fb, TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
+
+        test.check({{{account1, 0, {txSeqA1S1, txSeqA1S2}}, {account2}}, {}});
+    }
+    SECTION("minSeqLedgerGap failed due to lower seqNum in queue")
+    {
+        TransactionQueueTest test{*app};
+        test.add(txSeqA1S1, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S2, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S3MinSeqLedgerGap,
+                 TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
+
+        // submit as fee bump
+        auto fb = feeBump(*app, account1, txSeqA1S3MinSeqLedgerGap, 4000);
+        test.add(fb, TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
+
+        test.check({{{account1, 0, {txSeqA1S1, txSeqA1S2}}, {account2}}, {}});
+    }
+    SECTION("minSeqLedgerGap uses next ledgerSeq for validation")
+    {
+        TransactionQueueTest test{*app};
+        test.add(txSeqA1S1, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S2, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S3MinSeqLedgerGap,
+                 TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
+    }
+    SECTION("first tx has minSeqAge set")
+    {
+        auto lastCloseTime = app->getLedgerManager()
+                                 .getLastClosedLedgerHeader()
+                                 .header.scpValue.closeTime;
+
+        auto nextCloseTime = lastCloseTime + 100;
+        auto lclNum = app->getLedgerManager().getLastClosedLedgerNum();
+
+        PreconditionsV2 cond;
+        cond.minSeqAge = 100;
+        auto txPass =
+            transactionWithV2Precondition(*app, account1, 1, 200, cond);
+
+        ++cond.minSeqAge;
+        auto txFail =
+            transactionWithV2Precondition(*app, account1, 1, 200, cond);
+
+        closeLedgerOn(*app, lclNum + 1, nextCloseTime);
+
+        TransactionQueueTest test{*app};
+        test.add(txFail, TransactionQueue::AddResult::ADD_STATUS_ERROR);
+        test.add(txPass, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S2, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.check({{{account1, 0, {txPass, txSeqA1S2}}, {account2}}, {}});
+    }
+    SECTION("first tx has minSeqLedgerGap set")
+    {
+        auto lastCloseTime = app->getLedgerManager()
+                                 .getLastClosedLedgerHeader()
+                                 .header.scpValue.closeTime;
+
+        auto lclNum = app->getLedgerManager().getLastClosedLedgerNum();
+
+        PreconditionsV2 cond;
+        cond.minSeqLedgerGap = 3;
+        auto txPass =
+            transactionWithV2Precondition(*app, account1, 1, 200, cond);
+
+        ++cond.minSeqLedgerGap;
+        auto txFail =
+            transactionWithV2Precondition(*app, account1, 1, 200, cond);
+
+        closeLedgerOn(*app, lclNum + 1, lastCloseTime);
+        closeLedgerOn(*app, lclNum + 2, lastCloseTime);
+
+        TransactionQueueTest test{*app};
+        test.add(txFail, TransactionQueue::AddResult::ADD_STATUS_ERROR);
+        test.add(txPass, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.add(txSeqA1S2, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        test.check({{{account1, 0, {txPass, txSeqA1S2}}, {account2}}, {}});
+    }
+    SECTION("extra signer")
+    {
+        TransactionQueueTest test{*app};
+
+        SignerKey a2;
+        a2.type(SIGNER_KEY_TYPE_ED25519);
+        a2.ed25519() = account2.getPublicKey().ed25519();
+
+        PreconditionsV2 cond;
+        cond.extraSigners.emplace_back(a2);
+
+        SECTION("one signer")
+        {
+            auto tx =
+                transactionWithV2Precondition(*app, account1, 1, 200, cond);
+            test.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
+
+            tx->addSignature(account2.getSecretKey());
+            test.add(tx, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        }
+
+        SECTION("two signers")
+        {
+            SignerKey rootKey;
+            rootKey.type(SIGNER_KEY_TYPE_ED25519);
+            rootKey.ed25519() = root.getPublicKey().ed25519();
+
+            cond.extraSigners.emplace_back(rootKey);
             auto tx =
                 transactionWithV2Precondition(*app, account1, 1, 200, cond);
 
-            auto fb = feeBump(*app, account1, tx, 4000);
-            test.add(fb, TransactionQueue::AddResult::ADD_STATUS_PENDING);
+            // no signature
+            test.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
 
-            test.check(
-                {{{account1, 0, {fb, txSeqA1S5MinSeqNum}}, {account2}}, {}});
-        }
-        SECTION("minSeqAge failed due to lower seqNum in queue")
-        {
-            TransactionQueueTest test{*app};
-            test.add(txSeqA1S1,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S2,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S3MinSeqAge,
-                     TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
-
-            // submit as fee bump
-            auto fb = feeBump(*app, account1, txSeqA1S3MinSeqAge, 4000);
-            test.add(fb,
-                     TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
-
-            test.check(
-                {{{account1, 0, {txSeqA1S1, txSeqA1S2}}, {account2}}, {}});
-        }
-        SECTION("minSeqLedgerGap failed due to lower seqNum in queue")
-        {
-            TransactionQueueTest test{*app};
-            test.add(txSeqA1S1,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S2,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S3MinSeqLedgerGap,
-                     TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
-
-            // submit as fee bump
-            auto fb = feeBump(*app, account1, txSeqA1S3MinSeqLedgerGap, 4000);
-            test.add(fb,
-                     TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
-
-            test.check(
-                {{{account1, 0, {txSeqA1S1, txSeqA1S2}}, {account2}}, {}});
-        }
-        SECTION("minSeqLedgerGap uses next ledgerSeq for validation")
-        {
-            TransactionQueueTest test{*app};
-            test.add(txSeqA1S1,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S2,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S3MinSeqLedgerGap,
-                     TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
-        }
-        SECTION("first tx has minSeqAge set")
-        {
-            auto lastCloseTime = app->getLedgerManager()
-                                     .getLastClosedLedgerHeader()
-                                     .header.scpValue.closeTime;
-
-            auto nextCloseTime = lastCloseTime + 100;
-            auto lclNum = app->getLedgerManager().getLastClosedLedgerNum();
-
-            PreconditionsV2 cond;
-            cond.minSeqAge = 100;
-            auto txPass =
-                transactionWithV2Precondition(*app, account1, 1, 200, cond);
-
-            ++cond.minSeqAge;
-            auto txFail =
-                transactionWithV2Precondition(*app, account1, 1, 200, cond);
-
-            closeLedgerOn(*app, lclNum + 1, nextCloseTime);
-
-            TransactionQueueTest test{*app};
-            test.add(txFail, TransactionQueue::AddResult::ADD_STATUS_ERROR);
-            test.add(txPass, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S2,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.check({{{account1, 0, {txPass, txSeqA1S2}}, {account2}}, {}});
-        }
-        SECTION("first tx has minSeqLedgerGap set")
-        {
-            auto lastCloseTime = app->getLedgerManager()
-                                     .getLastClosedLedgerHeader()
-                                     .header.scpValue.closeTime;
-
-            auto lclNum = app->getLedgerManager().getLastClosedLedgerNum();
-
-            PreconditionsV2 cond;
-            cond.minSeqLedgerGap = 3;
-            auto txPass =
-                transactionWithV2Precondition(*app, account1, 1, 200, cond);
-
-            ++cond.minSeqLedgerGap;
-            auto txFail =
-                transactionWithV2Precondition(*app, account1, 1, 200, cond);
-
-            closeLedgerOn(*app, lclNum + 1, lastCloseTime);
-            closeLedgerOn(*app, lclNum + 2, lastCloseTime);
-
-            TransactionQueueTest test{*app};
-            test.add(txFail, TransactionQueue::AddResult::ADD_STATUS_ERROR);
-            test.add(txPass, TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.add(txSeqA1S2,
-                     TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            test.check({{{account1, 0, {txPass, txSeqA1S2}}, {account2}}, {}});
-        }
-        SECTION("extra signer")
-        {
-            TransactionQueueTest test{*app};
-
-            SignerKey a2;
-            a2.type(SIGNER_KEY_TYPE_ED25519);
-            a2.ed25519() = account2.getPublicKey().ed25519();
-
-            PreconditionsV2 cond;
-            cond.extraSigners.emplace_back(a2);
-
-            SECTION("one signer")
+            SECTION("first signature missing")
             {
-                auto tx =
-                    transactionWithV2Precondition(*app, account1, 1, 200, cond);
+                tx->addSignature(root.getSecretKey());
                 test.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
 
                 tx->addSignature(account2.getSecretKey());
                 test.add(tx, TransactionQueue::AddResult::ADD_STATUS_PENDING);
             }
 
-            SECTION("two signers")
+            SECTION("second signature missing")
             {
-                SignerKey rootKey;
-                rootKey.type(SIGNER_KEY_TYPE_ED25519);
-                rootKey.ed25519() = root.getPublicKey().ed25519();
-
-                cond.extraSigners.emplace_back(rootKey);
-                auto tx =
-                    transactionWithV2Precondition(*app, account1, 1, 200, cond);
-
-                // no signature
+                tx->addSignature(account2.getSecretKey());
                 test.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
 
-                SECTION("first signature missing")
-                {
-                    tx->addSignature(root.getSecretKey());
-                    test.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
-
-                    tx->addSignature(account2.getSecretKey());
-                    test.add(tx,
-                             TransactionQueue::AddResult::ADD_STATUS_PENDING);
-                }
-
-                SECTION("second signature missing")
-                {
-                    tx->addSignature(account2.getSecretKey());
-                    test.add(tx, TransactionQueue::AddResult::ADD_STATUS_ERROR);
-
-                    tx->addSignature(root.getSecretKey());
-                    test.add(tx,
-                             TransactionQueue::AddResult::ADD_STATUS_PENDING);
-                }
+                tx->addSignature(root.getSecretKey());
+                test.add(tx, TransactionQueue::AddResult::ADD_STATUS_PENDING);
             }
         }
-        SECTION("remove invalid ledger bound after close")
-        {
-            auto lclNum = app->getLedgerManager().getLastClosedLedgerNum();
-            LedgerBounds bounds;
-            bounds.minLedger = 0;
-            bounds.maxLedger = lclNum + 2;
+    }
+    SECTION("remove invalid ledger bound after close")
+    {
+        auto lclNum = app->getLedgerManager().getLastClosedLedgerNum();
+        LedgerBounds bounds;
+        bounds.minLedger = 0;
+        bounds.maxLedger = lclNum + 2;
 
-            PreconditionsV2 cond;
-            cond.ledgerBounds.activate() = bounds;
+        PreconditionsV2 cond;
+        cond.ledgerBounds.activate() = bounds;
 
-            auto tx =
-                transactionWithV2Precondition(*app, account1, 1, 200, cond);
+        auto tx = transactionWithV2Precondition(*app, account1, 1, 200, cond);
 
-            auto& herder = static_cast<HerderImpl&>(app->getHerder());
-            auto& tq = herder.getTransactionQueue();
+        auto& herder = static_cast<HerderImpl&>(app->getHerder());
+        auto& tq = herder.getTransactionQueue();
 
-            REQUIRE(herder.recvTransaction(tx, false) ==
-                    TransactionQueue::AddResult::ADD_STATUS_PENDING);
+        REQUIRE(herder.recvTransaction(tx, false) ==
+                TransactionQueue::AddResult::ADD_STATUS_PENDING);
 
-            REQUIRE(tq.getTransactions({}).size() == 1);
-            closeLedger(*app);
-            REQUIRE(tq.getTransactions({}).size() == 0);
-            REQUIRE(tq.isBanned(tx->getFullHash()));
-        }
-    });
+        REQUIRE(tq.getTransactions({}).size() == 1);
+        closeLedger(*app);
+        REQUIRE(tq.getTransactions({}).size() == 0);
+        REQUIRE(tq.isBanned(tx->getFullHash()));
+    }
 }
 
 TEST_CASE("TxQueueLimiter with limited source accounts",
@@ -1360,14 +1331,13 @@ TEST_CASE("TxQueueLimiter with limited source accounts",
     VirtualClock clock;
     auto cfg = getTestConfig();
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 4;
-    cfg.LIMIT_TX_QUEUE_SOURCE_ACCOUNT = true;
     auto app = createTestApplication(clock, cfg);
     auto const minBalance2 = app->getLedgerManager().getLastMinBalance(2);
     auto root = TestAccount::createRoot(*app);
     auto account1 = root.create("a1", minBalance2);
     auto account2 = root.create("a2", minBalance2);
 
-    TxQueueLimiter limiter(1, *app);
+    TxQueueLimiter limiter(1, *app, false);
 
     int fee = 100;
     auto tx = transaction(*app, account1, 1, 100, fee);
@@ -1398,11 +1368,319 @@ TEST_CASE("TxQueueLimiter with limited source accounts",
     }
 }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+class SorobanLimitingLaneConfigForTesting : public SurgePricingLaneConfig
+{
+  public:
+    // Index of the DEX limited lane.
+    static constexpr size_t LARGE_SOROBAN_LANE = 1;
+
+    SorobanLimitingLaneConfigForTesting(Resource sorobanGenericLimit,
+                                        std::optional<Resource> sorobanLimit)
+    {
+        mLaneOpsLimits.push_back(sorobanGenericLimit);
+        if (sorobanLimit)
+        {
+            mLaneOpsLimits.push_back(*sorobanLimit);
+        }
+    }
+
+    size_t
+    getLane(TransactionFrameBase const& tx) const override
+    {
+        bool limitedLane = tx.getEnvelope().v1().tx.memo.type() == MEMO_TEXT &&
+                           tx.getEnvelope().v1().tx.memo.text() == "limit";
+        if (mLaneOpsLimits.size() >
+                SorobanLimitingLaneConfigForTesting::LARGE_SOROBAN_LANE &&
+            limitedLane)
+        {
+            return SorobanLimitingLaneConfigForTesting::LARGE_SOROBAN_LANE;
+        }
+        else
+        {
+            return SurgePricingPriorityQueue::GENERIC_LANE;
+        }
+    }
+    std::vector<Resource> const&
+    getLaneLimits() const override
+    {
+        return mLaneOpsLimits;
+    }
+    virtual void
+    updateGenericLaneLimit(Resource const& limit) override
+    {
+        mLaneOpsLimits[0] = limit;
+    }
+    virtual Resource
+    getTxResources(TransactionFrameBase const& tx) override
+    {
+        releaseAssert(tx.isSoroban());
+        return tx.getResources();
+    }
+
+  private:
+    std::vector<Resource> mLaneOpsLimits;
+};
+
+TEST_CASE("Soroban TransactionQueue limits",
+          "[herder][transactionqueue][soroban]")
+{
+    VirtualClock clock;
+    auto cfg = getTestConfig();
+    cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 4;
+    cfg.TESTING_LEDGER_MAX_SOROBAN_TX_COUNT = 4;
+
+    cfg.FLOOD_TX_PERIOD_MS = 100;
+    auto app = createTestApplication(clock, cfg);
+    auto const minBalance2 = app->getLedgerManager().getLastMinBalance(2);
+    auto root = TestAccount::createRoot(*app);
+    auto account1 = root.create("a1", minBalance2);
+    auto account2 = root.create("a2", minBalance2);
+
+    SorobanNetworkConfig conf;
+    {
+        LedgerTxn ltx(app->getLedgerTxnRoot());
+        conf = app->getLedgerManager().getSorobanNetworkConfig(ltx);
+    }
+
+    SorobanResources resources;
+    resources.instructions = 2'000'000;
+    resources.readBytes = 2000;
+    resources.writeBytes = 1000;
+    resources.extendedMetaDataSizeBytes = 3000;
+
+    int refundableFee = 1200;
+    int initialFee = 10'000'000;
+
+    auto resAdjusted = resources;
+    resAdjusted.instructions =
+        static_cast<uint32>(conf.ledgerMaxInstructions());
+
+    auto tx =
+        createUploadWasmTx(*app, root, initialFee, refundableFee, resAdjusted);
+
+    REQUIRE(app->getHerder().recvTransaction(tx, false) ==
+            TransactionQueue::AddResult::ADD_STATUS_PENDING);
+    REQUIRE(app->getHerder().getTx(tx->getFullHash()) != nullptr);
+
+    SECTION("classic is rejected when soroban is pending")
+    {
+        // Can't submit classic tx due to source account limit
+        REQUIRE(app->getHerder().recvTransaction(
+                    transaction(*app, root, 1, 100, 100), false) ==
+                TransactionQueue::AddResult::ADD_STATUS_TRY_AGAIN_LATER);
+
+        // ban existing soroban tx
+        app->getHerder().getSorobanTransactionQueue().ban({tx});
+        REQUIRE(app->getHerder().getTx(tx->getFullHash()) == nullptr);
+        REQUIRE(app->getHerder().isBannedTx(tx->getFullHash()));
+
+        // Now can submit classic txs
+        REQUIRE(app->getHerder().recvTransaction(
+                    transaction(*app, root, 0, 100, 100), false) ==
+                TransactionQueue::AddResult::ADD_STATUS_PENDING);
+    }
+    SECTION("tx does not fit")
+    {
+        SECTION("reject")
+        {
+            // New Soroban tx fits within limits, but now there's no space
+            auto txNew = createUploadWasmTx(*app, account1, initialFee,
+                                            refundableFee, resources);
+
+            REQUIRE(app->getHerder().recvTransaction(txNew, false) ==
+                    TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+            SECTION("insufficient fee")
+            {
+                // Same fee, no eviction
+                auto tx2 = createUploadWasmTx(*app, account2, initialFee,
+                                              refundableFee, resAdjusted);
+
+                REQUIRE(app->getHerder().recvTransaction(tx2, false) ==
+                        TransactionQueue::AddResult::ADD_STATUS_ERROR);
+                REQUIRE(!app->getHerder().isBannedTx(tx->getFullHash()));
+                REQUIRE(tx2->getResultCode() ==
+                        TransactionResultCode::txINSUFFICIENT_FEE);
+            }
+            SECTION("invalid resources")
+            {
+                // Instruction count over max
+                resources.instructions =
+                    static_cast<uint32>(conf.txMaxInstructions() + 1);
+
+                // Double the fee
+                auto tx2 = createUploadWasmTx(*app, account2, initialFee * 2,
+                                              refundableFee, resources);
+
+                REQUIRE(app->getHerder().recvTransaction(tx2, false) ==
+                        TransactionQueue::AddResult::ADD_STATUS_ERROR);
+                REQUIRE(!app->getHerder().isBannedTx(tx->getFullHash()));
+                REQUIRE(
+                    tx2->getResultCode() ==
+                    TransactionResultCode::txSOROBAN_RESOURCE_LIMIT_EXCEEDED);
+            }
+        }
+        SECTION("accept but evict first tx")
+        {
+            // Add two more txs that will cause instructions to go over limit;
+            // evict the first tx (lowest fee)
+            resources.instructions =
+                static_cast<uint32>(conf.txMaxInstructions());
+
+            auto tx2 = createUploadWasmTx(*app, account1, initialFee * 2,
+                                          refundableFee, resources);
+            auto tx3 = createUploadWasmTx(*app, account2, initialFee * 3,
+                                          refundableFee, resources);
+
+            auto status = app->getHerder().recvTransaction(tx2, false);
+            REQUIRE(status == TransactionQueue::AddResult::ADD_STATUS_PENDING);
+            auto status2 = app->getHerder().recvTransaction(tx3, false);
+            REQUIRE(status2 == TransactionQueue::AddResult::ADD_STATUS_PENDING);
+
+            // Evicted and banned the first tx
+            REQUIRE(app->getHerder().getTx(tx->getFullHash()) == nullptr);
+            REQUIRE(app->getHerder().isBannedTx(tx->getFullHash()));
+        }
+    }
+    SECTION("limited lane eviction")
+    {
+        std::shared_ptr<Resource> limits = nullptr;
+        {
+            LedgerTxn ltx(app->getLedgerTxnRoot());
+            limits = std::make_shared<Resource>(
+                app->getLedgerManager().maxLedgerResources(true, ltx));
+        }
+        // Setup limits: generic fits 1 ledger worth of resources, while limited
+        // lane fits 1/4 ledger
+        auto limitedLane = std::optional<Resource>(
+            bigDivideOrThrow(*limits, 1, 4, Rounding::ROUND_UP));
+        auto config = std::make_shared<SorobanLimitingLaneConfigForTesting>(
+            *limits, limitedLane);
+        auto queue = std::make_unique<SurgePricingPriorityQueue>(
+            /* isHighestPriority */ false, config, 1);
+
+        std::vector<std::pair<TxStackPtr, bool>> toEvict;
+
+        // Generic tx, takes 1/2 of instruction limits
+        resources.instructions =
+            static_cast<uint32>(conf.ledgerMaxInstructions() / 2);
+        tx = createUploadWasmTx(*app, root, initialFee, refundableFee,
+                                resources);
+
+        SECTION("generic fits")
+        {
+            REQUIRE(
+                queue->canFitWithEviction(*tx, std::nullopt, toEvict).first);
+            REQUIRE(toEvict.empty());
+        }
+        SECTION("limited too big")
+        {
+            // Fits into generic, but doesn't fit into limited
+            resources.instructions =
+                static_cast<uint32>(conf.txMaxInstructions() / 2);
+            auto tx2 = createUploadWasmTx(
+                *app, account1, initialFee, refundableFee, resources,
+                std::make_optional<std::string>("limit"));
+
+            REQUIRE(config->getLane(*tx2) ==
+                    SorobanLimitingLaneConfigForTesting::LARGE_SOROBAN_LANE);
+
+            REQUIRE(
+                !queue->canFitWithEviction(*tx2, std::nullopt, toEvict).first);
+            REQUIRE(toEvict.empty());
+        }
+        SECTION("limited fits")
+        {
+            // Fits into limited
+            resources.instructions =
+                static_cast<uint32>(conf.txMaxInstructions() / 8);
+            auto txNew = createUploadWasmTx(
+                *app, account1, initialFee * 2, refundableFee, resources,
+                std::make_optional<std::string>("limit"));
+
+            REQUIRE(config->getLane(*txNew) ==
+                    SorobanLimitingLaneConfigForTesting::LARGE_SOROBAN_LANE);
+
+            REQUIRE(
+                queue->canFitWithEviction(*txNew, std::nullopt, toEvict).first);
+            REQUIRE(toEvict.empty());
+
+            SECTION("limited evicts")
+            {
+                // Add 2 generic transactions to reach generic limit
+                queue->add(std::make_shared<SingleTxStack>(tx));
+                resources.instructions =
+                    static_cast<uint32>(conf.ledgerMaxInstructions() / 2);
+                // The fee is slightly higher so this transactions is more
+                // favorable during evictions
+                auto secondGeneric = createUploadWasmTx(
+                    *app, account2, initialFee + 10, refundableFee, resources);
+
+                REQUIRE(queue
+                            ->canFitWithEviction(*secondGeneric, std::nullopt,
+                                                 toEvict)
+                            .first);
+                REQUIRE(toEvict.empty());
+                queue->add(std::make_shared<SingleTxStack>(secondGeneric));
+
+                SECTION("limited evicts generic")
+                {
+                    // Fit within limited lane
+                    REQUIRE(
+                        queue->canFitWithEviction(*txNew, std::nullopt, toEvict)
+                            .first);
+                    REQUIRE(toEvict.size() == 1);
+                    REQUIRE(toEvict[0].first->getTopTx() == tx);
+                }
+                SECTION("evict due to lane limit")
+                {
+                    // Add another limited tx, so that generic and limited are
+                    // both at max
+                    resources.writeBytes = conf.txMaxWriteBytes() / 4;
+                    resources.instructions = 0;
+                    auto tx2 = createUploadWasmTx(
+                        *app, account1, initialFee * 2, refundableFee,
+                        resources, std::make_optional<std::string>("limit"));
+
+                    REQUIRE(
+                        queue->canFitWithEviction(*tx2, std::nullopt, toEvict)
+                            .first);
+                    queue->add(std::make_shared<SingleTxStack>(tx2));
+
+                    // Add, new tx with max limited lane resources, set a high
+                    // fee
+                    resources.instructions =
+                        static_cast<uint32>(conf.txMaxInstructions() / 4);
+                    resources.instructions =
+                        static_cast<uint32>(conf.txMaxWriteBytes() / 4);
+                    auto tx3 = createUploadWasmTx(
+                        *app, account2, initialFee * 3, refundableFee,
+                        resources, std::make_optional<std::string>("limit"));
+
+                    REQUIRE(
+                        queue->canFitWithEviction(*tx3, std::nullopt, toEvict)
+                            .first);
+
+                    // Should evict generic _and_ limited tx
+                    REQUIRE(toEvict.size() == 2);
+                    REQUIRE(toEvict[0].first->getTopTx() == tx);
+                    REQUIRE(!toEvict[0].second);
+                    REQUIRE(toEvict[1].first->getTopTx() == tx2);
+                    REQUIRE(toEvict[1].second);
+                }
+            }
+        }
+    }
+}
+#endif
+
 TEST_CASE("TransactionQueue limits", "[herder][transactionqueue]")
 {
     VirtualClock clock;
     auto cfg = getTestConfig();
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 4;
+    cfg.LIMIT_TX_QUEUE_SOURCE_ACCOUNT = false;
     cfg.FLOOD_TX_PERIOD_MS = 100;
     auto app = createTestApplication(clock, cfg);
     auto const minBalance2 = app->getLedgerManager().getLastMinBalance(2);
@@ -1480,7 +1758,7 @@ TEST_CASE("TransactionQueue limits", "[herder][transactionqueue]")
     }
     SECTION("multi accounts limits")
     {
-        TxQueueLimiter limiter(3, *app);
+        TxQueueLimiter limiter(3, *app, false);
 
         struct SetupElement
         {
@@ -1651,6 +1929,7 @@ TEST_CASE("TransactionQueue limiter with DEX separation",
     cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 3;
     cfg.FLOOD_TX_PERIOD_MS = 100;
     cfg.MAX_DEX_TX_OPERATIONS_IN_TX_SET = 1;
+    cfg.LIMIT_TX_QUEUE_SOURCE_ACCOUNT = false;
     auto app = createTestApplication(clock, cfg);
     auto const minBalance2 = app->getLedgerManager().getLastMinBalance(2);
 
@@ -1660,7 +1939,7 @@ TEST_CASE("TransactionQueue limiter with DEX separation",
     auto account3 = root.create("a3", minBalance2);
 
     // 3 * 3 = 9 operations limit, 3 * 1 = 3 DEX operations limit.
-    TxQueueLimiter limiter(3, *app);
+    TxQueueLimiter limiter(3, *app, false);
 
     std::vector<TransactionFrameBasePtr> txs;
 
@@ -1783,7 +2062,16 @@ TEST_CASE("TransactionQueue limiter with DEX separation",
         // non-DEX tx with bid 100, but DEX tx was evicted due to DEX limit).
         checkAndAddWithIncreasedBid(account1, false, 1, 100, 0);
     }
-
+    SECTION("DEX evicts non-DEX if DEX lane has not enough ops to evict")
+    {
+        // 8 non-DEX ops (bid 100/op) - fits
+        checkAndAddTx(account1, false, 8, 100 * 8, true, 0, 0);
+        // 1 DEX op (bid 200/op) - fits
+        checkAndAddTx(account1, true, 1, 200 * 1, true, 0, 0);
+        // 3 DEX ops with high fee (bid 10000/op) - fits by evicting 9 ops from
+        // both lanes
+        checkAndAddTx(account2, true, 3, 10000 * 3, true, 0, 9);
+    }
     SECTION("non-DEX transactions evict DEX transactions")
     {
         // Add 9 ops (2 + 1 DEX, 3 + 2 + 1 non-DEX)
@@ -1899,7 +2187,7 @@ TEST_CASE("transaction queue starting sequence boundary",
         acc1.bumpSequence(startingSeq - 1);
         REQUIRE(acc1.loadSequenceNumber() == startingSeq - 1);
 
-        TransactionQueue tq(*app, 4, 10, 4);
+        ClassicTransactionQueue tq(*app, 4, 10, 4);
         REQUIRE(tq.tryAdd(transaction(*app, acc1, 1, 1, 100), false) ==
                 TransactionQueue::AddResult::ADD_STATUS_PENDING);
 
@@ -1912,37 +2200,6 @@ TEST_CASE("transaction queue starting sequence boundary",
         REQUIRE(checkTxSet(2));
         REQUIRE(!checkTxSet(3));
         REQUIRE(checkTxSet(4));
-    }
-
-    SECTION("check a chain of transactions")
-    {
-        int64_t startingSeq = static_cast<int64_t>(nextLedgerSeq) << 32;
-        REQUIRE(acc1.loadSequenceNumber() < startingSeq);
-        acc1.bumpSequence(startingSeq - 3);
-        REQUIRE(acc1.loadSequenceNumber() == startingSeq - 3);
-
-        TransactionQueue tq(*app, 4, 10, 4);
-        for (size_t i = 1; i <= 4; ++i)
-        {
-            REQUIRE(tq.tryAdd(transaction(*app, acc1, i, 1, 100), false) ==
-                    TransactionQueue::AddResult::ADD_STATUS_PENDING);
-        }
-
-        auto checkTxSet = [&](uint32_t ledgerSeq, size_t size) {
-            auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
-            lcl.header.ledgerSeq = ledgerSeq;
-            auto txSet = tq.getTransactions(lcl.header);
-            REQUIRE(txSet.size() == size);
-            for (size_t i = 1; i <= size; ++i)
-            {
-                REQUIRE(txSet[i - 1]->getSeqNum() ==
-                        static_cast<int64_t>(startingSeq - 3 + i));
-            }
-        };
-
-        checkTxSet(2, 4);
-        checkTxSet(3, 2);
-        checkTxSet(4, 4);
     }
 }
 
@@ -2474,13 +2731,15 @@ TEST_CASE("remove applied", "[herder][transactionqueue]")
 
     auto root = TestAccount::createRoot(*app);
     auto acc = root.create("A", lm.getLastMinBalance(2));
+    auto acc2 = root.create("B", lm.getLastMinBalance(2));
+    auto acc3 = root.create("C", lm.getLastMinBalance(2));
 
     auto tx1a = root.tx({payment(root, 1)});
     root.loadSequenceNumber();
     auto tx1b = root.tx({payment(root, 2)});
-    auto tx2 = root.tx({payment(root, 3)});
-    auto tx3 = root.tx({payment(root, 4)});
-    auto tx4 = root.tx({payment(root, 5)});
+    auto tx2 = acc.tx({payment(root, 1)});
+    auto tx3 = acc2.tx({payment(root, 1)});
+    auto tx4 = acc3.tx({payment(root, 1)});
 
     herder.recvTransaction(tx1a, false);
     herder.recvTransaction(tx2, false);

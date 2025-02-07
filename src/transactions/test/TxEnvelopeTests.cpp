@@ -12,6 +12,7 @@
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/LedgerTxnHeader.h"
 #include "ledger/NetworkConfig.h"
+#include "ledger/test/LedgerTestUtils.h"
 #include "lib/catch.hpp"
 #include "lib/json/json.h"
 #include "main/Application.h"
@@ -1303,9 +1304,9 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                             tx1 = b.tx({setOptions(
                                 setMasterWeight(1) | setLowThreshold(1) |
                                 setMedThreshold(2) | setHighThreshold(3))});
-                            tx2 = b.tx(
-                                {payment(root, 100), root.op(payment(b, 100))},
-                                b.getLastSequenceNumber() + 1);
+                            tx2 = root.tx(
+                                {b.op(payment(root, 100)), payment(b, 100)},
+                                root.getLastSequenceNumber() + 2);
 
                             SignerKey sk = alternative.createSigner(*tx2);
                             Signer sk1(sk, 100); // high rights account
@@ -1315,12 +1316,12 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                         };
                         for_versions(3, 9, *app, [&] {
                             setup();
-                            closeLedgerOn(*app, 1, 1, 2010, {tx1, tx2});
+                            closeLedgerOn(*app, 1, 1, 2010, {tx1, tx2}, true);
                             REQUIRE(getAccountSigners(root, *app).size() == 1);
                         });
                         for_versions_from(10, *app, [&] {
                             setup();
-                            closeLedgerOn(*app, 1, 1, 2010, {tx1, tx2});
+                            closeLedgerOn(*app, 1, 1, 2010, {tx1, tx2}, true);
                             REQUIRE(getAccountSigners(root, *app).size() ==
                                     (alternative.autoRemove ? 0 : 1));
                         });
@@ -1334,9 +1335,9 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                             tx1 = b.tx({setOptions(
                                 setMasterWeight(1) | setLowThreshold(1) |
                                 setMedThreshold(2) | setHighThreshold(3))});
-                            tx2 = b.tx(
-                                {root.op(payment(b, 100)), payment(root, 100)},
-                                b.getLastSequenceNumber() + 1);
+                            tx2 = root.tx(
+                                {payment(b, 100), b.op(payment(root, 100))},
+                                root.getLastSequenceNumber() + 2);
 
                             SignerKey sk = alternative.createSigner(*tx2);
                             Signer sk1(sk, 100); // high rights account
@@ -1346,12 +1347,12 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
                         };
                         for_versions(3, 9, *app, [&] {
                             setup();
-                            closeLedgerOn(*app, 1, 1, 2010, {tx1, tx2});
+                            closeLedgerOn(*app, 1, 1, 2010, {tx1, tx2}, true);
                             REQUIRE(getAccountSigners(root, *app).size() == 1);
                         });
                         for_versions_from(10, *app, [&] {
                             setup();
-                            closeLedgerOn(*app, 1, 1, 2010, {tx1, tx2});
+                            closeLedgerOn(*app, 1, 1, 2010, {tx1, tx2}, true);
                             REQUIRE(getAccountSigners(root, *app).size() ==
                                     (alternative.autoRemove ? 0 : 1));
                         });
@@ -2381,13 +2382,16 @@ TEST_CASE_VERSIONS("txenvelope", "[tx][envelope]")
             SECTION("multiple tx")
             {
                 for_versions_from(10, *app, [&] {
-                    auto tx1 = a.tx({setOptions(setSigner(makeSigner(b, 1)))});
+                    auto tx1 = root.tx(
+                        {a.op(setOptions(setSigner(makeSigner(b, 1))))});
+                    tx1->addSignature(a);
                     tx1->addSignature(b);
+
                     auto tx2 = a.tx({payment(root, 1000),
                                      setOptions(setSigner(makeSigner(b, 2)))});
                     tx2->addSignature(b);
 
-                    auto r = closeLedgerOn(*app, 1, 2, 2016, {tx1, tx2});
+                    auto r = closeLedgerOn(*app, 1, 2, 2016, {tx1, tx2}, true);
 
                     checkTx(0, r, txSUCCESS);
                     checkTx(1, r, txFAILED);
@@ -2479,7 +2483,6 @@ TEST_CASE("soroban txs not allowed before protocol upgrade",
     auto root = TestAccount::createRoot(*app);
     Operation op;
     op.body.type(INVOKE_HOST_FUNCTION);
-    op.body.invokeHostFunctionOp().functions.emplace_back();
 
     auto tx =
         sorobanTransactionFrameFromOps(app->getNetworkID(), root, {op}, {},
@@ -2496,8 +2499,8 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
     auto root = TestAccount::createRoot(*app);
     Operation op0;
     op0.body.type(INVOKE_HOST_FUNCTION);
-    auto& ihf0 = op0.body.invokeHostFunctionOp().functions.emplace_back();
-    ihf0.args.type(HOST_FUNCTION_TYPE_CREATE_CONTRACT);
+    auto& ihf0 = op0.body.invokeHostFunctionOp().hostFunction;
+    ihf0.type(HOST_FUNCTION_TYPE_CREATE_CONTRACT);
 
     auto validateResources = [&](SorobanResources const& resources,
                                  bool valid) {
@@ -2530,11 +2533,17 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
     resources.writeBytes = InitialSorobanNetworkConfig::TX_MAX_WRITE_BYTES;
     resources.extendedMetaDataSizeBytes =
         InitialSorobanNetworkConfig::TX_MAX_EXTENDED_META_DATA_SIZE_BYTES;
-    resources.footprint.readOnly.resize(
-        InitialSorobanNetworkConfig::TX_MAX_READ_LEDGER_ENTRIES -
-        InitialSorobanNetworkConfig::TX_MAX_WRITE_LEDGER_ENTRIES);
-    resources.footprint.readWrite.resize(
-        InitialSorobanNetworkConfig::TX_MAX_WRITE_LEDGER_ENTRIES);
+
+    auto keys = LedgerTestUtils::generateUniqueValidSorobanLedgerEntryKeys(
+        InitialSorobanNetworkConfig::TX_MAX_READ_LEDGER_ENTRIES);
+
+    resources.footprint.readWrite.assign(
+        keys.begin(),
+        keys.begin() +
+            InitialSorobanNetworkConfig::TX_MAX_WRITE_LEDGER_ENTRIES);
+    resources.footprint.readOnly.assign(
+        keys.begin() + InitialSorobanNetworkConfig::TX_MAX_WRITE_LEDGER_ENTRIES,
+        keys.end());
     SECTION("instructions exceeded")
     {
         resources.instructions += 1;
@@ -2575,12 +2584,12 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
     {
         Operation op;
         op.body.type(INVOKE_HOST_FUNCTION);
-        auto& ihf = op.body.invokeHostFunctionOp().functions.emplace_back();
-        ihf.args.type(HOST_FUNCTION_TYPE_INVOKE_CONTRACT);
+        auto& ihf = op.body.invokeHostFunctionOp().hostFunction;
+        ihf.type(HOST_FUNCTION_TYPE_INVOKE_CONTRACT);
         SCVal largeVal(SCV_BYTES);
         largeVal.bytes().resize(InitialSorobanNetworkConfig::TX_MAX_SIZE_BYTES -
-                                2000);
-        ihf.args.invokeContract().push_back(largeVal);
+                                3000);
+        ihf.invokeContract().args.push_back(largeVal);
         SECTION("near limit")
         {
             auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
@@ -2591,7 +2600,7 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
         }
         SECTION("limit exceeded")
         {
-            ihf.args.invokeContract().back().bytes().resize(
+            ihf.invokeContract().args.back().bytes().resize(
                 InitialSorobanNetworkConfig::TX_MAX_SIZE_BYTES);
             auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
                                                      {op}, {}, resources,
@@ -2646,10 +2655,9 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
     {
         Operation op;
         op.body.type(INVOKE_HOST_FUNCTION);
-        auto& ihf = op.body.invokeHostFunctionOp().functions.emplace_back();
-        ihf.args.type(HOST_FUNCTION_TYPE_UPLOAD_CONTRACT_WASM);
-        auto& uploadArgs = ihf.args.uploadContractWasm();
-        uploadArgs.code.resize(InitialSorobanNetworkConfig::MAX_CONTRACT_SIZE);
+        auto& ihf = op.body.invokeHostFunctionOp().hostFunction;
+        ihf.type(HOST_FUNCTION_TYPE_UPLOAD_CONTRACT_WASM);
+        ihf.wasm().resize(InitialSorobanNetworkConfig::MAX_CONTRACT_SIZE);
         SECTION("at limit")
         {
             auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
@@ -2660,8 +2668,8 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
         }
         SECTION("over limit")
         {
-            uploadArgs.code.resize(
-                InitialSorobanNetworkConfig::MAX_CONTRACT_SIZE + 1);
+            ihf.wasm().resize(InitialSorobanNetworkConfig::MAX_CONTRACT_SIZE +
+                              1);
             auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
                                                      {op}, {}, resources,
                                                      3'500'000, 100'000);
@@ -2680,9 +2688,8 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
     {
         Operation op;
         op.body.type(INVOKE_HOST_FUNCTION);
-        auto& ihf = op.body.invokeHostFunctionOp().functions.emplace_back();
-        ihf.args.type(HOST_FUNCTION_TYPE_INVOKE_CONTRACT);
-        ihf.args.invokeContract() = {makeSymbol("dummy")};
+        auto& ihf = op.body.invokeHostFunctionOp().hostFunction;
+        ihf.type(HOST_FUNCTION_TYPE_INVOKE_CONTRACT);
         SorobanNetworkConfig refConfig;
         {
             LedgerTxn ltx(app->getLedgerTxnRoot());
@@ -2691,7 +2698,8 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
         SECTION("success with default limits")
         {
             resources.footprint.readOnly.back() = contractDataKey(
-                Hash{}, makeSymbol("abcdefghijklmnopqrstuvwxyz012345"));
+                SCAddress{}, makeSymbol("abcdefghijklmnopqrstuvwxyz012345"),
+                ContractDataDurability::PERSISTENT, DATA_ENTRY);
             auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
                                                      {op}, {}, resources,
                                                      3'500'000, 100'000);
@@ -2702,7 +2710,8 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
         {
             resources.footprint.readOnly.resize(1);
             resources.footprint.readOnly.back() = contractDataKey(
-                Hash{}, makeSymbol("abcdefghijklmnopqrstuvwxyz012345"));
+                SCAddress{}, makeSymbol("abcdefghijklmnopqrstuvwxyz012345"),
+                ContractDataDurability::PERSISTENT, DATA_ENTRY);
             refConfig.maxContractDataKeySizeBytes() = 64;
             app->getLedgerManager().setSorobanNetworkConfig(refConfig);
             auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,
@@ -2715,7 +2724,8 @@ TEST_CASE("soroban transaction validation", "[tx][envelope][soroban]")
         {
             resources.footprint.readWrite.resize(1);
             resources.footprint.readWrite.back() = contractDataKey(
-                Hash{}, makeSymbol("abcdefghijklmnopqrstuvwxyz012345"));
+                SCAddress{}, makeSymbol("abcdefghijklmnopqrstuvwxyz012345"),
+                ContractDataDurability::PERSISTENT, DATA_ENTRY);
             refConfig.maxContractDataKeySizeBytes() = 64;
             app->getLedgerManager().setSorobanNetworkConfig(refConfig);
             auto tx = sorobanTransactionFrameFromOps(app->getNetworkID(), root,

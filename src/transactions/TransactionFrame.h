@@ -58,10 +58,12 @@ class TransactionFrame : public TransactionFrameBase
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     xdr::xvector<ContractEvent> mEvents;
     xdr::xvector<DiagnosticEvent> mDiagnosticEvents;
-    xdr::xvector<SCVal, MAX_OPS_PER_TX> mReturnValues;
+    SCVal mReturnValue;
     std::optional<FeePair> mSorobanResourceFee;
     // Size of the emitted Soroban metadata.
     uint32_t mConsumedSorobanMetadataSize{};
+    int64_t mConsumedRentFee{};
+    int64_t mFeeRefund{};
 #endif
 
     std::shared_ptr<InternalLedgerEntry const> mCachedAccount;
@@ -121,7 +123,8 @@ class TransactionFrame : public TransactionFrameBase
     void markResultFailed();
 
     bool applyOperations(SignatureChecker& checker, Application& app,
-                         AbstractLedgerTxn& ltx, TransactionMetaFrame& meta);
+                         AbstractLedgerTxn& ltx, TransactionMetaFrame& meta,
+                         Hash const& sorobanBasePrngSeed);
 
     virtual void processSeqNum(AbstractLedgerTxn& ltx);
 
@@ -135,13 +138,13 @@ class TransactionFrame : public TransactionFrameBase
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     bool validateSorobanOpsConsistency() const;
-    bool validateSorobanResources(SorobanNetworkConfig const& config) const;
-    void refundSorobanFee(uint32_t protocolVersion,
-                          SorobanNetworkConfig const& sorobanConfig,
-                          Config const& cfg, AbstractLedgerTxn& ltx);
+    bool validateSorobanResources(SorobanNetworkConfig const& config,
+                                  uint32_t protocolVersion) const;
+    void refundSorobanFee(AbstractLedgerTxn& ltx);
     FeePair computeSorobanResourceFee(
         uint32_t protocolVersion, SorobanNetworkConfig const& sorobanConfig,
         Config const& cfg, bool useConsumedRefundableResources) const;
+    int64 sorobanRefundableFee() const;
 #endif
 
   public:
@@ -192,7 +195,9 @@ class TransactionFrame : public TransactionFrameBase
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     void pushContractEvents(xdr::xvector<ContractEvent>&& evts);
     void pushDiagnosticEvents(xdr::xvector<DiagnosticEvent>&& evts);
-    void pushReturnValues(xdr::xvector<SCVal, MAX_OPS_PER_TX>&& returnVals);
+    void setReturnValue(SCVal&& returnValue);
+    void pushInitialExpirations(
+        UnorderedMap<LedgerKey, uint32_t>&& originalExpirations);
 #endif
 
     TransactionEnvelope const& getEnvelope() const override;
@@ -204,6 +209,8 @@ class TransactionFrame : public TransactionFrameBase
     AccountID getSourceID() const override;
 
     uint32_t getNumOperations() const override;
+    Resource getResources() const override;
+
     std::vector<Operation> const& getRawOperations() const override;
 
     int64_t getFullFee() const override;
@@ -244,9 +251,11 @@ class TransactionFrame : public TransactionFrameBase
     // apply this transaction to the current ledger
     // returns true if successfully applied
     bool apply(Application& app, AbstractLedgerTxn& ltx,
-               TransactionMetaFrame& meta, bool chargeFee);
+               TransactionMetaFrame& meta, bool chargeFee,
+               Hash const& sorobanBasePrngSeed);
     bool apply(Application& app, AbstractLedgerTxn& ltx,
-               TransactionMetaFrame& meta) override;
+               TransactionMetaFrame& meta,
+               Hash const& sorobanBasePrngSeed = Hash{}) override;
 
     // Performs the necessary post-apply transaction processing.
     // This has to be called after both `processFeeSeqNum` and
@@ -256,7 +265,8 @@ class TransactionFrame : public TransactionFrameBase
                           TransactionMetaFrame& meta) override;
 
     // version without meta
-    bool apply(Application& app, AbstractLedgerTxn& ltx);
+    bool apply(Application& app, AbstractLedgerTxn& ltx,
+               Hash const& sorobanBasePrngSeed);
 
     StellarMessage toStellarMessage() const override;
 
@@ -277,7 +287,11 @@ class TransactionFrame : public TransactionFrameBase
     maybeComputeSorobanResourceFee(uint32_t protocolVersion,
                                    SorobanNetworkConfig const& sorobanConfig,
                                    Config const& cfg) override;
-    void consumeRefundableSorobanResource(uint32_t metadataSizeBytes);
+    void consumeRefundableSorobanResources(uint32_t metadataSizeBytes,
+                                           int64_t rentFee);
+    bool computeSorobanFeeRefund(uint32_t protocolVersion,
+                                 SorobanNetworkConfig const& sorobanConfig,
+                                 Config const& cfg);
 #endif
 };
 }

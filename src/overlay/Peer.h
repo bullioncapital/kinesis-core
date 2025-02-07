@@ -24,7 +24,7 @@ typedef std::shared_ptr<SCPQuorumSet> SCPQuorumSetPtr;
 
 static auto const MAX_MESSAGE_SIZE = 0x1000000;
 // max tx size is 100KB
-static const uint64_t MAX_CLASSIC_TX_SIZE_BYTES = 100 * 1024;
+static const uint32_t MAX_CLASSIC_TX_SIZE_BYTES = 100 * 1024;
 
 class Application;
 class LoopbackPeer;
@@ -84,11 +84,24 @@ class Peer : public std::enable_shared_from_this<Peer>,
         CLOSING = 4
     };
 
+    static inline int
+    format_as(PeerState const& s)
+    {
+        return static_cast<int>(s);
+    }
+
     enum PeerRole
     {
         REMOTE_CALLED_US,
         WE_CALLED_REMOTE
     };
+
+    static inline std::string
+    format_as(PeerRole const& r)
+    {
+        return (r == REMOTE_CALLED_US) ? "REMOTE_CALLED_US"
+                                       : "WE_CALLED_REMOTE";
+    }
 
     enum class DropMode
     {
@@ -149,6 +162,10 @@ class Peer : public std::enable_shared_from_this<Peer>,
         xdr::msg_ptr mMessage;
     };
 
+    void startExecutionDelayedTimer(
+        VirtualClock::duration d, std::function<void()> const& onSuccess,
+        std::function<void(asio::error_code)> const& onFailure);
+
     Json::Value getJsonInfo(bool compact) const;
 
   protected:
@@ -193,6 +210,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
     VirtualClock::time_point mCreationTime;
 
     VirtualTimer mRecurringTimer;
+    VirtualTimer mDelayedExecutionTimer;
+
     VirtualClock::time_point mLastRead;
     VirtualClock::time_point mLastWrite;
     VirtualClock::time_point mEnqueueTimeOfLastWrite;
@@ -395,6 +414,10 @@ class Peer : public std::enable_shared_from_this<Peer>,
     {
         return mTxAdvertQueue;
     };
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    void handleMaxTxSizeIncrease(uint32_t increase);
+#endif
 
     friend class LoopbackPeer;
 

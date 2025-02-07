@@ -82,7 +82,8 @@ calculateDeltaBalance(LedgerEntry const* current, LedgerEntry const* previous)
     {
         auto const& contractData = current ? current->data.contractData()
                                            : previous->data.contractData();
-        if (contractData.contractID != lumenContractID ||
+        if (contractData.contract.type() != SC_ADDRESS_TYPE_CONTRACT ||
+            contractData.contract.contractId() != lumenContractID ||
             contractData.key.type() != SCV_VEC || !contractData.key.vec() ||
             contractData.key.vec().size() == 0)
         {
@@ -96,13 +97,14 @@ calculateDeltaBalance(LedgerEntry const* current, LedgerEntry const* previous)
         }
 
         auto getAmount = [&amountSymbol](LedgerEntry const* entry) -> int64_t {
-            if (!entry)
+            if (!entry ||
+                entry->data.contractData().body.bodyType() != DATA_ENTRY)
             {
                 return 0;
             }
 
             // The amount should be the first entry in the SCMap
-            auto const& val = entry->data.contractData().val;
+            auto const& val = entry->data.contractData().body.data().val;
             if (val.type() == SCV_MAP && val.map() && val.map()->size() != 0)
             {
                 auto const& amountEntry = val.map()->at(0);
@@ -193,12 +195,15 @@ ConservationOfLumens::registerInvariant(Application& app)
 
     // Calculate contractID
     HashIDPreimage preImage;
-    preImage.type(ENVELOPE_TYPE_CONTRACT_ID_FROM_ASSET);
-    preImage.fromAsset().networkID = sha256(app.getConfig().NETWORK_PASSPHRASE);
+    preImage.type(ENVELOPE_TYPE_CONTRACT_ID);
+    preImage.contractID().networkID =
+        sha256(app.getConfig().NETWORK_PASSPHRASE);
 
     Asset native;
     native.type(ASSET_TYPE_NATIVE);
-    preImage.fromAsset().asset = native;
+    preImage.contractID().contractIDPreimage.type(
+        CONTRACT_ID_PREIMAGE_FROM_ASSET);
+    preImage.contractID().contractIDPreimage.fromAsset() = native;
 
     auto lumenContractID = xdrSha256(preImage);
 

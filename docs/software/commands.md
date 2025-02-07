@@ -296,6 +296,10 @@ format.
         Transactions are ordered by fee per operation (transactions with lower 
         operation fees are held for later)
         <br>
+    * `maxsorobantxsetsize` (uint32) This defines the maximum number of Soroban
+       operations in the transaction set to include in a ledger. The semantics is
+       the same as for `maxtxsetsize`, but this affects the Soroban slice of traffic.
+       <br>
     * `protocolversion` (uint32) defines the protocol version to upgrade to.
         When specified it must match one of the protocol versions supported
         by the node and should be greater than ledgerVersion from the current
@@ -331,12 +335,11 @@ format.
 
 ### The following HTTP commands are exposed on test instances
 * **generateload** `generateload[?mode=
-    (create|pay|pretend|mixed_txs)&accounts=N&offset=K&txs=M&txrate=R&batchsize=L&spikesize=S&spikeinterval=I&maxfeerate=F&skiplowfeetxs=(0|1)&dextxpercent=D]`
+    (create|pay|pretend|mixed_txs)&accounts=N&offset=K&txs=M&txrate=R&spikesize=S&spikeinterval=I&maxfeerate=F&skiplowfeetxs=(0|1)&dextxpercent=D]`
 
     Artificially generate load for testing; must be used with
     `ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING` set to true.
-  * `create` mode creates new accounts. Additionally, allows batching up to 100
-    account creations per transaction via `batchsize`.
+  * `create` mode creates new accounts. Batches 100 creation operations per transaction.
   * `pay` mode generates `PaymentOp` transactions on accounts specified
     (where the number of accounts can be offset).
   * `pretend` mode generates transactions on accounts specified(where the number

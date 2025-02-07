@@ -20,6 +20,7 @@ namespace
 {
 using namespace txtest;
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
 TEST_CASE("generalized tx set XDR validation", "[txset]")
 {
     Config cfg(getTestConfig());
@@ -43,341 +44,393 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
     {
         xdrTxSet.v1TxSet().phases.emplace_back();
         xdrTxSet.v1TxSet().phases.emplace_back();
+        xdrTxSet.v1TxSet().phases.emplace_back();
         auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
         REQUIRE(!txSet->checkValidStructure());
     }
     SECTION("incorrect base fee order")
     {
         xdrTxSet.v1TxSet().phases.emplace_back();
-        SECTION("all components discounted")
+        xdrTxSet.v1TxSet().phases.emplace_back();
+        for (int i = 0; i < xdrTxSet.v1TxSet().phases.size(); ++i)
         {
+            SECTION("phase " + std::to_string(i))
+            {
+                SECTION("all components discounted")
+                {
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1500;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1500;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1400;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1400;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1600;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1600;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
-            REQUIRE(!txSet->checkValidStructure());
-        }
-        SECTION("non-discounted component out of place")
-        {
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    REQUIRE(!txSet->checkValidStructure());
+                }
+                SECTION("non-discounted component out of place")
+                {
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1500;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1500;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1600;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1600;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
 
-            auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
-            REQUIRE(!txSet->checkValidStructure());
-        }
-        SECTION("with non-discounted component, discounted out of place")
-        {
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    REQUIRE(!txSet->checkValidStructure());
+                }
+                SECTION(
+                    "with non-discounted component, discounted out of place")
+                {
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1500;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1500;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1400;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1400;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
-            REQUIRE(!txSet->checkValidStructure());
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    REQUIRE(!txSet->checkValidStructure());
+                }
+            }
         }
     }
     SECTION("duplicate base fee")
     {
         xdrTxSet.v1TxSet().phases.emplace_back();
-        SECTION("duplicate discounts")
+        xdrTxSet.v1TxSet().phases.emplace_back();
+        for (int i = 0; i < xdrTxSet.v1TxSet().phases.size(); ++i)
         {
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+            SECTION("phase " + std::to_string(i))
+            {
+                SECTION("duplicate discounts")
+                {
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1500;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1500;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1500;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1500;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1600;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1600;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
-            REQUIRE(!txSet->checkValidStructure());
-        }
-        SECTION("duplicate non-discounted components")
-        {
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    REQUIRE(!txSet->checkValidStructure());
+                }
+                SECTION("duplicate non-discounted components")
+                {
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1500;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1500;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
 
-            auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
-            REQUIRE(!txSet->checkValidStructure());
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    REQUIRE(!txSet->checkValidStructure());
+                }
+            }
         }
     }
     SECTION("empty component")
     {
         xdrTxSet.v1TxSet().phases.emplace_back();
+        xdrTxSet.v1TxSet().phases.emplace_back();
 
-        xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-            TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+        for (int i = 0; i < xdrTxSet.v1TxSet().phases.size(); ++i)
+        {
+            SECTION("phase " + std::to_string(i))
+            {
+                xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                    TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
 
-        auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
-        REQUIRE(!txSet->checkValidStructure());
+                auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                REQUIRE(!txSet->checkValidStructure());
+            }
+        }
     }
     SECTION("valid XDR")
     {
-        SECTION("no transactions")
+
+        for (int i = 0; i < xdrTxSet.v1TxSet().phases.size(); ++i)
         {
-            xdrTxSet.v1TxSet().phases.emplace_back();
-            auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
-            REQUIRE(txSet->checkValidStructure());
-        }
-        SECTION("single component")
-        {
-            xdrTxSet.v1TxSet().phases.emplace_back();
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
-            auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
-            REQUIRE(txSet->checkValidStructure());
-        }
-        SECTION("multiple components")
-        {
-            xdrTxSet.v1TxSet().phases.emplace_back();
+            auto maybeAddSorobanOp = [&](GeneralizedTransactionSet& txSet) {
+                if (i == 1)
+                {
+                    auto& txEnv = xdrTxSet.v1TxSet()
+                                      .phases[i]
+                                      .v0Components()
+                                      .back()
+                                      .txsMaybeDiscountedFee()
+                                      .txs.back();
+                    txEnv.v0().tx.operations.emplace_back();
+                    txEnv.v0().tx.operations.back().body.type(
+                        INVOKE_HOST_FUNCTION); // tx->isSoroban() ==
+                                               // true
+                }
+            };
+            SECTION("phase " + std::to_string(i))
+            {
+                SECTION("no transactions")
+                {
+                    xdrTxSet.v1TxSet().phases.emplace_back();
+                    xdrTxSet.v1TxSet().phases.emplace_back();
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    REQUIRE(txSet->checkValidStructure());
+                }
+                SECTION("single component")
+                {
+                    xdrTxSet.v1TxSet().phases.emplace_back();
+                    xdrTxSet.v1TxSet().phases.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
+                    maybeAddSorobanOp(xdrTxSet);
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    REQUIRE(txSet->checkValidStructure());
+                }
+                SECTION("multiple components")
+                {
+                    xdrTxSet.v1TxSet().phases.emplace_back();
+                    xdrTxSet.v1TxSet().phases.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
+                    maybeAddSorobanOp(xdrTxSet);
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1400;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
+                    maybeAddSorobanOp(xdrTxSet);
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1400;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1500;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
+                    maybeAddSorobanOp(xdrTxSet);
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1500;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
+                    xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
+                        TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .baseFee.activate() = 1600;
+                    xdrTxSet.v1TxSet()
+                        .phases[i]
+                        .v0Components()
+                        .back()
+                        .txsMaybeDiscountedFee()
+                        .txs.emplace_back();
+                    maybeAddSorobanOp(xdrTxSet);
 
-            xdrTxSet.v1TxSet().phases[0].v0Components().emplace_back(
-                TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .baseFee.activate() = 1600;
-            xdrTxSet.v1TxSet()
-                .phases[0]
-                .v0Components()
-                .back()
-                .txsMaybeDiscountedFee()
-                .txs.emplace_back();
-
-            auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
-            REQUIRE(txSet->checkValidStructure());
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    REQUIRE(txSet->checkValidStructure());
+                }
+            }
         }
     }
 }
@@ -392,12 +445,16 @@ TEST_CASE("generalized tx set XDR conversion", "[txset]")
         static_cast<uint32_t>(GENERALIZED_TX_SET_PROTOCOL_VERSION);
     Application::pointer app = createTestApplication(clock, cfg);
     auto root = TestAccount::createRoot(*app);
+    int accountId = 0;
     auto createTxs = [&](int cnt, int fee) {
         std::vector<TransactionFrameBasePtr> txs;
         for (int i = 0; i < cnt; ++i)
         {
+            auto source =
+                root.create("unique " + std::to_string(accountId++),
+                            app->getLedgerManager().getLastMinBalance(2));
             txs.emplace_back(transactionFromOperations(
-                *app, root.getSecretKey(), root.nextSequenceNumber(),
+                *app, source.getSecretKey(), source.nextSequenceNumber(),
                 {createAccount(getAccount(std::to_string(i)).getPublicKey(),
                                1)},
                 fee));
@@ -416,7 +473,8 @@ TEST_CASE("generalized tx set XDR conversion", "[txset]")
     SECTION("empty set")
     {
         auto txSetFrame = testtxset::makeNonValidatedGeneralizedTxSet(
-            {}, *app, app->getLedgerManager().getLastClosedLedgerHeader().hash);
+            {{}, {}}, *app,
+            app->getLedgerManager().getLastClosedLedgerHeader().hash);
 
         GeneralizedTransactionSet txSetXdr;
         txSetFrame->toXDR(txSetXdr);
@@ -426,7 +484,7 @@ TEST_CASE("generalized tx set XDR conversion", "[txset]")
     SECTION("one discounted component set")
     {
         auto txSetFrame = testtxset::makeNonValidatedGeneralizedTxSet(
-            {std::make_pair(1234LL, createTxs(5, 1234))}, *app,
+            {{std::make_pair(1234LL, createTxs(5, 1234))}, {}}, *app,
             app->getLedgerManager().getLastClosedLedgerHeader().hash);
 
         GeneralizedTransactionSet txSetXdr;
@@ -447,7 +505,7 @@ TEST_CASE("generalized tx set XDR conversion", "[txset]")
     SECTION("one non-discounted component set")
     {
         auto txSetFrame = testtxset::makeNonValidatedGeneralizedTxSet(
-            {std::make_pair(std::nullopt, createTxs(5, 4321))}, *app,
+            {{std::make_pair(std::nullopt, createTxs(5, 4321))}, {}}, *app,
             app->getLedgerManager().getLastClosedLedgerHeader().hash);
 
         GeneralizedTransactionSet txSetXdr;
@@ -468,10 +526,11 @@ TEST_CASE("generalized tx set XDR conversion", "[txset]")
     SECTION("multiple component sets")
     {
         auto txSetFrame = testtxset::makeNonValidatedGeneralizedTxSet(
-            {std::make_pair(12345LL, createTxs(3, 12345)),
-             std::make_pair(123LL, createTxs(1, 123)),
-             std::make_pair(1234LL, createTxs(2, 1234)),
-             std::make_pair(std::nullopt, createTxs(4, 4321))},
+            {{std::make_pair(12345LL, createTxs(3, 12345)),
+              std::make_pair(123LL, createTxs(1, 123)),
+              std::make_pair(1234LL, createTxs(2, 1234)),
+              std::make_pair(std::nullopt, createTxs(4, 4321))},
+             {}},
             *app, app->getLedgerManager().getLastClosedLedgerHeader().hash);
 
         GeneralizedTransactionSet txSetXdr;
@@ -492,12 +551,8 @@ TEST_CASE("generalized tx set XDR conversion", "[txset]")
     {
         auto const& lclHeader =
             app->getLedgerManager().getLastClosedLedgerHeader();
-        std::vector<TransactionFrameBasePtr> txs;
-        for (int i = 0; i < 5; ++i)
-        {
-            txs.push_back(root.tx({createAccount(
-                getAccount(std::to_string(i)).getPublicKey(), 1)}));
-        }
+        std::vector<TransactionFrameBasePtr> txs =
+            createTxs(5, lclHeader.header.baseFee);
         auto txSet = TxSetFrame::makeFromTransactions(txs, *app, 0, 0);
 
         GeneralizedTransactionSet txSetXdr;
@@ -514,6 +569,70 @@ TEST_CASE("generalized tx set XDR conversion", "[txset]")
                     .txsMaybeDiscountedFee()
                     .txs.size() == 5);
         checkXdrRoundtrip(txSetXdr);
+    }
+}
+
+TEST_CASE("generalized tx set with multiple txs per source account", "[txset]")
+{
+    VirtualClock clock;
+    auto cfg = getTestConfig();
+    cfg.LIMIT_TX_QUEUE_SOURCE_ACCOUNT = true;
+    cfg.LEDGER_PROTOCOL_VERSION =
+        static_cast<uint32_t>(GENERALIZED_TX_SET_PROTOCOL_VERSION);
+    cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION =
+        static_cast<uint32_t>(GENERALIZED_TX_SET_PROTOCOL_VERSION);
+    Application::pointer app = createTestApplication(clock, cfg);
+    auto root = TestAccount::createRoot(*app);
+    int accountId = 1;
+
+    auto createTx = [&](int opCnt, int fee, bool unique) {
+        std::vector<Operation> ops;
+        for (int i = 0; i < opCnt; ++i)
+        {
+            ops.emplace_back(createAccount(
+                getAccount(std::to_string(accountId++)).getPublicKey(), 1));
+        }
+
+        if (unique)
+        {
+            // Create a new unique accounts to ensure there are no collisions
+            auto source =
+                root.create("unique " + std::to_string(accountId),
+                            app->getLedgerManager().getLastMinBalance(2));
+            return transactionFromOperations(*app, source.getSecretKey(),
+                                             source.nextSequenceNumber(), ops,
+                                             fee);
+        }
+        else
+        {
+            return transactionFromOperations(
+                *app, root.getSecretKey(), root.nextSequenceNumber(), ops, fee);
+        }
+    };
+
+    SECTION("invalid")
+    {
+        auto txSet = testtxset::makeNonValidatedGeneralizedTxSet(
+            {{std::make_pair(
+                 500,
+                 std::vector<TransactionFrameBasePtr>{
+                     createTx(1, 1000, false), createTx(3, 1500, false)})},
+             {}},
+            *app, app->getLedgerManager().getLastClosedLedgerHeader().hash);
+
+        REQUIRE(!txSet->checkValid(*app, 0, 0));
+    }
+    SECTION("valid")
+    {
+        auto txSet = testtxset::makeNonValidatedGeneralizedTxSet(
+            {{std::make_pair(
+                 500,
+                 std::vector<TransactionFrameBasePtr>{
+                     createTx(1, 1000, true), createTx(3, 1500, true)})},
+             {}},
+            *app, app->getLedgerManager().getLastClosedLedgerHeader().hash);
+
+        REQUIRE(txSet->checkValid(*app, 0, 0));
     }
 }
 
@@ -536,28 +655,32 @@ TEST_CASE("generalized tx set fees", "[txset]")
             ops.emplace_back(createAccount(
                 getAccount(std::to_string(accountId++)).getPublicKey(), 1));
         }
-        return transactionFromOperations(*app, root.getSecretKey(),
-                                         root.nextSequenceNumber(), ops, fee);
+        // Create a new unique accounts to ensure there are no collisions
+        auto source = root.create("unique " + std::to_string(accountId),
+                                  app->getLedgerManager().getLastMinBalance(2));
+        return transactionFromOperations(*app, source.getSecretKey(),
+                                         source.nextSequenceNumber(), ops, fee);
     };
 
     SECTION("valid txset")
     {
         auto txSet = testtxset::makeNonValidatedGeneralizedTxSet(
-            {std::make_pair(
-                 500, std::vector<TransactionFrameBasePtr>{createTx(1, 1000),
-                                                           createTx(3, 1500)}),
-             std::make_pair(
-                 1000, std::vector<TransactionFrameBasePtr>{createTx(4, 5000),
-                                                            createTx(1, 1000),
-                                                            createTx(5, 6000)}),
-             std::make_pair(std::nullopt,
-                            std::vector<TransactionFrameBasePtr>{
-                                createTx(2, 10000), createTx(5, 100000)})},
+            {{std::make_pair(
+                  500, std::vector<TransactionFrameBasePtr>{createTx(1, 1000),
+                                                            createTx(3, 1500)}),
+              std::make_pair(
+                  1000,
+                  std::vector<TransactionFrameBasePtr>{
+                      createTx(4, 5000), createTx(1, 1000), createTx(5, 6000)}),
+              std::make_pair(std::nullopt,
+                             std::vector<TransactionFrameBasePtr>{
+                                 createTx(2, 10000), createTx(5, 100000)})},
+             {}},
             *app, app->getLedgerManager().getLastClosedLedgerHeader().hash);
 
         REQUIRE(txSet->checkValid(*app, 0, 0));
         std::vector<std::optional<int64_t>> fees;
-        for (auto const& tx : txSet->getTxs())
+        for (auto const& tx : txSet->getTxsForPhase(TxSetFrame::Phase::CLASSIC))
         {
             fees.push_back(txSet->getTxBaseFee(
                 tx,
@@ -568,12 +691,12 @@ TEST_CASE("generalized tx set fees", "[txset]")
                 std::vector<std::optional<int64_t>>{
                     std::nullopt, std::nullopt, 500, 500, 1000, 1000, 1000});
     }
-
     SECTION("tx with too low discounted fee")
     {
         auto txSet = testtxset::makeNonValidatedGeneralizedTxSet(
-            {std::make_pair(
-                500, std::vector<TransactionFrameBasePtr>{createTx(2, 999)})},
+            {{std::make_pair(
+                 500, std::vector<TransactionFrameBasePtr>{createTx(2, 999)})},
+             {}},
             *app, app->getLedgerManager().getLastClosedLedgerHeader().hash);
 
         REQUIRE(!txSet->checkValid(*app, 0, 0));
@@ -582,14 +705,16 @@ TEST_CASE("generalized tx set fees", "[txset]")
     SECTION("tx with too low non-discounted fee")
     {
         auto txSet = testtxset::makeNonValidatedGeneralizedTxSet(
-            {std::make_pair(
-                std::nullopt,
-                std::vector<TransactionFrameBasePtr>{createTx(2, 199)})},
+            {{std::make_pair(
+                 std::nullopt,
+                 std::vector<TransactionFrameBasePtr>{createTx(2, 199)})},
+             {}},
             *app, app->getLedgerManager().getLastClosedLedgerHeader().hash);
 
         REQUIRE(!txSet->checkValid(*app, 0, 0));
     }
 }
+#endif
 
 } // namespace
 } // namespace stellar

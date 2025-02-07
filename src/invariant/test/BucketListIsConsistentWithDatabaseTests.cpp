@@ -295,8 +295,10 @@ struct SelectBucketListGenerator : public BucketListGenerator
                 auto iter = filteredKeys.begin();
                 std::advance(iter, dist(gRandomEngine));
 
+                // For BucketList generation, expirationLedger shouldn't matter
                 mSelected = std::make_shared<LedgerEntry>(
-                    ltx.loadWithoutRecord(*iter).current());
+                    ltx.loadWithoutRecord(*iter, /*loadExpiredEntry=*/true)
+                        .current());
             }
         }
         return BucketListGenerator::generateLiveEntries(ltx);
@@ -507,7 +509,7 @@ class ApplyBucketsWorkModifyEntry : public ApplyBucketsWork
         entry.data.contractData() =
             LedgerTestUtils::generateValidContractDataEntry(5);
 
-        entry.data.contractData().contractID = cd.contractID;
+        entry.data.contractData().contract = cd.contract;
         entry.data.contractData().key = cd.key;
     }
 
@@ -689,7 +691,13 @@ TEST_CASE("BucketListIsConsistentWithDatabase added entries",
 
             stellar::uniform_int_distribution<uint32_t> addAtLedgerDist(
                 2, blg.mLedgerSeq);
-            auto le = LedgerTestUtils::generateValidLedgerEntry(5);
+            auto le = LedgerTestUtils::generateValidLedgerEntryWithExclusions(
+                {
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    CONFIG_SETTING
+#endif
+                },
+                5);
             le.lastModifiedLedgerSeq = addAtLedgerDist(gRandomEngine);
 
             if (!withFilter)

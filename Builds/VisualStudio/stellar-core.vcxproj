@@ -124,8 +124,8 @@
       <WarningLevel>Level4</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;USE_POSTGRES;ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION=1;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;USE_POSTGRES;ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION=1;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;TRACY_DELAYED_INIT;TRACY_MANUAL_LIFETIME;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy/public/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <MinimalRebuild>false</MinimalRebuild>
       <DisableSpecificWarnings>4060;4100;4127;4324;4408;4510;4512;4582;4583;4592</DisableSpecificWarnings>
@@ -140,10 +140,10 @@
     </ClCompile>
     <Link>
       <GenerateDebugInformation>DebugFastLink</GenerateDebugInformation>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;$(OutDir)\rust\target\debug\rust_stellar_core.lib;C:\Program Files\PostgreSQL\15\lib\libpq.lib;%(AdditionalDependencies);</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;ntdll.lib;$(OutDir)\rust\target\debug\rust_stellar_core.lib;C:\Program Files\PostgreSQL\15\lib\libpq.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
-      <Command>(set CFLAGS=-MDd) &amp; (set CXXFLAGS=-MDd) &amp; cargo build --target-dir $(OutDir)\rust\target</Command>
+      <Command>(set CFLAGS=-MDd) &amp; (set CXXFLAGS=-MDd) &amp; cargo build --target-dir $(OutDir)\rust\target --features tracy</Command>
     </PreBuildEvent>
     <PreBuildEvent>
       <Message>Rust</Message>
@@ -185,8 +185,8 @@ exit /b 0
       <WarningLevel>Level4</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;USE_POSTGRES;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;USE_POSTGRES;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;TRACY_DELAYED_INIT;TRACY_MANUAL_LIFETIME;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy/public/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <MinimalRebuild>false</MinimalRebuild>
       <DisableSpecificWarnings>4060;4100;4127;4324;4408;4510;4512;4582;4583;4592</DisableSpecificWarnings>
@@ -201,10 +201,10 @@ exit /b 0
     </ClCompile>
     <Link>
       <GenerateDebugInformation>DebugFastLink</GenerateDebugInformation>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;$(OutDir)\rust\target\debug\rust_stellar_core.lib;C:\Program Files\PostgreSQL\15\lib\libpq.lib;%(AdditionalDependencies);</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;ntdll.lib;$(OutDir)\rust\target\debug\rust_stellar_core.lib;C:\Program Files\PostgreSQL\15\lib\libpq.lib;%(AdditionalDependencies);</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
-      <Command>(set CFLAGS=-MDd) &amp; (set CXXFLAGS=-MDd) &amp; cargo build --target-dir $(OutDir)\rust\target</Command>
+      <Command>(set CFLAGS=-MDd) &amp; (set CXXFLAGS=-MDd) &amp; cargo build --target-dir $(OutDir)\rust\target --features tracy</Command>
     </PreBuildEvent>
     <PreBuildEvent>
       <Message>Rust</Message>
@@ -247,8 +247,8 @@ exit /b 0
       <WarningLevel>Level4</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION=1;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION=1;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;TRACY_DELAYED_INIT;TRACY_MANUAL_LIFETIME;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy/public/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <MinimalRebuild>false</MinimalRebuild>
       <DisableSpecificWarnings>4060;4100;4127;4324;4408;4510;4512;4582;4583;4592</DisableSpecificWarnings>
@@ -263,12 +263,12 @@ exit /b 0
     </ClCompile>
     <Link>
       <GenerateDebugInformation>DebugFastLink</GenerateDebugInformation>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;$(OutDir)\rust\target\debug\rust_stellar_core.lib</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;ntdll.lib;$(OutDir)\rust\target\debug\rust_stellar_core.lib</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>
       </IgnoreSpecificDefaultLibraries>
     </Link>
     <PreBuildEvent>
-      <Command>(set CFLAGS=-MDd) &amp; (set CXXFLAGS=-MDd) &amp; cargo build --target-dir $(OutDir)\rust\target</Command>
+      <Command>(set CFLAGS=-MDd) &amp; (set CXXFLAGS=-MDd) &amp; cargo build --target-dir $(OutDir)\rust\target --features tracy</Command>
     </PreBuildEvent>
     <PreBuildEvent>
       <Message>Rust</Message>
@@ -313,8 +313,8 @@ exit /b 0
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;USE_POSTGRES;ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION=1;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;USE_POSTGRES;ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION=1;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;TRACY_DELAYED_INIT;TRACY_MANUAL_LIFETIME;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy/public/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <BrowseInformation>false</BrowseInformation>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <DisableSpecificWarnings>4060;4100;4127;4324;4408;4510;4512;4582;4583;4592</DisableSpecificWarnings>
@@ -327,10 +327,10 @@ exit /b 0
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;$(OutDir)\rust\target\release\rust_stellar_core.lib;C:\Program Files\PostgreSQL\15\lib\libpq.lib;%(AdditionalDependencies);</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;ntdll.lib;$(OutDir)\rust\target\release\rust_stellar_core.lib;C:\Program Files\PostgreSQL\15\lib\libpq.lib;%(AdditionalDependencies);</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
-      <Command>cargo build --release --target-dir $(OutDir)\rust\target</Command>
+      <Command>cargo build --release --target-dir $(OutDir)\rust\target --features tracy</Command>
     </PreBuildEvent>
     <PreBuildEvent>
       <Message>Rust</Message>
@@ -374,8 +374,8 @@ exit /b 0
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;USE_POSTGRES;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>CEREAL_THREAD_SAFE;USE_POSTGRES;USE_SPDLOG;FMT_HEADER_ONLY=1;BUILD_TESTS;WIN32_LEAN_AND_MEAN;NOMINMAX;ASIO_STANDALONE;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;ASIO_SEPARATE_COMPILATION;ASIO_ERROR_CATEGORY_NOEXCEPT=noexcept;TRACY_ENABLE;TRACY_ON_DEMAND;TRACY_NO_BROADCAST;TRACY_ONLY_LOCALHOST;TRACY_DELAYED_INIT;TRACY_MANUAL_LIFETIME;USE_TRACY;_CRT_SECURE_NO_WARNINGS;_WIN32_WINNT=0x0601;WIN32;_MBCS;_CRT_NONSTDC_NO_DEPRECATE;YY_NO_UNISTD_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>src;../../src;../../lib;../../lib/tracy/public/tracy;../../lib/spdlog/include;../../lib/libmedida/src;../../lib/soci/src/core;../../lib/autocheck/include;../../lib/cereal/include;../../lib/asio/asio/include;../../lib/xdrpp;../../lib/libsodium/src/libsodium/include;../../lib/fmt/include;../..;src/$(Configuration)/generated;../../lib/sqlite;c:\Program Files\PostgreSQL\15\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <BrowseInformation>false</BrowseInformation>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <DisableSpecificWarnings>4060;4100;4127;4324;4408;4510;4512;4582;4583;4592</DisableSpecificWarnings>
@@ -388,10 +388,10 @@ exit /b 0
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;$(OutDir)\rust\target\release\rust_stellar_core.lib;C:\Program Files\PostgreSQL\15\lib\libpq.lib;%(AdditionalDependencies);</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;psapi.lib;Credui.lib;userenv.lib;bcrypt.lib;ntdll.lib;$(OutDir)\rust\target\release\rust_stellar_core.lib;C:\Program Files\PostgreSQL\15\lib\libpq.lib;%(AdditionalDependencies);</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
-      <Command>cargo build --release --target-dir $(OutDir)\rust\target</Command>
+      <Command>cargo build --release --target-dir $(OutDir)\rust\target --features tracy</Command>
     </PreBuildEvent>
     <PreBuildEvent>
       <Message>Rust</Message>
@@ -430,8 +430,8 @@ exit /b 0
     </PreLinkEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\lib\tracy\TracyClient.cpp" />
     <ClCompile Include="..\..\lib\spdlog.cpp" />
+    <ClCompile Include="..\..\lib\tracy\public\TracyClient.cpp" />
     <ClCompile Include="..\..\lib\util\siphash.cpp" />
     <ClCompile Include="..\..\src\bucket\Bucket.cpp" />
     <ClCompile Include="..\..\src\bucket\BucketApplicator.cpp" />
@@ -579,6 +579,7 @@ exit /b 0
     <ClCompile Include="..\..\src\ledger\LedgerTxnLiquidityPoolSQL.cpp" />
     <ClCompile Include="..\..\src\ledger\LedgerTxnOfferSQL.cpp" />
     <ClCompile Include="..\..\src\ledger\LedgerTxnTrustLineSQL.cpp" />
+    <ClCompile Include="..\..\src\ledger\LedgerTypeUtils.cpp" />
     <ClCompile Include="..\..\src\ledger\NetworkConfig.cpp" />
     <ClCompile Include="..\..\src\ledger\test\LedgerCloseMetaStreamTests.cpp" />
     <ClCompile Include="..\..\src\ledger\test\LedgerHeaderTests.cpp" />
@@ -628,6 +629,7 @@ exit /b 0
     <ClCompile Include="..\..\src\test\FuzzerImpl.cpp" />
     <ClCompile Include="..\..\src\transactions\AllowTrustOpFrame.cpp" />
     <ClCompile Include="..\..\src\transactions\BeginSponsoringFutureReservesOpFrame.cpp" />
+    <ClCompile Include="..\..\src\transactions\BumpFootprintExpirationOpFrame.cpp" />
     <ClCompile Include="..\..\src\transactions\BumpSequenceOpFrame.cpp" />
     <ClCompile Include="..\..\src\transactions\ChangeTrustOpFrame.cpp" />
     <ClCompile Include="..\..\src\transactions\ClaimClaimableBalanceOpFrame.cpp" />
@@ -653,6 +655,7 @@ exit /b 0
     <ClCompile Include="..\..\src\transactions\PathPaymentStrictReceiveOpFrame.cpp" />
     <ClCompile Include="..\..\src\transactions\PathPaymentStrictSendOpFrame.cpp" />
     <ClCompile Include="..\..\src\transactions\PaymentOpFrame.cpp" />
+    <ClCompile Include="..\..\src\transactions\RestoreFootprintOpFrame.cpp" />
     <ClCompile Include="..\..\src\transactions\RevokeSponsorshipOpFrame.cpp" />
     <ClCompile Include="..\..\src\transactions\SetOptionsOpFrame.cpp" />
     <ClCompile Include="..\..\src\transactions\SetTrustLineFlagsOpFrame.cpp" />
@@ -714,6 +717,7 @@ exit /b 0
     <ClCompile Include="..\..\src\util\Scheduler.cpp" />
     <ClCompile Include="..\..\src\util\test\MetricTests.cpp" />
     <ClCompile Include="..\..\src\util\test\SchedulerTests.cpp" />
+    <ClCompile Include="..\..\src\util\TxResource.cpp" />
     <ClCompile Include="..\..\src\util\XDRCereal.cpp" />
     <ClCompile Include="..\..\src\util\xdrquery\test\XDRQueryTests.cpp" />
     <ClCompile Include="..\..\src\util\xdrquery\XDRQuery.cpp" />
@@ -1005,6 +1009,7 @@ exit /b 0
     <ClInclude Include="..\..\src\ledger\LedgerTxnEntry.h" />
     <ClInclude Include="..\..\src\ledger\LedgerTxnHeader.h" />
     <ClInclude Include="..\..\src\ledger\LedgerTxnImpl.h" />
+    <ClInclude Include="..\..\src\ledger\LedgerTypeUtils.h" />
     <ClInclude Include="..\..\src\ledger\NetworkConfig.h" />
     <ClInclude Include="..\..\src\ledger\NonSociRelatedException.h" />
     <ClInclude Include="..\..\src\ledger\test\LedgerTestUtils.h" />
@@ -1038,6 +1043,7 @@ exit /b 0
     <ClInclude Include="..\..\src\test\FuzzerImpl.h" />
     <ClInclude Include="..\..\src\transactions\AllowTrustOpFrame.h" />
     <ClInclude Include="..\..\src\transactions\BeginSponsoringFutureReservesOpFrame.h" />
+    <ClInclude Include="..\..\src\transactions\BumpFootprintExpirationOpFrame.h" />
     <ClInclude Include="..\..\src\transactions\BumpSequenceOpFrame.h" />
     <ClInclude Include="..\..\src\transactions\ChangeTrustOpFrame.h" />
     <ClInclude Include="..\..\src\transactions\ClaimClaimableBalanceOpFrame.h" />
@@ -1063,6 +1069,7 @@ exit /b 0
     <ClInclude Include="..\..\src\transactions\PathPaymentStrictReceiveOpFrame.h" />
     <ClInclude Include="..\..\src\transactions\PathPaymentStrictSendOpFrame.h" />
     <ClInclude Include="..\..\src\transactions\PaymentOpFrame.h" />
+    <ClInclude Include="..\..\src\transactions\RestoreFootprintOpFrame.h" />
     <ClInclude Include="..\..\src\transactions\RevokeSponsorshipOpFrame.h" />
     <ClInclude Include="..\..\src\transactions\SetOptionsOpFrame.h" />
     <ClInclude Include="..\..\src\transactions\SetTrustLineFlagsOpFrame.h" />
@@ -1093,6 +1100,7 @@ exit /b 0
     <ClInclude Include="..\..\src\util\numeric128.h" />
     <ClInclude Include="..\..\src\util\RandHasher.h" />
     <ClInclude Include="..\..\src\util\Scheduler.h" />
+    <ClInclude Include="..\..\src\util\TxResource.h" />
     <ClInclude Include="..\..\src\util\UnorderedMap.h" />
     <ClInclude Include="..\..\src\util\UnorderedSet.h" />
     <ClInclude Include="..\..\src\util\XDRCereal.h" />

@@ -14,6 +14,7 @@
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
 #include "xdr/Stellar-contract.h"
 #endif
+#include "ledger/NetworkConfig.h"
 #include "xdr/Stellar-ledger-entries.h"
 #include <autocheck/generator.hpp>
 #include <locale>
@@ -133,12 +134,20 @@ randomlyModifyEntry(LedgerEntry& e)
         break;
     }
     case CONTRACT_DATA:
-        e.data.contractData().val.type(SCV_I32);
-        e.data.contractData().val.i32() = autocheck::generator<int32_t>{}();
+        if (e.data.contractData().body.bodyType() == DATA_ENTRY)
+        {
+            e.data.contractData().body.data().val.type(SCV_I32);
+            e.data.contractData().body.data().val.i32() =
+                autocheck::generator<int32_t>{}();
+        }
         makeValid(e.data.contractData());
         break;
     case CONTRACT_CODE:
-        e.data.contractCode().code = generateOpaqueVector<SCVAL_LIMIT>();
+        if (e.data.contractCode().body.bodyType() == DATA_ENTRY)
+        {
+            auto code = generateOpaqueVector<60000>();
+            e.data.contractCode().body.code().assign(code.begin(), code.end());
+        }
         makeValid(e.data.contractCode());
         break;
 #endif
@@ -336,11 +345,34 @@ makeValid(ConfigSettingEntry& ce)
 void
 makeValid(ContractDataEntry& cde)
 {
+    cde.body.bodyType(ContractEntryBodyType::DATA_ENTRY);
+    cde.body.data().flags = 0;
+    int t = cde.durability;
+    cde.durability = static_cast<ContractDataDurability>(std::abs(t % 3));
+
+    LedgerEntry le;
+    le.data.type(CONTRACT_DATA);
+    le.data.contractData() = cde;
+
+    auto key = LedgerEntryKey(le);
+    if (xdr::xdr_size(key) >
+        InitialSorobanNetworkConfig::MAX_CONTRACT_DATA_KEY_SIZE_BYTES)
+    {
+        // make the key small to prevent hitting the limit
+        static const uint32_t key_limit =
+            InitialSorobanNetworkConfig::MAX_CONTRACT_DATA_KEY_SIZE_BYTES - 50;
+        auto small_bytes =
+            autocheck::generator<xdr::opaque_vec<key_limit>>()(5);
+        SCVal val(SCV_BYTES);
+        val.bytes().assign(small_bytes.begin(), small_bytes.end());
+        cde.key = val;
+    }
 }
 
 void
 makeValid(ContractCodeEntry& cce)
 {
+    cce.body.bodyType(ContractEntryBodyType::DATA_ENTRY);
 }
 #endif
 
@@ -602,6 +634,74 @@ generateValidLedgerEntryKeysWithExclusions(
         keys.push_back(LedgerEntryKey(entry));
     }
     return keys;
+}
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+std::vector<LedgerKey>
+generateUniqueValidSorobanLedgerEntryKeys(size_t n)
+{
+    return LedgerTestUtils::generateValidUniqueLedgerEntryKeysWithExclusions(
+        {OFFER, DATA, CLAIMABLE_BALANCE, LIQUIDITY_POOL, CONFIG_SETTING}, n);
+}
+#endif
+
+std::vector<LedgerKey>
+generateValidUniqueLedgerEntryKeysWithExclusions(
+    std::unordered_set<LedgerEntryType> const& excludedTypes, size_t n)
+{
+    UnorderedSet<LedgerKey> keys;
+    std::vector<LedgerKey> res;
+    keys.reserve(n);
+    res.reserve(n);
+    while (keys.size() < n)
+    {
+        auto entry = generateValidLedgerEntryWithExclusions(excludedTypes, n);
+        auto key = LedgerEntryKey(entry);
+        if (keys.find(key) != keys.end())
+        {
+            continue;
+        }
+
+        keys.insert(key);
+        res.emplace_back(key);
+    }
+    return res;
+}
+
+LedgerEntry
+generateValidLedgerEntryWithTypes(
+    std::unordered_set<LedgerEntryType> const& types, size_t b)
+{
+    while (true)
+    {
+        auto entry = generateValidLedgerEntry(b);
+        if (types.find(entry.data.type()) != types.end())
+        {
+            return entry;
+        }
+    }
+}
+
+std::vector<LedgerEntry>
+generateValidUniqueLedgerEntriesWithTypes(
+    std::unordered_set<LedgerEntryType> const& types, size_t n)
+{
+    UnorderedSet<LedgerKey> keys;
+    std::vector<LedgerEntry> entries;
+    entries.reserve(n);
+    keys.reserve(n);
+    while (entries.size() < n)
+    {
+        auto entry = generateValidLedgerEntryWithTypes(types);
+        auto key = LedgerEntryKey(entry);
+        if (keys.find(key) != keys.end())
+        {
+            continue;
+        }
+
+        keys.insert(key);
+        entries.push_back(entry);
+    }
+    return entries;
 }
 
 AccountEntry

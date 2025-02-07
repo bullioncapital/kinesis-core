@@ -53,11 +53,14 @@ LedgerEntryKey(LedgerEntry const& e)
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     case CONTRACT_DATA:
-        k.contractData().contractID = d.contractData().contractID;
+        k.contractData().contract = d.contractData().contract;
         k.contractData().key = d.contractData().key;
+        k.contractData().durability = d.contractData().durability;
+        k.contractData().bodyType = d.contractData().body.bodyType();
         break;
     case CONTRACT_CODE:
         k.contractCode().hash = d.contractCode().hash;
+        k.contractCode().bodyType = d.contractCode().body.bodyType();
         break;
     case CONFIG_SETTING:
         k.configSetting().configSettingID = d.configSetting().configSettingID();

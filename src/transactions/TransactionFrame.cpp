@@ -134,12 +134,10 @@ TransactionFrame::pushDiagnosticEvents(xdr::xvector<DiagnosticEvent>&& evts)
 }
 
 void
-TransactionFrame::pushReturnValues(
-    xdr::xvector<SCVal, MAX_OPS_PER_TX>&& returnVals)
+TransactionFrame::setReturnValue(SCVal&& returnValue)
 {
-    mReturnValues = returnVals;
+    mReturnValue = returnValue;
 }
-
 #endif
 
 TransactionEnvelope const&
@@ -187,6 +185,26 @@ TransactionFrame::getNumOperations() const
                : static_cast<uint32_t>(mEnvelope.v1().tx.operations.size());
 }
 
+Resource
+TransactionFrame::getResources() const
+{
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    if (isSoroban())
+    {
+        auto r = sorobanResources();
+        int64_t txSize = xdr::xdr_size(mEnvelope.v1().tx);
+        int64_t const opCount = 1;
+
+        return Resource({opCount, r.instructions, txSize, r.readBytes,
+                         r.writeBytes,
+                         static_cast<int64_t>(r.footprint.readOnly.size()),
+                         static_cast<int64_t>(r.footprint.readWrite.size())});
+    }
+#endif
+
+    return Resource(getNumOperations());
+}
+
 std::vector<Operation> const&
 TransactionFrame::getRawOperations() const
 {
@@ -207,19 +225,28 @@ TransactionFrame::getFullFee() const
 int64_t
 TransactionFrame::getFeeBid() const
 {
-    int64_t fullFee = getFullFee();
+    int64_t feeBid = getFullFee();
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     if (!isSoroban())
     {
-        return fullFee;
+        return feeBid;
     }
     // We rely here on the Soroban fee being computed at
     // this point.
     releaseAssertOrThrow(mSorobanResourceFee);
-    return std::max(fullFee - mSorobanResourceFee->fee,
-                    static_cast<int64_t>(0));
+    if (feeBid < mSorobanResourceFee->non_refundable_fee)
+    {
+        return 0;
+    }
+    feeBid -= mSorobanResourceFee->non_refundable_fee;
+    int64_t declaredRefundableFee = sorobanRefundableFee();
+    if (feeBid < declaredRefundableFee)
+    {
+        return 0;
+    }
+    return feeBid - declaredRefundableFee;
 #else
-    return fullFee;
+    return feeBid;
 #endif
 }
 
@@ -336,7 +363,8 @@ TransactionFrame::loadSourceAccount(AbstractLedgerTxn& ltx,
         // this is buggy caching that existed in old versions of the protocol
         if (res)
         {
-            auto newest = ltx.getNewestVersion(LedgerEntryKey(res.current()));
+            auto newest = ltx.getNewestVersion(LedgerEntryKey(res.current()),
+                                               /*loadExpiredEntry=*/false);
             mCachedAccount = newest;
         }
         else
@@ -369,7 +397,8 @@ TransactionFrame::loadAccount(AbstractLedgerTxn& ltx,
             res = ltx.create(*mCachedAccount);
         }
 
-        auto newest = ltx.getNewestVersion(LedgerEntryKey(res.current()));
+        auto newest = ltx.getNewestVersion(LedgerEntryKey(res.current()),
+                                           /*loadExpiredEntry=*/false);
         mCachedAccount = newest;
         return res;
     }
@@ -560,8 +589,8 @@ TransactionFrame::validateSorobanOpsConsistency() const
 }
 
 bool
-TransactionFrame::validateSorobanResources(
-    SorobanNetworkConfig const& config) const
+TransactionFrame::validateSorobanResources(SorobanNetworkConfig const& config,
+                                           uint32_t protocolVersion) const
 {
     auto const& resources = sorobanResources();
     auto const& readEntries = resources.footprint.readOnly;
@@ -589,16 +618,56 @@ TransactionFrame::validateSorobanResources(
     {
         return false;
     }
+    auto footprintKeyIsValid = [&](LedgerKey const& key) -> bool {
+        if (isSorobanExtEntry(key))
+        {
+            return false;
+        }
+
+        switch (key.type())
+        {
+        case ACCOUNT:
+        case CONTRACT_DATA:
+        case CONTRACT_CODE:
+            break;
+        case TRUSTLINE:
+        {
+            auto const& tl = key.trustLine();
+            if (!isAssetValid(tl.asset, protocolVersion) ||
+                (tl.asset.type() == ASSET_TYPE_NATIVE) ||
+                isIssuer(tl.accountID, tl.asset))
+            {
+                return false;
+            }
+            break;
+        }
+        case OFFER:
+        case DATA:
+        case CLAIMABLE_BALANCE:
+        case LIQUIDITY_POOL:
+        case CONFIG_SETTING:
+            return false;
+        default:
+            throw std::runtime_error("unknown ledger key type");
+        }
+
+        if (xdr::xdr_size(key) > config.maxContractDataKeySizeBytes())
+        {
+            return false;
+        }
+
+        return true;
+    };
     for (auto const& lk : readEntries)
     {
-        if (xdr::xdr_size(lk) > config.maxContractDataKeySizeBytes())
+        if (!footprintKeyIsValid(lk))
         {
             return false;
         }
     }
     for (auto const& lk : writeEntries)
     {
-        if (xdr::xdr_size(lk) > config.maxContractDataKeySizeBytes())
+        if (!footprintKeyIsValid(lk))
         {
             return false;
         }
@@ -612,20 +681,13 @@ TransactionFrame::validateSorobanResources(
 }
 
 void
-TransactionFrame::refundSorobanFee(uint32_t protocolVersion,
-                                   SorobanNetworkConfig const& sorobanConfig,
-                                   Config const& cfg,
-                                   AbstractLedgerTxn& ltxOuter)
+TransactionFrame::refundSorobanFee(AbstractLedgerTxn& ltxOuter)
 {
-    FeePair consumedFee =
-        computeSorobanResourceFee(protocolVersion, sorobanConfig, cfg,
-                                  /* useConsumedRefundableResources */ true);
-    if (mSorobanResourceFee->refundable_fee <= consumedFee.refundable_fee)
+    if (mFeeRefund == 0)
     {
         return;
     }
-    int64_t feeRefund =
-        mSorobanResourceFee->refundable_fee - consumedFee.refundable_fee;
+
     LedgerTxn ltx(ltxOuter);
     auto header = ltx.loadHeader();
     auto sourceAccount = loadSourceAccount(ltx, header);
@@ -636,8 +698,8 @@ TransactionFrame::refundSorobanFee(uint32_t protocolVersion,
 
     auto& acc = sourceAccount.current().data.account();
 
-    stellar::addBalance(acc.balance, feeRefund);
-    header.current().feePool -= feeRefund;
+    stellar::addBalance(acc.balance, mFeeRefund);
+    header.current().feePool -= mFeeRefund;
     ltx.commit();
 }
 
@@ -660,7 +722,7 @@ TransactionFrame::computeSorobanResourceFee(
     cxxResources.write_bytes = txResources.writeBytes;
 
     cxxResources.transaction_size_bytes =
-        static_cast<uint32>(xdr::xdr_size(mEnvelope.v1().tx));
+        static_cast<uint32>(xdr::xdr_size(mEnvelope));
 
     cxxResources.metadata_size_bytes = txResources.extendedMetaDataSizeBytes;
 
@@ -679,6 +741,16 @@ TransactionFrame::computeSorobanResourceFee(
     return rust_bridge::compute_transaction_resource_fee(
         cfg.CURRENT_LEDGER_PROTOCOL_VERSION, protocolVersion, cxxResources,
         sorobanConfig.rustBridgeFeeConfiguration());
+}
+
+int64
+TransactionFrame::sorobanRefundableFee() const
+{
+    if (mEnvelope.type() != ENVELOPE_TYPE_TX || mEnvelope.v1().tx.ext.v() != 1)
+    {
+        return 0;
+    }
+    return mEnvelope.v1().tx.ext.sorobanData().refundableFee;
 }
 
 void
@@ -709,17 +781,38 @@ TransactionFrame::maybeComputeSorobanResourceFee(
     mSorobanResourceFee = std::make_optional<FeePair>(
         computeSorobanResourceFee(protocolVersion, sorobanConfig, cfg,
                                   /* useConsumedRefundableResources */ false));
-    // This is the fee computation invariant.
-    releaseAssertOrThrow(mSorobanResourceFee->fee >=
-                         mSorobanResourceFee->refundable_fee);
 }
 
 void
-TransactionFrame::consumeRefundableSorobanResource(uint32_t metadataSizeBytes)
+TransactionFrame::consumeRefundableSorobanResources(uint32_t metadataSizeBytes,
+                                                    int64_t rentFee)
 {
     mConsumedSorobanMetadataSize += metadataSizeBytes;
+    mConsumedRentFee += rentFee;
 }
 
+bool
+TransactionFrame::computeSorobanFeeRefund(
+    uint32_t protocolVersion, SorobanNetworkConfig const& sorobanConfig,
+    Config const& cfg)
+{
+    mFeeRefund = sorobanRefundableFee();
+    if (mFeeRefund < mConsumedRentFee)
+    {
+        return false;
+    }
+    mFeeRefund -= mConsumedRentFee;
+
+    FeePair consumedFee =
+        computeSorobanResourceFee(protocolVersion, sorobanConfig, cfg,
+                                  /* useConsumedRefundableResources */ true);
+    if (mFeeRefund < consumedFee.refundable_fee)
+    {
+        return false;
+    }
+    mFeeRefund -= consumedFee.refundable_fee;
+    return true;
+}
 #endif
 
 bool
@@ -897,24 +990,40 @@ TransactionFrame::commonValidPreSeqNum(Application& app, AbstractLedgerTxn& ltx,
         }
         auto const& sorobanConfig =
             app.getLedgerManager().getSorobanNetworkConfig(ltx);
-        if (!validateSorobanResources(sorobanConfig))
+        if (!validateSorobanResources(sorobanConfig, ledgerVersion))
         {
             getResult().result.code(txSOROBAN_RESOURCE_LIMIT_EXCEEDED);
             return false;
         }
-        // Full fee has to be greater than the resource fee or
-        // tx-specified refundable fee.
-        if (getFullFee() < mSorobanResourceFee->fee ||
-            getFullFee() < mEnvelope.v1().tx.ext.sorobanData().refundableFee)
+
+        auto const& sorobanData = mEnvelope.v1().tx.ext.sorobanData();
+        // Refundable fee shouldn't exceed tx-specified refundable fee.
+        // NB: Overall Soroban resource fee is verified as a part of
+        // the fee bid validation.
+        if (sorobanData.refundableFee < mSorobanResourceFee->refundable_fee)
         {
             getResult().result.code(txINSUFFICIENT_FEE);
             return false;
         }
-        // Refundable fee shouldn't exceed tx-specified refundable fee.
-        if (mEnvelope.v1().tx.ext.sorobanData().refundableFee <
-            mSorobanResourceFee->refundable_fee)
+
+        // check for duplicates
+        UnorderedSet<LedgerKey> set;
+        auto checkDuplicates =
+            [&](xdr::xvector<stellar::LedgerKey> const& keys) -> bool {
+            for (auto const& lk : keys)
+            {
+                if (!set.emplace(lk).second)
+                {
+                    getResult().result.code(txMALFORMED);
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        if (!checkDuplicates(sorobanData.resources.footprint.readOnly) ||
+            !checkDuplicates(sorobanData.resources.footprint.readWrite))
         {
-            getResult().result.code(txINSUFFICIENT_FEE);
             return false;
         }
     }
@@ -1329,16 +1438,18 @@ TransactionFrame::markResultFailed()
 }
 
 bool
-TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx)
+TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
+                        Hash const& sorobanBasePrngSeed)
 {
     TransactionMetaFrame tm(ltx.loadHeader().current().ledgerVersion);
-    return apply(app, ltx, tm);
+    return apply(app, ltx, tm, sorobanBasePrngSeed);
 }
 
 bool
 TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                                   Application& app, AbstractLedgerTxn& ltx,
-                                  TransactionMetaFrame& outerMeta)
+                                  TransactionMetaFrame& outerMeta,
+                                  Hash const& sorobanBasePrngSeed)
 {
     ZoneScoped;
     auto& internalErrorCounter = app.getMetrics().NewCounter(
@@ -1363,11 +1474,24 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
         auto& opTimer =
             app.getMetrics().NewTimer({"ledger", "operation", "apply"});
 
+        uint64_t opNum{0};
         for (auto& op : mOperations)
         {
             auto time = opTimer.TimeScope();
             LedgerTxn ltxOp(ltxTx);
-            bool txRes = op->apply(app, signatureChecker, ltxOp);
+
+            Hash subSeed = sorobanBasePrngSeed;
+            // If op can use the seed, we need to compute a sub-seed for it.
+            if (op->isSoroban())
+            {
+                SHA256 subSeedSha;
+                subSeedSha.add(sorobanBasePrngSeed);
+                subSeedSha.add(xdr::xdr_to_opaque(opNum));
+                subSeed = subSeedSha.finish();
+            }
+            ++opNum;
+
+            bool txRes = op->apply(app, signatureChecker, ltxOp, subSeed);
 
             if (!txRes)
             {
@@ -1390,6 +1514,17 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                 ltxOp.commit();
             }
         }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        if (isSoroban())
+        {
+            success = success &&
+                      computeSorobanFeeRefund(
+                          ledgerVersion,
+                          app.getLedgerManager().getSorobanNetworkConfig(ltx),
+                          app.getConfig());
+        }
+#endif
 
         if (success)
         {
@@ -1432,7 +1567,7 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
 
             outerMeta.pushContractEvents(std::move(mEvents));
             outerMeta.pushDiagnosticEvents(std::move(mDiagnosticEvents));
-            outerMeta.pushReturnValues(std::move(mReturnValues));
+            outerMeta.setReturnValue(std::move(mReturnValue));
 #endif
         }
         else
@@ -1440,8 +1575,8 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
             markResultFailed();
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
             // If transaction fails, we don't charge for any
-            // Soroban metadata (as we don't emit any).
-            mConsumedSorobanMetadataSize = 0;
+            // refundable resources.
+            mFeeRefund = sorobanRefundableFee();
             outerMeta.pushDiagnosticEvents(std::move(mDiagnosticEvents));
 #endif
         }
@@ -1516,7 +1651,8 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
 
 bool
 TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
-                        TransactionMetaFrame& meta, bool chargeFee)
+                        TransactionMetaFrame& meta, bool chargeFee,
+                        Hash const& sorobanBasePrngSeed)
 {
     ZoneScoped;
     try
@@ -1550,7 +1686,8 @@ TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
             // have the correct TransactionResult so we must crash.
             if (ok)
             {
-                ok = applyOperations(signatureChecker, app, ltx, meta);
+                ok = applyOperations(signatureChecker, app, ltx, meta,
+                                     sorobanBasePrngSeed);
             }
             return ok;
         }
@@ -1579,9 +1716,10 @@ TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
 
 bool
 TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
-                        TransactionMetaFrame& meta)
+                        TransactionMetaFrame& meta,
+                        Hash const& sorobanBasePrngSeed)
 {
-    return apply(app, ltx, meta, true);
+    return apply(app, ltx, meta, true, sorobanBasePrngSeed);
 }
 
 void
@@ -1597,9 +1735,7 @@ TransactionFrame::processPostApply(Application& app,
     // Process Soroban resource fee refund (this is independent of the
     // transaction success).
     LedgerTxn ltx(ltxOuter);
-    refundSorobanFee(ltx.loadHeader().current().ledgerVersion,
-                     app.getLedgerManager().getSorobanNetworkConfig(ltx),
-                     app.getConfig(), ltx);
+    refundSorobanFee(ltx);
     meta.pushTxChangesAfter(ltx.getChanges());
     ltx.commit();
 #endif

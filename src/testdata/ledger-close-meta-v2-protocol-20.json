@@ -1,26 +1,29 @@
 {
     "LedgerCloseMeta": {
-        "v": 1,
-        "v1": {
+        "v": 2,
+        "v2": {
+            "ext": {
+                "v": 0
+            },
             "ledgerHeader": {
-                "hash": "248886d0753ad5bbe87a29d7bc846adc222b7c9251db97c55f99b1280b3499e3",
+                "hash": "386164ce801340280db69b0e0624b6799a8f53d287650cf488deca001dd9c154",
                 "header": {
                     "ledgerVersion": 20,
-                    "previousLedgerHash": "c5fce0f599a4d4316814f44d9c99cd3567c90987e4f36d906b6d0b8060f802ea",
+                    "previousLedgerHash": "3ab23ba3d1219543917adcde0d3139ae873b05bbceaa63e8b8924525f8b1820f",
                     "scpValue": {
-                        "txSetHash": "594a8384784aa256cb32dabd4a9381152dd0e89ff47e9c6fa6dd3dee67926bf1",
+                        "txSetHash": "49d5542d9b9d52729902ae7b151169d2822ed8626f9c17784df84e529599bb63",
                         "closeTime": 0,
                         "upgrades": [],
                         "ext": {
                             "v": "STELLAR_VALUE_SIGNED",
                             "lcValueSignature": {
                                 "nodeID": "GDDOUW25MRFLNXQMN3OODP6JQEXSGLMHAFZV4XPQ2D3GA4QFIDMEJG2O",
-                                "signature": "8cc0ca61270efe0454409be4e7b391d1980df3663bd376ccc2e0d1dadb0f13588010048643e1c4fbe53a2fd56c03ce9d4c5f971562da6ccd00c8dbef8475f005"
+                                "signature": "08ee9c56540270211cec416ecb1edee65db2932f79553c2fee26bb4f78979171302a4588b9721e25ae9f566b885610c7c0c139b5ea3899870bbf1c2dfd041707"
                             }
                         }
                     },
                     "txSetResultHash": "cf65fee29665ff0c2a6910b24c420a487a7416ccd79c683b48aac1d45ad21faa",
-                    "bucketListHash": "c84e13ca35ee265ed98e859931302bf62b4294c8bb652874c4cf05b6b6302d87",
+                    "bucketListHash": "f71c1a47195c992b8bb6f081cb4d4a48c4c75abe396644b137ea6dd076ba78ea",
                     "ledgerSeq": 6,
                     "totalCoins": 1000000000000000000,
                     "feePool": 800,
@@ -46,7 +49,7 @@
             "txSet": {
                 "v": 1,
                 "v1TxSet": {
-                    "previousLedgerHash": "c5fce0f599a4d4316814f44d9c99cd3567c90987e4f36d906b6d0b8060f802ea",
+                    "previousLedgerHash": "3ab23ba3d1219543917adcde0d3139ae873b05bbceaa63e8b8924525f8b1820f",
                     "phases": [
                         {
                             "v": 0,
@@ -171,6 +174,10 @@
                                     }
                                 }
                             ]
+                        },
+                        {
+                            "v": 0,
+                            "v0Components": []
                         }
                     ]
                 }
@@ -305,6 +312,9 @@
                     "txApplyProcessing": {
                         "v": 3,
                         "v3": {
+                            "ext": {
+                                "v": 0
+                            },
                             "txChangesBefore": [
                                 {
                                     "type": "LEDGER_ENTRY_STATE",
@@ -614,9 +624,17 @@
                                 }
                             ],
                             "txChangesAfter": [],
-                            "events": [],
-                            "returnValues": [],
-                            "diagnosticEvents": []
+                            "sorobanMeta": {
+                                "ext": {
+                                    "v": 0
+                                },
+                                "events": [],
+                                "returnValue": {
+                                    "type": "SCV_BOOL",
+                                    "b": "FALSE"
+                                },
+                                "diagnosticEvents": []
+                            }
                         }
                     }
                 },
@@ -722,6 +740,9 @@
                     "txApplyProcessing": {
                         "v": 3,
                         "v3": {
+                            "ext": {
+                                "v": 0
+                            },
                             "txChangesBefore": [
                                 {
                                     "type": "LEDGER_ENTRY_STATE",
@@ -963,15 +984,26 @@
                                 }
                             ],
                             "txChangesAfter": [],
-                            "events": [],
-                            "returnValues": [],
-                            "diagnosticEvents": []
+                            "sorobanMeta": {
+                                "ext": {
+                                    "v": 0
+                                },
+                                "events": [],
+                                "returnValue": {
+                                    "type": "SCV_BOOL",
+                                    "b": "FALSE"
+                                },
+                                "diagnosticEvents": []
+                            }
                         }
                     }
                 }
             ],
             "upgradesProcessing": [],
-            "scpInfo": []
+            "scpInfo": [],
+            "totalByteSizeOfBucketList": 322,
+            "evictedTemporaryLedgerKeys": [],
+            "evictedPersistentLedgerEntries": []
         }
     }
 }

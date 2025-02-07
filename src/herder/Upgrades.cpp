@@ -3,6 +3,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "herder/Upgrades.h"
+#include "bucket/BucketManager.h"
 #include "crypto/Hex.h"
 #include "crypto/SHA.h"
 #include "database/Database.h"
@@ -118,7 +119,34 @@ load(Archive& ar, stellar::Upgrades::UpgradeParameters& o,
 
 namespace stellar
 {
+namespace
+{
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+uint32_t
+readMaxSorobanTxSetSize(AbstractLedgerTxn& ltx)
+{
+    LedgerKey key(LedgerEntryType::CONFIG_SETTING);
+    key.configSetting().configSettingID =
+        ConfigSettingID::CONFIG_SETTING_CONTRACT_EXECUTION_LANES;
+    return ltx.loadWithoutRecord(key, /*loadExpiredEntry=*/false)
+        .current()
+        .data.configSetting()
+        .contractExecutionLanes()
+        .ledgerMaxTxCount;
+}
 
+void
+upgradeMaxSorobanTxSetSize(AbstractLedgerTxn& ltx, uint32_t maxTxSetSize)
+{
+    LedgerKey key(LedgerEntryType::CONFIG_SETTING);
+    key.configSetting().configSettingID =
+        ConfigSettingID::CONFIG_SETTING_CONTRACT_EXECUTION_LANES;
+    auto& le = ltx.load(key).current();
+    le.data.configSetting().contractExecutionLanes().ledgerMaxTxCount =
+        maxTxSetSize;
+}
+#endif
+} // namespace
 std::chrono::hours const Upgrades::UPDGRADE_EXPIRATION_HOURS(12);
 
 std::string
@@ -293,6 +321,15 @@ Upgrades::createUpgradesFor(LedgerHeader const& lclHeader,
         result.back().newMaxFee() = *mParams.mMaxFee;
     }
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    if (mParams.mMaxSorobanTxSetSize)
+    {
+        if (readMaxSorobanTxSetSize(ltx) != *mParams.mMaxSorobanTxSetSize)
+        {
+            result.emplace_back(LEDGER_UPGRADE_MAX_SOROBAN_TX_SET_SIZE);
+            result.back().newMaxSorobanTxSetSize() =
+                *mParams.mMaxSorobanTxSetSize;
+        }
+    }
     auto key = mParams.mConfigUpgradeSetKey;
     if (key)
     {
@@ -316,7 +353,7 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, Application& app,
     switch (upgrade.type())
     {
     case LEDGER_UPGRADE_VERSION:
-        applyVersionUpgrade(ltx, upgrade.newLedgerVersion());
+        applyVersionUpgrade(app, ltx, upgrade.newLedgerVersion());
         break;
     case LEDGER_UPGRADE_BASE_FEE:
         ltx.loadHeader().current().baseFee = upgrade.newBaseFee();
@@ -352,9 +389,12 @@ Upgrades::applyTo(LedgerUpgrade const& upgrade, Application& app,
         {
             throw std::runtime_error("config upgrade set is no longer valid");
         }
-        cfgUpgrade->applyTo(ltx);
+        cfgUpgrade->applyTo(ltx, app);
         break;
     }
+    case LEDGER_UPGRADE_MAX_SOROBAN_TX_SET_SIZE:
+        upgradeMaxSorobanTxSetSize(ltx, upgrade.newMaxSorobanTxSetSize());
+        break;
 #endif
     default:
     {
@@ -392,6 +432,9 @@ Upgrades::toString(LedgerUpgrade const& upgrade)
         return fmt::format(
             FMT_STRING("{}"),
             xdr::xdr_to_string(upgrade.newConfig(), "configupgradesetkey"));
+    case LEDGER_UPGRADE_MAX_SOROBAN_TX_SET_SIZE:
+        return fmt::format(FMT_STRING("maxsorobantxsetsize={:d}"),
+                           upgrade.newMaxSorobanTxSetSize());
 #endif
     default:
         return "<unsupported>";
@@ -537,6 +580,9 @@ Upgrades::removeUpgrades(std::vector<UpgradeType>::const_iterator beginUpdates,
             }
             break;
         }
+        case LEDGER_UPGRADE_MAX_SOROBAN_TX_SET_SIZE:
+            resetParam(res.mMaxSorobanTxSetSize, lu.newMaxSorobanTxSetSize());
+            break;
 #endif
         default:
             // skip unknown
@@ -625,6 +671,14 @@ Upgrades::isValidForApply(UpgradeType const& opaqueUpgrade,
         res = res && (configUpgradeValid == UpgradeValidity::VALID);
         break;
     }
+    case LEDGER_UPGRADE_MAX_SOROBAN_TX_SET_SIZE:
+        if (protocolVersionIsBefore(header.ledgerVersion,
+                                    SOROBAN_PROTOCOL_VERSION))
+        {
+            return UpgradeValidity::INVALID;
+        }
+        // Any size is valid.
+        break;
 #endif
     default:
         res = false;
@@ -676,6 +730,10 @@ Upgrades::isValidForNomination(LedgerUpgrade const& upgrade, Application& app,
                cfgUpgrade->isConsistentWith(ConfigUpgradeSetFrame::makeFromKey(
                    ltx, *mParams.mConfigUpgradeSetKey));
     }
+    case LEDGER_UPGRADE_MAX_SOROBAN_TX_SET_SIZE:
+        return mParams.mMaxSorobanTxSetSize &&
+               (upgrade.newMaxSorobanTxSetSize() ==
+                *mParams.mMaxSorobanTxSetSize);
 #endif
     default:
         return false;
@@ -843,7 +901,7 @@ getAvailableLimitExcludingLiabilities(AccountID const& accountID,
         LedgerKey key(TRUSTLINE);
         key.trustLine().accountID = accountID;
         key.trustLine().asset = assetToTrustLineAsset(asset);
-        auto trust = ltx.loadWithoutRecord(key);
+        auto trust = ltx.loadWithoutRecord(key, /*loadExpiredEntry=*/false);
         if (trust && isAuthorizedToMaintainLiabilities(trust))
         {
             auto const& tl = trust.current().data.trustLine();
@@ -1246,7 +1304,8 @@ needUpgradeToVersion(ProtocolVersion targetVersion, uint32_t prevVersion,
 }
 
 void
-Upgrades::applyVersionUpgrade(AbstractLedgerTxn& ltx, uint32_t newVersion)
+Upgrades::applyVersionUpgrade(Application& app, AbstractLedgerTxn& ltx,
+                              uint32_t newVersion)
 {
     auto header = ltx.loadHeader();
     uint32_t prevVersion = header.current().ledgerVersion;
@@ -1265,7 +1324,7 @@ Upgrades::applyVersionUpgrade(AbstractLedgerTxn& ltx, uint32_t newVersion)
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     if (needUpgradeToVersion(SOROBAN_PROTOCOL_VERSION, prevVersion, newVersion))
     {
-        SorobanNetworkConfig::createLedgerEntriesForV20(ltx);
+        SorobanNetworkConfig::createLedgerEntriesForV20(ltx, app);
     }
 #endif
 }
@@ -1290,17 +1349,20 @@ ConfigUpgradeSetFrameConstPtr
 ConfigUpgradeSetFrame::makeFromKey(AbstractLedgerTxn& ltx,
                                    ConfigUpgradeSetKey const& key)
 {
-    auto ltxe = ltx.loadWithoutRecord(ConfigUpgradeSetFrame::getLedgerKey(key));
+    auto ltxe = ltx.loadWithoutRecord(ConfigUpgradeSetFrame::getLedgerKey(key),
+                                      /*loadExpiredEntry=*/false);
     if (!ltxe)
     {
         return nullptr;
     }
     auto const& contractData = ltxe.current().data.contractData();
-    if (contractData.val.type() != SCV_BYTES)
+    if (contractData.body.bodyType() != DATA_ENTRY ||
+        contractData.body.data().val.type() != SCV_BYTES ||
+        contractData.durability != PERSISTENT)
     {
         return nullptr;
     }
-    auto const& bytes = contractData.val.bytes();
+    auto const& bytes = contractData.body.data().val.bytes();
 
     ConfigUpgradeSet upgradeSet;
     try
@@ -1391,8 +1453,10 @@ ConfigUpgradeSetFrame::getLedgerKey(ConfigUpgradeSetKey const& upgradeKey)
 
     LedgerKey lk;
     lk.type(CONTRACT_DATA);
-    lk.contractData().contractID = upgradeKey.contractID;
+    lk.contractData().contract.type(SC_ADDRESS_TYPE_CONTRACT);
+    lk.contractData().contract.contractId() = upgradeKey.contractID;
     lk.contractData().key = v;
+    lk.contractData().durability = PERSISTENT;
     return lk;
 }
 
@@ -1409,9 +1473,9 @@ ConfigUpgradeSetFrame::upgradeNeeded(AbstractLedgerTxn& ltx,
     {
         LedgerKey key(LedgerEntryType::CONFIG_SETTING);
         key.configSetting().configSettingID = updatedEntry.configSettingID();
-        bool isSame =
-            ltx.loadWithoutRecord(key).current().data.configSetting() ==
-            updatedEntry;
+        bool isSame = ltx.loadWithoutRecord(key, /*loadExpiredEntry=*/false)
+                          .current()
+                          .data.configSetting() == updatedEntry;
         if (!isSame)
         {
             return true;
@@ -1421,12 +1485,13 @@ ConfigUpgradeSetFrame::upgradeNeeded(AbstractLedgerTxn& ltx,
 }
 
 void
-ConfigUpgradeSetFrame::applyTo(AbstractLedgerTxn& ltx) const
+ConfigUpgradeSetFrame::applyTo(AbstractLedgerTxn& ltx, Application& app) const
 {
     for (auto const& updatedEntry : mConfigUpgradeSet.updatedEntry)
     {
         LedgerKey key(LedgerEntryType::CONFIG_SETTING);
-        key.configSetting().configSettingID = updatedEntry.configSettingID();
+        auto const id = updatedEntry.configSettingID();
+        key.configSetting().configSettingID = id;
         ltx.load(key).current().data.configSetting() = updatedEntry;
     }
 }
@@ -1473,15 +1538,25 @@ ConfigUpgradeSetFrame::isValidForApply() const
         case ConfigSettingID::CONFIG_SETTING_CONTRACT_DATA_ENTRY_SIZE_BYTES:
             valid = configEntry.contractDataEntrySizeBytes() > 0;
             break;
+        case ConfigSettingID::CONFIG_SETTING_CONTRACT_EXECUTION_LANES:
+            valid = configEntry.contractExecutionLanes().ledgerMaxTxCount >= 0;
+            break;
         case ConfigSettingID::CONFIG_SETTING_CONTRACT_BANDWIDTH_V0:
         case ConfigSettingID::CONFIG_SETTING_CONTRACT_COMPUTE_V0:
         case ConfigSettingID::CONFIG_SETTING_CONTRACT_HISTORICAL_DATA_V0:
         case ConfigSettingID::CONFIG_SETTING_CONTRACT_LEDGER_COST_V0:
         case ConfigSettingID::CONFIG_SETTING_CONTRACT_META_DATA_V0:
+        case ConfigSettingID::CONFIG_SETTING_STATE_EXPIRATION:
             // For now none of these settings have any semantical value.
             // Validation should be implemented when implementing/tuning
             // the respective settings.
             valid = true;
+            break;
+        case ConfigSettingID::CONFIG_SETTING_BUCKETLIST_SIZE_WINDOW:
+            // While the BucketList size window is stored in a ConfigSetting
+            // entry, the BucketList defines these values, they should never be
+            // changed via upgrade
+            valid = false;
             break;
         }
         if (!valid)

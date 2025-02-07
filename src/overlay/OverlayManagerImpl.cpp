@@ -45,6 +45,8 @@ using namespace std;
 constexpr std::chrono::seconds PEER_IP_RESOLVE_DELAY(600);
 constexpr std::chrono::seconds PEER_IP_RESOLVE_RETRY_DELAY(10);
 constexpr std::chrono::seconds OUT_OF_SYNC_RECONNECT_DELAY(60);
+constexpr uint32_t INITIAL_PEER_FLOOD_READING_CAPACITY_BYTES{300000};
+constexpr uint32_t INITIAL_FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES{100000};
 
 // Regardless of the number of failed attempts &
 // FLOOD_DEMAND_BACKOFF_DELAY_MS it doesn't make much sense to wait much
@@ -135,7 +137,7 @@ OverlayManagerImpl::PeersList::moveToAuthenticated(Peer::pointer peer)
 {
     ZoneScoped;
     CLOG_TRACE(Overlay, "Moving peer {} to authenticated  state: {}",
-               peer->toString(), peer->getState());
+               peer->toString(), Peer::format_as(peer->getState()));
     auto pendingIt = std::find(std::begin(mPending), std::end(mPending), peer);
     if (pendingIt == std::end(mPending))
     {
@@ -268,6 +270,7 @@ OverlayManagerImpl::OverlayManagerImpl(Application& app)
                     mApp.getConfig().MAX_ADDITIONAL_PEER_CONNECTIONS)
     , mOutboundPeers(*this, mApp.getMetrics(), "outbound", "cancel",
                      mApp.getConfig().TARGET_PEER_CONNECTIONS)
+    , mLiveInboundPeersCounter(make_shared<int>(0))
     , mPeerManager(app)
     , mDoor(mApp)
     , mAuth(mApp)
@@ -281,7 +284,6 @@ OverlayManagerImpl::OverlayManagerImpl(Application& app)
     , mDemandTimer(app)
     , mResolvingPeersWithBackoff(true)
     , mResolvingPeersRetryCount(0)
-
 {
     mPeerSources[PeerType::INBOUND] = std::make_unique<RandomPeerSource>(
         mPeerManager, RandomPeerSource::nextAttemptCutoff(PeerType::INBOUND));
@@ -314,6 +316,36 @@ OverlayManagerImpl::start()
     }
     // Start demanding.
     demand();
+}
+
+OverlayManager::AdjustedFlowControlConfig
+OverlayManagerImpl::getFlowControlBytesConfig() const
+{
+    auto const maxTxSize = mApp.getHerder().getMaxTxSize();
+    releaseAssert(maxTxSize > 0);
+    auto const& cfg = mApp.getConfig();
+
+    // If flow control parameters weren't provided in the config file, calculate
+    // them automatically using initial values, but adjusting them according to
+    // maximum transactions byte size.
+    if (cfg.PEER_FLOOD_READING_CAPACITY_BYTES == 0 &&
+        cfg.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES == 0)
+    {
+        if (!(INITIAL_PEER_FLOOD_READING_CAPACITY_BYTES -
+                  INITIAL_FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES >=
+              maxTxSize))
+        {
+            return {static_cast<uint32_t>(maxTxSize) +
+                        INITIAL_FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES,
+                    INITIAL_FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES};
+        }
+        return {INITIAL_PEER_FLOOD_READING_CAPACITY_BYTES,
+                INITIAL_FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES};
+    }
+
+    // If flow control parameters were provided, return them
+    return {cfg.PEER_FLOOD_READING_CAPACITY_BYTES,
+            cfg.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES};
 }
 
 void
@@ -769,58 +801,86 @@ OverlayManagerImpl::updateSizeCounters()
 }
 
 void
-OverlayManagerImpl::addInboundConnection(Peer::pointer peer)
+OverlayManagerImpl::maybeAddInboundConnection(Peer::pointer peer)
 {
     ZoneScoped;
-    releaseAssert(peer->getRole() == Peer::REMOTE_CALLED_US);
     mInboundPeers.mConnectionsAttempted.Mark();
 
-    auto haveSpace = mInboundPeers.mPending.size() <
-                     mApp.getConfig().MAX_INBOUND_PENDING_CONNECTIONS;
-    if (!haveSpace && mInboundPeers.mPending.size() <
-                          mApp.getConfig().MAX_INBOUND_PENDING_CONNECTIONS +
+    if (peer)
+    {
+        releaseAssert(peer->getRole() == Peer::REMOTE_CALLED_US);
+        bool haveSpace = haveSpaceForConnection(peer->getIP());
+
+        if (mShuttingDown || !haveSpace)
+        {
+            mInboundPeers.mConnectionsCancelled.Mark();
+            peer->drop("all pending inbound connections are taken",
+                       Peer::DropDirection::WE_DROPPED_REMOTE,
+                       Peer::DropMode::IGNORE_WRITE_QUEUE);
+            return;
+        }
+        CLOG_DEBUG(Overlay, "New (inbound) connected peer {}",
+                   peer->toString());
+        mInboundPeers.mConnectionsEstablished.Mark();
+        mInboundPeers.mPending.push_back(peer);
+        updateSizeCounters();
+    }
+    else
+    {
+        mInboundPeers.mConnectionsCancelled.Mark();
+    }
+}
+
+bool
+OverlayManagerImpl::isPossiblyPreferred(std::string const& ip) const
+{
+    return std::any_of(
+        std::begin(mConfigurationPreferredPeers),
+        std::end(mConfigurationPreferredPeers),
+        [&](PeerBareAddress const& address) { return address.getIP() == ip; });
+}
+
+bool
+OverlayManagerImpl::haveSpaceForConnection(std::string const& ip) const
+{
+    auto totalAuthenticated = getInboundAuthenticatedPeers().size();
+    auto totalTracked = *getLiveInboundPeersCounter();
+
+    size_t totalPendingCount = 0;
+    if (totalTracked > totalAuthenticated)
+    {
+        totalPendingCount = totalTracked - totalAuthenticated;
+    }
+    auto adjustedInCount =
+        std::max<size_t>(mInboundPeers.mPending.size(), totalPendingCount);
+
+    auto haveSpace =
+        adjustedInCount < mApp.getConfig().MAX_INBOUND_PENDING_CONNECTIONS;
+
+    if (!haveSpace &&
+        adjustedInCount < mApp.getConfig().MAX_INBOUND_PENDING_CONNECTIONS +
                               Config::POSSIBLY_PREFERRED_EXTRA)
     {
         // for peers that are possibly preferred (they have the same IP as some
         // preferred peer we enocuntered in past), we allow an extra
         // Config::POSSIBLY_PREFERRED_EXTRA incoming pending connections, that
         // are not available for non-preferred peers
-        haveSpace = isPossiblyPreferred(peer->getIP());
+        haveSpace = isPossiblyPreferred(ip);
     }
 
-    if (mShuttingDown || !haveSpace)
+    if (!haveSpace)
     {
-        if (!mShuttingDown)
-        {
-            CLOG_DEBUG(
-                Overlay,
-                "Peer rejected - all pending inbound connections are taken: {}",
-                peer->toString());
-            CLOG_DEBUG(Overlay, "If you wish to allow for more pending "
-                                "inbound connections, please update your "
-                                "MAX_PENDING_CONNECTIONS setting in "
-                                "configuration file.");
-        }
-
-        mInboundPeers.mConnectionsCancelled.Mark();
-        peer->drop("all pending inbound connections are taken",
-                   Peer::DropDirection::WE_DROPPED_REMOTE,
-                   Peer::DropMode::IGNORE_WRITE_QUEUE);
-        return;
+        CLOG_DEBUG(
+            Overlay,
+            "Peer rejected - all pending inbound connections are taken: {}",
+            ip);
+        CLOG_DEBUG(Overlay, "If you wish to allow for more pending "
+                            "inbound connections, please update your "
+                            "MAX_PENDING_CONNECTIONS setting in "
+                            "configuration file.");
     }
-    CLOG_DEBUG(Overlay, "New (inbound) connected peer {}", peer->toString());
-    mInboundPeers.mConnectionsEstablished.Mark();
-    mInboundPeers.mPending.push_back(peer);
-    updateSizeCounters();
-}
 
-bool
-OverlayManagerImpl::isPossiblyPreferred(std::string const& ip)
-{
-    return std::any_of(
-        std::begin(mConfigurationPreferredPeers),
-        std::end(mConfigurationPreferredPeers),
-        [&](PeerBareAddress const& address) { return address.getIP() == ip; });
+    return haveSpace;
 }
 
 bool
@@ -921,6 +981,12 @@ OverlayManagerImpl::getAuthenticatedPeers() const
     result.insert(std::begin(mInboundPeers.mAuthenticated),
                   std::end(mInboundPeers.mAuthenticated));
     return result;
+}
+
+std::shared_ptr<int>
+OverlayManagerImpl::getLiveInboundPeersCounter() const
+{
+    return mLiveInboundPeersCounter;
 }
 
 int
@@ -1184,6 +1250,14 @@ OverlayManagerImpl::recordMessageMetric(StellarMessage const& stellarMsg,
     }
 }
 
+int64_t
+getOpsFloodLedger(size_t maxOps, double rate)
+{
+    double opsToFloodPerLedgerDbl = rate * static_cast<double>(maxOps);
+    releaseAssertOrThrow(opsToFloodPerLedgerDbl >= 0.0);
+    return static_cast<int64_t>(opsToFloodPerLedgerDbl);
+}
+
 size_t
 OverlayManagerImpl::getMaxAdvertSize() const
 {
@@ -1192,12 +1266,20 @@ OverlayManagerImpl::getMaxAdvertSize() const
         std::chrono::duration_cast<std::chrono::milliseconds>(
             cfg.getExpectedLedgerCloseTime())
             .count();
-    double opRatePerLedger = cfg.FLOOD_OP_RATE_PER_LEDGER;
-    size_t maxOps = mApp.getLedgerManager().getLastMaxTxSetSizeOps();
-    double opsToFloodPerLedgerDbl =
-        opRatePerLedger * static_cast<double>(maxOps);
-    releaseAssertOrThrow(opsToFloodPerLedgerDbl >= 0.0);
-    int64_t opsToFloodPerLedger = static_cast<int64_t>(opsToFloodPerLedgerDbl);
+
+    int64_t opsToFloodPerLedger =
+        getOpsFloodLedger(mApp.getLedgerManager().getLastMaxTxSetSizeOps(),
+                          cfg.FLOOD_OP_RATE_PER_LEDGER);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    {
+        LedgerTxn ltx(mApp.getLedgerTxnRoot(),
+                      /* shouldUpdateLastModified */ true,
+                      TransactionMode::READ_ONLY_WITHOUT_SQL_TXN);
+        auto limits = mApp.getLedgerManager().getSorobanNetworkConfig(ltx);
+        opsToFloodPerLedger += getOpsFloodLedger(
+            limits.ledgerMaxTxCount(), cfg.FLOOD_SOROBAN_RATE_PER_LEDGER);
+    }
+#endif
 
     size_t res = static_cast<size_t>(bigDivideOrThrow(
         opsToFloodPerLedger, cfg.FLOOD_ADVERT_PERIOD_MS.count(),
@@ -1216,12 +1298,14 @@ OverlayManagerImpl::getMaxDemandSize() const
         std::chrono::duration_cast<std::chrono::milliseconds>(
             cfg.getExpectedLedgerCloseTime())
             .count();
-    double opRatePerLedger = cfg.FLOOD_OP_RATE_PER_LEDGER;
-    double queueSizeInOpsDbl =
-        static_cast<double>(mApp.getHerder().getMaxQueueSizeOps()) *
-        opRatePerLedger;
-    releaseAssertOrThrow(queueSizeInOpsDbl >= 0.0);
-    int64_t queueSizeInOps = static_cast<int64_t>(queueSizeInOpsDbl);
+    int64_t queueSizeInOps = getOpsFloodLedger(
+        mApp.getHerder().getMaxQueueSizeOps(), cfg.FLOOD_OP_RATE_PER_LEDGER);
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    queueSizeInOps +=
+        getOpsFloodLedger(mApp.getHerder().getMaxQueueSizeSorobanOps(),
+                          cfg.FLOOD_SOROBAN_RATE_PER_LEDGER);
+#endif
 
     size_t res = static_cast<size_t>(
         bigDivideOrThrow(queueSizeInOps, cfg.FLOOD_DEMAND_PERIOD_MS.count(),

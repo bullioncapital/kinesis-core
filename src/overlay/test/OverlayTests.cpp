@@ -25,6 +25,7 @@
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
 #include "medida/timer.h"
+#include "transactions/SignatureUtils.h"
 #include <fmt/format.h>
 #include <numeric>
 
@@ -99,19 +100,27 @@ TEST_CASE("loopback peer send auth before hello", "[overlay][connections]")
 
 TEST_CASE("flow control byte capacity", "[overlay][flowcontrol]")
 {
-    StellarMessage msg;
-    msg.type(TRANSACTION);
-    auto txSize = xdr::xdr_argpack_size(msg);
+    StellarMessage tx1;
+    tx1.type(TRANSACTION);
+    uint32 txSize = static_cast<uint32>(xdr::xdr_argpack_size(tx1));
 
     VirtualClock clock;
     auto cfg1 = getTestConfig(0);
     auto cfg2 = getTestConfig(1);
+    cfg1.TESTING_TX_MAX_SIZE_BYTES = txSize;
+    cfg2.TESTING_TX_MAX_SIZE_BYTES = txSize;
+
     REQUIRE(cfg1.PEER_FLOOD_READING_CAPACITY !=
             cfg1.PEER_FLOOD_READING_CAPACITY_BYTES);
 
     auto test = [&](bool shouldRequestMore) {
-        auto app1 = createTestApplication(clock, cfg1);
-        auto app2 = createTestApplication(clock, cfg2);
+        auto app1 = createTestApplication(clock, cfg1, true, false);
+        auto app2 = createTestApplication(clock, cfg2, true, false);
+        app1->getHerder().setMaxClassicTxSize(txSize);
+        app2->getHerder().setMaxClassicTxSize(txSize);
+        app1->start();
+        app2->start();
+
         LoopbackPeerConnection conn(*app1, *app2);
         testutil::crankSome(clock);
         REQUIRE(conn.getInitiator()->isAuthenticated());
@@ -128,14 +137,14 @@ TEST_CASE("flow control byte capacity", "[overlay][flowcontrol]")
                 txSize * 2);
             // Basic capacity math
             conn.getInitiator()->sendMessage(
-                std::make_shared<StellarMessage>(msg));
+                std::make_shared<StellarMessage>(tx1));
             REQUIRE(conn.getInitiator()
                         ->getFlowControl()
                         ->getCapacityBytes()
                         ->getOutboundCapacity() == expectedCapacity);
             REQUIRE(conn.getInitiator()->getTxQueueByteCount() == 0);
 
-            conn.getAcceptor()->recvMessage(msg);
+            conn.getAcceptor()->recvMessage(tx1);
             REQUIRE(conn.getAcceptor()
                         ->getFlowControl()
                         ->getCapacityBytes()
@@ -146,7 +155,7 @@ TEST_CASE("flow control byte capacity", "[overlay][flowcontrol]")
         {
             // Processing triggers SEND_MORE
             conn.getInitiator()->sendMessage(
-                std::make_shared<StellarMessage>(msg));
+                std::make_shared<StellarMessage>(tx1));
 
             auto& sendMoreMeter = conn.getAcceptor()
                                       ->getApp()
@@ -199,15 +208,176 @@ TEST_CASE("flow control byte capacity", "[overlay][flowcontrol]")
     {
         cfg2.PEER_FLOOD_READING_CAPACITY_BYTES = 2 * txSize;
         cfg2.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = 2 * txSize;
-        test(false);
+        // Invalid config, core will throw on startup
+        REQUIRE_THROWS_AS(test(false), std::runtime_error);
     }
     SECTION("message count kicks in first")
     {
-        cfg2.PEER_FLOOD_READING_CAPACITY_BYTES = 2 * txSize;
+        cfg2.PEER_FLOOD_READING_CAPACITY_BYTES = 3 * txSize;
         cfg2.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = 2 * txSize;
         cfg2.PEER_FLOOD_READING_CAPACITY = 1;
         cfg2.FLOW_CONTROL_SEND_MORE_BATCH_SIZE = 1;
         test(true);
+    }
+    SECTION("transaction size upgrades")
+    {
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        auto tx2 = tx1;
+        tx2.transaction().v0().signatures.emplace_back(
+            SignatureUtils::sign(SecretKey::random(), HashUtils::random()));
+        uint32 txSize2 = static_cast<uint32>(xdr::xdr_argpack_size(tx2));
+        REQUIRE(txSize2 > txSize + 1);
+
+        // Configure flow control such that tx2 can't be sent
+        cfg1.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = txSize + 1;
+        cfg1.PEER_FLOOD_READING_CAPACITY_BYTES =
+            cfg2.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES + txSize;
+        cfg2.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = txSize + 1;
+        cfg2.PEER_FLOOD_READING_CAPACITY_BYTES =
+            cfg2.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES + txSize;
+
+        auto app1 = createTestApplication(clock, cfg1, true, false);
+        auto app2 = createTestApplication(clock, cfg2, true, false);
+        app1->getHerder().setMaxClassicTxSize(txSize);
+        app2->getHerder().setMaxClassicTxSize(txSize);
+
+        app1->start();
+        app2->start();
+
+        LoopbackPeerConnection conn(*app1, *app2);
+        testutil::crankSome(clock);
+        REQUIRE(conn.getInitiator()->isAuthenticated());
+        REQUIRE(conn.getAcceptor()->isAuthenticated());
+        REQUIRE(conn.getInitiator()->checkCapacity(conn.getAcceptor()));
+        REQUIRE(conn.getAcceptor()->checkCapacity(conn.getInitiator()));
+
+        auto upgradeApp = [&](Application::pointer app, uint32 maxTxSize) {
+            ConfigUpgradeSetFrameConstPtr res;
+            {
+                LedgerTxn ltx(app->getLedgerTxnRoot());
+                ConfigUpgradeSet configUpgradeSet;
+                auto& configEntry =
+                    configUpgradeSet.updatedEntry.emplace_back();
+                configEntry.configSettingID(
+                    CONFIG_SETTING_CONTRACT_BANDWIDTH_V0);
+                configEntry.contractBandwidth().txMaxSizeBytes = maxTxSize;
+                res = txtest::makeConfigUpgradeSet(ltx, configUpgradeSet);
+                ltx.commit();
+            }
+            txtest::executeUpgrade(*app, txtest::makeConfigUpgrade(*res));
+        };
+
+        auto& txsRecv =
+            app2->getMetrics().NewTimer({"overlay", "recv", "transaction"});
+        auto start = txsRecv.count();
+        conn.getInitiator()->sendMessage(std::make_shared<StellarMessage>(tx1));
+
+        SECTION("no upgrade, drop messages over limit")
+        {
+            conn.getInitiator()->sendMessage(
+                std::make_shared<StellarMessage>(tx2));
+            testutil::crankSome(clock);
+            // First message got sent, second message got dropped (byte size is
+            // over limit)
+            REQUIRE(conn.getInitiator()->getTxQueueByteCount() == 0);
+            REQUIRE(txsRecv.count() == start + 1);
+        }
+        SECTION("upgrade increases limit")
+        {
+            SECTION("both upgrade")
+            {
+                // First increase the limit
+                upgradeApp(app1, txSize2);
+                upgradeApp(app2, txSize2);
+
+                // Allow the upgrade to go through, and SEND_MORE messages to be
+                // sent
+                testutil::crankSome(clock);
+                conn.getInitiator()->sendMessage(
+                    std::make_shared<StellarMessage>(tx2));
+                testutil::crankSome(clock);
+                REQUIRE(conn.getInitiator()->getTxQueueByteCount() == 0);
+                REQUIRE(txsRecv.count() == start + 2);
+
+                SECTION("upgrade decreases limit")
+                {
+                    // Place another large tx in the queue, then immediately
+                    // upgrade to decrease the limit. The transaction should
+                    // still go through, but it will be rejected due to the
+                    // new size limit
+                    conn.getInitiator()->sendMessage(
+                        std::make_shared<StellarMessage>(tx2));
+
+                    upgradeApp(app1, txSize / 2);
+                    upgradeApp(app2, txSize / 2);
+
+                    auto& sendMoreMeter = app1->getMetrics().NewMeter(
+                        {"overlay", "send", "send-more"}, "message");
+                    auto before = sendMoreMeter.count();
+
+                    // Allow upgrade to go through, no SEND_MORE messages are
+                    // sent
+                    testutil::crankSome(clock);
+                    REQUIRE(conn.getInitiator()->getTxQueueByteCount() == 0);
+                    REQUIRE(txsRecv.count() == start + 3);
+
+                    REQUIRE(before == sendMoreMeter.count());
+
+                    // Tx1 can still go through due to classic limit
+                    conn.getInitiator()->sendMessage(
+                        std::make_shared<StellarMessage>(tx1));
+                    testutil::crankSome(clock);
+                    REQUIRE(conn.getInitiator()->getTxQueueByteCount() == 0);
+                    REQUIRE(txsRecv.count() == start + 4);
+
+                    // Tx2 gets dropped
+                    conn.getInitiator()->sendMessage(
+                        std::make_shared<StellarMessage>(tx2));
+                    testutil::crankSome(clock);
+                    REQUIRE(conn.getInitiator()->getTxQueueByteCount() == 0);
+                    REQUIRE(txsRecv.count() == start + 4);
+                }
+            }
+            SECTION("upgrade delayed")
+            {
+                // Upgrade initiator, but not acceptor
+                // This means the initiator will not drop messages of bigger
+                // size, but they'll be stuck in the queue until the acceptor
+                // upgrades
+                upgradeApp(app1, txSize2);
+
+                // Allow the upgrade to go through
+                testutil::crankSome(clock);
+                conn.getInitiator()->sendMessage(
+                    std::make_shared<StellarMessage>(tx2));
+                REQUIRE(conn.getInitiator()->getTxQueueByteCount() == txSize2);
+
+                // Still stuck after some time
+                testutil::crankSome(clock);
+                REQUIRE(conn.getInitiator()->getTxQueueByteCount() == txSize2);
+                REQUIRE(txsRecv.count() == start + 1);
+
+                SECTION("acceptor eventually upgrades")
+                {
+                    // Upgrade acceptor, now the message goes through
+                    upgradeApp(app2, txSize2);
+                    testutil::crankSome(clock);
+                    REQUIRE(conn.getInitiator()->getTxQueueByteCount() == 0);
+                    REQUIRE(txsRecv.count() == start + 2);
+                }
+                SECTION("acceptor never upgrades, drop after timeout")
+                {
+                    testutil::crankFor(clock,
+                                       Peer::PEER_SEND_MODE_IDLE_TIMEOUT +
+                                           std::chrono::seconds(5));
+                    REQUIRE(!conn.getInitiator()->isConnected());
+                    REQUIRE(!conn.getAcceptor()->isConnected());
+                    REQUIRE(conn.getAcceptor()->getDropReason() ==
+                            "idle timeout (no new flood requests)");
+                }
+            }
+        }
+#endif
     }
 }
 
@@ -359,13 +529,14 @@ TEST_CASE("drop peers that dont respect capacity", "[overlay][flowcontrol]")
     // tx is invalid, but it doesn't matter
     StellarMessage msg;
     msg.type(TRANSACTION);
-    auto txSize = xdr::xdr_argpack_size(msg);
+    uint32 txSize = static_cast<uint32>(xdr::xdr_argpack_size(msg));
 
     auto test = [&](bool fcBytes) {
         if (fcBytes)
         {
-            cfg1.PEER_FLOOD_READING_CAPACITY_BYTES = txSize;
-            cfg1.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = txSize;
+            cfg1.PEER_FLOOD_READING_CAPACITY_BYTES = txSize + 1;
+            cfg1.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = 1;
+            cfg1.TESTING_TX_MAX_SIZE_BYTES = txSize;
         }
         else
         {
@@ -377,8 +548,12 @@ TEST_CASE("drop peers that dont respect capacity", "[overlay][flowcontrol]")
             // violation
             cfg1.PEER_READING_CAPACITY = 2;
         }
-        auto app1 = createTestApplication(clock, cfg1);
-        auto app2 = createTestApplication(clock, cfg2);
+        auto app1 = createTestApplication(clock, cfg1, true, false);
+        auto app2 = createTestApplication(clock, cfg2, true, false);
+        app1->getHerder().setMaxClassicTxSize(txSize);
+        app2->getHerder().setMaxClassicTxSize(txSize);
+        app1->start();
+        app2->start();
 
         LoopbackPeerConnection conn(*app1, *app2);
         testutil::crankSome(clock);
@@ -411,7 +586,7 @@ TEST_CASE("drop idle flow-controlled peers", "[overlay][flowcontrol]")
 
     StellarMessage msg;
     msg.type(TRANSACTION);
-    auto txSize = xdr::xdr_argpack_size(msg);
+    uint32 txSize = static_cast<uint32>(xdr::xdr_argpack_size(msg));
 
     auto test = [&](bool fcBytes) {
         if (fcBytes)
@@ -1830,6 +2005,7 @@ TEST_CASE("flow control when out of sync", "[overlay][flowcontrol]")
         cfg.PEER_FLOOD_READING_CAPACITY = 1;
         cfg.PEER_READING_CAPACITY = 1;
         cfg.FLOW_CONTROL_SEND_MORE_BATCH_SIZE = 1;
+        cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 1000;
         if (i == 1)
         {
             cfg.FORCE_SCP = false;
@@ -1855,9 +2031,8 @@ TEST_CASE("flow control when out of sync", "[overlay][flowcontrol]")
     // Generate transactions traffic, which the out of sync node will drop
     auto& loadGen = node->getLoadGenerator();
     loadGen.generateLoad(
-        GeneratedLoadConfig::createAccountsLoad(/* nAccounts */ 200,
-                                                /* txRate */ 1,
-                                                /* batchSize */ 1));
+        GeneratedLoadConfig::createAccountsLoad(/* nAccounts */ 3000,
+                                                /* txRate */ 1));
 
     auto& loadGenDone =
         node->getMetrics().NewMeter({"loadgen", "run", "complete"}, "run");
@@ -1900,16 +2075,21 @@ TEST_CASE("overlay flow control", "[overlay][flowcontrol]")
         cfg.PEER_FLOOD_READING_CAPACITY = 1;
         cfg.PEER_READING_CAPACITY = 1;
         cfg.FLOW_CONTROL_SEND_MORE_BATCH_SIZE = 1;
-        cfg.PEER_FLOOD_READING_CAPACITY_BYTES = 1000;
+        cfg.PEER_FLOOD_READING_CAPACITY_BYTES = 6000;
         cfg.FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = 100;
+        cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 1000;
+        cfg.TESTING_TX_MAX_SIZE_BYTES = 5900;
         configs.push_back(cfg);
     }
 
     Application::pointer node = nullptr;
     auto setupSimulation = [&]() {
         node = simulation->addNode(vNode1SecretKey, qSet, &configs[0]);
-        simulation->addNode(vNode2SecretKey, qSet, &configs[1]);
-        simulation->addNode(vNode3SecretKey, qSet, &configs[2]);
+        auto a1 = simulation->addNode(vNode2SecretKey, qSet, &configs[1]);
+        auto a2 = simulation->addNode(vNode3SecretKey, qSet, &configs[2]);
+        node->getHerder().setMaxClassicTxSize(5900);
+        a1->getHerder().setMaxClassicTxSize(5900);
+        a2->getHerder().setMaxClassicTxSize(5900);
 
         simulation->addPendingConnection(vNode1NodeID, vNode2NodeID);
         simulation->addPendingConnection(vNode2NodeID, vNode3NodeID);
@@ -1925,22 +2105,23 @@ TEST_CASE("overlay flow control", "[overlay][flowcontrol]")
         }
         SECTION("one peer does not support flow control in bytes")
         {
-            setupSimulation();
             configs[2].OVERLAY_PROTOCOL_VERSION =
                 Peer::FIRST_VERSION_SUPPORTING_FLOW_CONTROL_IN_BYTES - 1;
+            setupSimulation();
         }
         SECTION("one peer disables")
         {
-            setupSimulation();
             configs[2].ENABLE_FLOW_CONTROL_BYTES = false;
+            setupSimulation();
         }
         SECTION("all peers disable")
         {
-            setupSimulation();
             std::for_each(configs.begin(), configs.end(), [](Config& cfg) {
                 cfg.ENABLE_FLOW_CONTROL_BYTES = false;
             });
+            setupSimulation();
         }
+
         simulation->crankUntil(
             [&] { return simulation->haveAllExternalized(2, 1); },
             3 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
@@ -1948,9 +2129,8 @@ TEST_CASE("overlay flow control", "[overlay][flowcontrol]")
         // close ledgers properly
         auto& loadGen = node->getLoadGenerator();
         loadGen.generateLoad(
-            GeneratedLoadConfig::createAccountsLoad(/* nAccounts */ 10,
-                                                    /* txRate */ 1,
-                                                    /* batchSize */ 1));
+            GeneratedLoadConfig::createAccountsLoad(/* nAccounts */ 150,
+                                                    /* txRate */ 1));
 
         auto& loadGenDone =
             node->getMetrics().NewMeter({"loadgen", "run", "complete"}, "run");
@@ -1963,8 +2143,8 @@ TEST_CASE("overlay flow control", "[overlay][flowcontrol]")
         currLoadGenCount = loadGenDone.count();
 
         loadGen.generateLoad(GeneratedLoadConfig::txLoad(
-            LoadGenMode::PAY, /* nAccounts */ 10, 200,
-            /*txRate*/ 5, /*batchSize*/ 1));
+            LoadGenMode::PAY, /* nAccounts */ 150, 200,
+            /*txRate*/ 5));
 
         simulation->crankUntil(
             [&]() { return loadGenDone.count() > currLoadGenCount; },
@@ -2594,10 +2774,12 @@ TEST_CASE("overlay pull mode loadgen", "[overlay][pullmode][acceptance]")
     qSet.validators.push_back(vNode2NodeID);
 
     auto configs = std::vector<Config>{};
+    auto const numAccounts = 5;
 
     for (auto i = 0; i < 2; i++)
     {
         auto cfg = getTestConfig(i + 1);
+        cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = numAccounts * MAX_OPS_PER_TX;
         configs.push_back(cfg);
     }
 
@@ -2617,11 +2799,9 @@ TEST_CASE("overlay pull mode loadgen", "[overlay][pullmode][acceptance]")
 
     // Create 5 txns each creating one new account.
     // Set a really high tx rate so we create the txns right away.
-    auto const numAccounts = 5;
     loadGen.generateLoad(GeneratedLoadConfig::createAccountsLoad(
-        /* nAccounts */ numAccounts,
-        /* txRate */ 1000,
-        /* batchSize */ 1));
+        /* nAccounts */ numAccounts * MAX_OPS_PER_TX,
+        /* txRate */ 1));
 
     // Let the network close multiple ledgers.
     // If the logic to advertise or demand incorrectly sends more than

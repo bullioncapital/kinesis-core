@@ -91,6 +91,9 @@ class LedgerManagerImpl : public LedgerManager
 
     void emitNextMeta();
 
+    SorobanNetworkConfig&
+    getSorobanNetworkConfigInternal(AbstractLedgerTxn& ltx);
+
   protected:
     virtual void transferLedgerEntriesToBucketList(AbstractLedgerTxn& ltx,
                                                    uint32_t ledgerSeq,
@@ -117,6 +120,8 @@ class LedgerManagerImpl : public LedgerManager
 
     uint32_t getLastMaxTxSetSize() const override;
     uint32_t getLastMaxTxSetSizeOps() const override;
+    Resource maxLedgerResources(bool isSoroban,
+                                AbstractLedgerTxn& ltxOuter) override;
     int64_t getLastMinBalance(uint32_t ownerCount) const override;
     uint32_t getLastReserve() const override;
     uint32_t getLastTxFee() const override;
@@ -127,6 +132,8 @@ class LedgerManagerImpl : public LedgerManager
 
 #ifdef BUILD_TESTS
     void setSorobanNetworkConfig(SorobanNetworkConfig const& config) override;
+    SorobanNetworkConfig&
+    getMutableSorobanNetworkConfig(AbstractLedgerTxn& ltx) override;
 #endif
 
     uint64_t secondsSinceLastLedgerClose() const override;

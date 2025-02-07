@@ -6,6 +6,7 @@
 
 #include "crypto/SecretKey.h"
 #include "herder/LedgerCloseData.h"
+#include "herder/Upgrades.h"
 #include "overlay/StellarXDR.h"
 #include <optional>
 
@@ -186,6 +187,13 @@ TransactionFramePtr createCreditPaymentTx(Application& app,
 TransactionFramePtr createSimpleDexTx(Application& app, TestAccount& account,
                                       uint32 nbOps, uint32_t fee);
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+TransactionFramePtr
+createUploadWasmTx(Application& app, TestAccount& account, uint32_t fee,
+                   uint32_t refundableFee, SorobanResources resources,
+                   std::optional<std::string> memo = std::nullopt);
+#endif
+
 Operation pathPayment(PublicKey const& to, Asset const& sendCur,
                       int64_t sendMax, Asset const& destCur, int64_t destAmount,
                       std::vector<Asset> const& path);
@@ -282,7 +290,11 @@ transactionFrameFromOps(Hash const& networkID, TestAccount& source,
 TransactionFrameBasePtr sorobanTransactionFrameFromOps(
     Hash const& networkID, TestAccount& source,
     std::vector<Operation> const& ops, std::vector<SecretKey> const& opKeys,
-    SorobanResources const& resources, uint32_t fee, uint32_t refundableFee);
+    SorobanResources const& resources, uint32_t fee, uint32_t refundableFee,
+    std::optional<std::string> memo = std::nullopt);
+ConfigUpgradeSetFrameConstPtr
+makeConfigUpgradeSet(AbstractLedgerTxn& ltx, ConfigUpgradeSet configUpgradeSet);
+LedgerUpgrade makeConfigUpgrade(ConfigUpgradeSetFrame const& configUpgradeSet);
 #endif
 
 LedgerUpgrade makeBaseReserveUpgrade(int baseReserve);

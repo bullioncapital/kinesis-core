@@ -3,6 +3,9 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "bucket/BucketInputIterator.h"
+#include "bucket/BucketList.h"
+#include "bucket/BucketManager.h"
+#include "bucket/BucketManagerImpl.h"
 #include "bucket/test/BucketTestUtils.h"
 #include "herder/Herder.h"
 #include "herder/HerderImpl.h"
@@ -219,6 +222,16 @@ makeTxCountUpgrade(int txCount)
     return result;
 }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+LedgerUpgrade
+makeMaxSorobanTxSizeUpgrade(int txSize)
+{
+    auto result = LedgerUpgrade{LEDGER_UPGRADE_MAX_SOROBAN_TX_SET_SIZE};
+    result.newMaxSorobanTxSetSize() = txSize;
+    return result;
+}
+#endif
+
 LedgerUpgrade
 makeFlagsUpgrade(int flags)
 {
@@ -228,36 +241,6 @@ makeFlagsUpgrade(int flags)
 }
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
-ConfigUpgradeSetFrameConstPtr
-makeConfigUpgradeSet(AbstractLedgerTxn& ltx, ConfigUpgradeSet configUpgradeSet)
-{
-    // Make entry for the upgrade
-    auto opaqueUpgradeSet = xdr::xdr_to_opaque(configUpgradeSet);
-    auto hashOfUpgradeSet = sha256(opaqueUpgradeSet);
-    auto contractID = sha256("contract_id");
-
-    SCVal key;
-    key.type(SCV_BYTES);
-    key.bytes().insert(key.bytes().begin(), hashOfUpgradeSet.begin(),
-                       hashOfUpgradeSet.end());
-
-    SCVal val;
-    val.type(SCV_BYTES);
-    val.bytes().insert(val.bytes().begin(), opaqueUpgradeSet.begin(),
-                       opaqueUpgradeSet.end());
-
-    LedgerEntry le;
-    le.data.type(CONTRACT_DATA);
-    le.data.contractData().contractID = contractID;
-    le.data.contractData().key = key;
-    le.data.contractData().val = val;
-
-    ltx.create(InternalLedgerEntry(le));
-
-    auto upgradeKey = ConfigUpgradeSetKey{contractID, hashOfUpgradeSet};
-    return ConfigUpgradeSetFrame::makeFromKey(ltx, upgradeKey);
-}
-
 ConfigUpgradeSetFrameConstPtr
 makeMaxContractSizeBytesTestUpgrade(AbstractLedgerTxn& ltx,
                                     uint32_t maxContractSizeBytes)
@@ -270,14 +253,6 @@ makeMaxContractSizeBytesTestUpgrade(AbstractLedgerTxn& ltx,
     return makeConfigUpgradeSet(ltx, configUpgradeSet);
 }
 
-LedgerUpgrade
-makeConfigUpgrade(ConfigUpgradeSetFrame const& configUpgradeSet)
-{
-    auto result = LedgerUpgrade{LEDGER_UPGRADE_CONFIG};
-    result.newConfig() = configUpgradeSet.getKey();
-    return result;
-}
-
 LedgerKey
 getMaxContractSizeKey()
 {
@@ -285,6 +260,15 @@ getMaxContractSizeKey()
     maxContractSizeKey.configSetting().configSettingID =
         CONFIG_SETTING_CONTRACT_MAX_SIZE_BYTES;
     return maxContractSizeKey;
+}
+
+LedgerKey
+getBucketListSizeWindowKey()
+{
+    LedgerKey windowKey(CONFIG_SETTING);
+    windowKey.configSetting().configSettingID =
+        CONFIG_SETTING_BUCKETLIST_SIZE_WINDOW;
+    return windowKey;
 }
 
 #endif
@@ -737,9 +721,14 @@ TEST_CASE("config upgrade validation", "[upgrades]")
 
                     LedgerEntry le;
                     le.data.type(CONTRACT_DATA);
-                    le.data.contractData().contractID = contractID;
+                    le.data.contractData().body.bodyType(DATA_ENTRY);
+                    le.data.contractData().contract.type(
+                        SC_ADDRESS_TYPE_CONTRACT);
+                    le.data.contractData().contract.contractId() = contractID;
+                    le.data.contractData().durability = PERSISTENT;
+                    le.data.contractData().expirationLedgerSeq = UINT32_MAX;
                     le.data.contractData().key = key;
-                    le.data.contractData().val = val;
+                    le.data.contractData().body.data().val = val;
 
                     ltx.create(InternalLedgerEntry(le));
 
@@ -801,12 +790,13 @@ TEST_CASE("config upgrade validation", "[upgrades]")
     }
 }
 
-TEST_CASE("config upgrades applied to ledger", "[upgrades]")
+TEST_CASE("config upgrades applied to ledger", "[soroban][upgrades]")
 {
     VirtualClock clock;
     auto cfg = getTestConfig(0);
     cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION =
         static_cast<uint32_t>(SOROBAN_PROTOCOL_VERSION) - 1;
+    cfg.USE_CONFIG_FOR_GENESIS = false;
     auto app = createTestApplication(clock, cfg);
 
     // Need to actually execute the upgrade to v20 to get the config
@@ -839,6 +829,8 @@ TEST_CASE("config upgrades applied to ledger", "[upgrades]")
             configUpgradeSet = makeMaxContractSizeBytesTestUpgrade(ltx2, 32768);
             ltx2.commit();
         }
+
+        REQUIRE(configUpgradeSet);
         executeUpgrade(*app, makeConfigUpgrade(*configUpgradeSet));
 
         LedgerTxn ltx2(app->getLedgerTxnRoot());
@@ -887,6 +879,36 @@ TEST_CASE("config upgrades applied to ledger", "[upgrades]")
         REQUIRE(sorobanConfig.txMaxInstructions() == 444);
         REQUIRE(sorobanConfig.feeHistorical1KB() == 555);
     }
+}
+
+TEST_CASE("Soroban max tx set size upgrade applied to ledger",
+          "[soroban][upgrades]")
+{
+    VirtualClock clock;
+    auto cfg = getTestConfig(0);
+    cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION =
+        static_cast<uint32_t>(SOROBAN_PROTOCOL_VERSION) - 1;
+    cfg.USE_CONFIG_FOR_GENESIS = false;
+    auto app = createTestApplication(clock, cfg);
+
+    // Need to actually execute the upgrade to v20 to get the config
+    // entries initialized.
+    executeUpgrade(*app, makeProtocolVersionUpgrade(
+                             static_cast<uint32_t>(SOROBAN_PROTOCOL_VERSION)));
+
+    LedgerTxn ltx(app->getLedgerTxnRoot());
+    auto const& sorobanConfig =
+        app->getLedgerManager().getSorobanNetworkConfig(ltx);
+    ltx.commit();
+
+    executeUpgrade(*app, makeMaxSorobanTxSizeUpgrade(123));
+    REQUIRE(sorobanConfig.ledgerMaxTxCount() == 123);
+
+    executeUpgrade(*app, makeMaxSorobanTxSizeUpgrade(0));
+    REQUIRE(sorobanConfig.ledgerMaxTxCount() == 0);
+
+    executeUpgrade(*app, makeMaxSorobanTxSizeUpgrade(321));
+    REQUIRE(sorobanConfig.ledgerMaxTxCount() == 321);
 }
 
 #endif
@@ -2025,6 +2047,7 @@ TEST_CASE("configuration initialized in version upgrade", "[upgrades]")
         REQUIRE(!ltx.load(getMaxContractSizeKey()));
     }
 
+    auto blSize = app->getBucketManager().getBucketList().getSize();
     executeUpgrade(*app, makeProtocolVersionUpgrade(
                              static_cast<uint32_t>(SOROBAN_PROTOCOL_VERSION)));
 
@@ -2035,6 +2058,32 @@ TEST_CASE("configuration initialized in version upgrade", "[upgrades]")
             CONFIG_SETTING_CONTRACT_MAX_SIZE_BYTES);
     REQUIRE(maxContractSizeEntry.contractMaxSizeBytes() ==
             InitialSorobanNetworkConfig::MAX_CONTRACT_SIZE);
+
+    // Check that BucketList size window initialized with current BL size
+    auto& networkConfig = app->getLedgerManager().getSorobanNetworkConfig(ltx);
+    REQUIRE(networkConfig.getAverageBucketListSize() == blSize);
+
+    // Check in memory window
+    auto const& inMemoryWindow =
+        networkConfig.getBucketListSizeWindowForTesting();
+    REQUIRE(inMemoryWindow.size() ==
+            InitialSorobanNetworkConfig::BUCKET_LIST_SIZE_WINDOW_SAMPLE_SIZE);
+    for (auto const& e : inMemoryWindow)
+    {
+        REQUIRE(e == blSize);
+    }
+
+    // Check LedgerEntry with window
+    auto onDiskWindow = ltx.load(getBucketListSizeWindowKey())
+                            .current()
+                            .data.configSetting()
+                            .bucketListSizeWindow();
+    REQUIRE(onDiskWindow.size() ==
+            InitialSorobanNetworkConfig::BUCKET_LIST_SIZE_WINDOW_SAMPLE_SIZE);
+    for (auto const& e : onDiskWindow)
+    {
+        REQUIRE(e == blSize);
+    }
 }
 #endif
 
@@ -2978,6 +3027,8 @@ TEST_CASE("upgrade to generalized tx set in network", "[upgrades][overlay]")
             cfg.MAX_SLOTS_TO_REMEMBER = 12;
             cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION =
                 static_cast<uint32_t>(GENERALIZED_TX_SET_PROTOCOL_VERSION) - 1;
+            // Set max tx size to accommodate loadgen
+            cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 1000;
             return cfg;
         });
 
@@ -3007,9 +3058,9 @@ TEST_CASE("upgrade to generalized tx set in network", "[upgrades][overlay]")
     }
 
     auto& loadGen = nodes[0]->getLoadGenerator();
-    // Generate 8 ledgers worth of txs (40 / 5).
+    // Generate 8 ledgers worth of txs (500 * 8 = 4000 accounts).
     loadGen.generateLoad(GeneratedLoadConfig::createAccountsLoad(
-        /* nAccounts */ 40, /* txRate */ 1, /* batchSize */ 1));
+        /* nAccounts */ 4000, /* txRate */ 1));
     auto& loadGenDone =
         nodes[0]->getMetrics().NewMeter({"loadgen", "run", "complete"}, "run");
     auto currLoadGenCount = loadGenDone.count();
@@ -3027,7 +3078,7 @@ TEST_CASE("upgrade to generalized tx set in network", "[upgrades][overlay]")
             }
             return loadGenDone.count() > currLoadGenCount;
         },
-        10 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+        11 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
 
     // Make sure upgrade has happened.
     REQUIRE(upgradeLedger);
@@ -3071,7 +3122,7 @@ TEST_CASE("upgrade to generalized tx set in network", "[upgrades][overlay]")
         {
             auto txSet = getLedgerTxSet(*node, ledger);
             REQUIRE(txSet);
-            REQUIRE(txSet->sizeTx() > 0);
+            REQUIRE(txSet->sizeTxTotal() > 0);
             bool isGeneralized = ledger > *upgradeLedger;
             REQUIRE(txSet->isGeneralizedTxSet() == isGeneralized);
         }

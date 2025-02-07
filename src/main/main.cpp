@@ -26,6 +26,9 @@
 #include <sodium/core.h>
 #include <system_error>
 #include <xdrpp/marshal.h>
+#ifdef USE_TRACY
+#include <TracyC.h>
+#endif
 
 namespace stellar
 {
@@ -249,7 +252,15 @@ main(int argc, char* const* argv)
     // At least print a backtrace in any circumstance
     // that would call std::terminate
     std::set_terminate(printBacktraceAndAbort);
-
+#ifdef USE_TRACY
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    // The rust tracy client library is fussy about trying
+    // to own the tracy startup path.
+    rust_bridge::start_tracy();
+#else
+    ___tracy_startup_profiler();
+#endif
+#endif
     Logging::init();
     if (sodium_init() != 0)
     {
@@ -260,11 +271,16 @@ main(int argc, char* const* argv)
     randHash::initialize();
     xdr::marshaling_stack_limit = 1000;
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
-    checkStellarCoreMajorVersionProtocolIdentity();
+    // TODO: This should only be enabled after we tag a v20 version
+    // checkStellarCoreMajorVersionProtocolIdentity();
     rust_bridge::check_lockfile_has_expected_dep_trees(
         Config::CURRENT_LEDGER_PROTOCOL_VERSION);
-    // checkXDRFileIdentity();
+    checkXDRFileIdentity();
 #endif
 
-    return handleCommandLine(argc, argv);
+    int res = handleCommandLine(argc, argv);
+#ifdef USE_TRACY
+    ___tracy_shutdown_profiler();
+#endif
+    return res;
 }

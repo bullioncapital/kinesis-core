@@ -115,6 +115,13 @@ class HerderImpl : public Herder
     }
 
     uint32_t mTriggerNextLedgerSeq{0};
+
+    std::optional<uint32_t> mMaxClassicTxSize;
+    void
+    setMaxClassicTxSize(uint32 bytes) override
+    {
+        mMaxClassicTxSize = std::make_optional<uint32_t>(bytes);
+    }
 #endif
     void sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer) override;
 
@@ -126,6 +133,13 @@ class HerderImpl : public Herder
     SCPQuorumSetPtr getQSet(Hash const& qSetHash) override;
 
     void processSCPQueue();
+
+    uint32_t getMaxClassicTxSize() const override;
+    uint32_t
+    getMaxTxSize() const override
+    {
+        return mMaxTxSize;
+    }
 
     uint32 getMinLedgerSeqToAskPeers() const override;
 
@@ -170,7 +184,11 @@ class HerderImpl : public Herder
     // used for testing
     PendingEnvelopes& getPendingEnvelopes();
 
-    TransactionQueue& getTransactionQueue() override;
+    ClassicTransactionQueue& getTransactionQueue() override;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    SorobanTransactionQueue& getSorobanTransactionQueue() override;
+#endif
+    bool sourceAccountPending(AccountID const& accountID) const override;
 #endif
 
     // helper function to verify envelopes are signed
@@ -182,6 +200,10 @@ class HerderImpl : public Herder
     bool verifyStellarValueSignature(StellarValue const& sv);
 
     size_t getMaxQueueSizeOps() const override;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    size_t getMaxQueueSizeSorobanOps() const override;
+    void maybeHandleUpgrade() override;
+#endif
     bool isBannedTx(Hash const& hash) const override;
     TransactionFrameBaseConstPtr getTx(Hash const& hash) const override;
 
@@ -208,10 +230,12 @@ class HerderImpl : public Herder
     void newSlotExternalized(bool synchronous, StellarValue const& value);
     void purgeOldPersistedTxSets();
 
-    TransactionQueue mTransactionQueue;
+    ClassicTransactionQueue mTransactionQueue;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    SorobanTransactionQueue mSorobanTransactionQueue;
+#endif
 
-    void
-    updateTransactionQueue(std::vector<TransactionFrameBasePtr> const& applied);
+    void updateTransactionQueue(TxSetFrameConstPtr txSet);
 
     PendingEnvelopes mPendingEnvelopes;
     Upgrades mUpgrades;
@@ -251,8 +275,6 @@ class HerderImpl : public Herder
     VirtualTimer mOutOfSyncTimer;
 
     VirtualTimer mTxSetGarbageCollectTimer;
-
-    VirtualTimer mEarlyCatchupTimer;
 
     Application& mApp;
     LedgerManager& mLedgerManager;
@@ -321,5 +343,7 @@ class HerderImpl : public Herder
     // network or not (Herder::State is used to properly track the state of
     // Herder) On startup, this variable is set to LCL
     ConsensusData mTrackingSCP;
+
+    uint32_t mMaxTxSize{0};
 };
 }

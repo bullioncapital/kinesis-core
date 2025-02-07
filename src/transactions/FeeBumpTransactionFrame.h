@@ -58,7 +58,8 @@ class FeeBumpTransactionFrame : public TransactionFrameBase
     virtual ~FeeBumpTransactionFrame(){};
 
     bool apply(Application& app, AbstractLedgerTxn& ltx,
-               TransactionMetaFrame& meta) override;
+               TransactionMetaFrame& meta,
+               Hash const& sorobanBasePrngSeed) override;
 
     void processPostApply(Application& app, AbstractLedgerTxn& ltx,
                           TransactionMetaFrame& meta) override;
@@ -79,6 +80,8 @@ class FeeBumpTransactionFrame : public TransactionFrameBase
     Hash const& getInnerFullHash() const;
 
     uint32_t getNumOperations() const override;
+    Resource getResources() const override;
+
     std::vector<Operation> const& getRawOperations() const override;
 
     TransactionResult& getResult() override;

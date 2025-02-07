@@ -27,6 +27,7 @@
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
 
+#include <Tracy.hpp>
 #include <cmath>
 #include <crypto/SHA.h>
 #include <fmt/format.h>
@@ -53,6 +54,11 @@ const uint32_t LoadGenerator::TIMEOUT_NUM_LEDGERS = 20;
 // After successfully submitting desired load, wait for this many ledgers
 // without checking for account consistency.
 const uint32_t LoadGenerator::COMPLETION_TIMEOUT_WITHOUT_CHECKS = 4;
+
+// Minimum unique account multiplier. This is used to calculate the minimum
+// number of accounts needed to sustain desired tx/s rate (this provides a
+// buffer in case loadgen is unstable and needs more accounts)
+const uint32_t LoadGenerator::MIN_UNIQUE_ACCOUNT_MULTIPLIER = 3;
 
 LoadGenerator::LoadGenerator(Application& app)
     : mMinBalance(0)
@@ -168,33 +174,69 @@ void
 LoadGenerator::reset()
 {
     mAccounts.clear();
+    mAccountsInUse.clear();
+    mAccountsAvailable.clear();
+    mCreationSourceAccounts.clear();
+    mLoadTimer.reset();
     mRoot.reset();
     mStartTime.reset();
     mTotalSubmitted = 0;
     mWaitTillCompleteForLedgers = 0;
     mFailed = false;
+    mStarted = false;
+    mInitialAccountsCreated = false;
 }
 
 // Schedule a callback to generateLoad() STEP_MSECS milliseconds from now.
 void
 LoadGenerator::scheduleLoadGeneration(GeneratedLoadConfig cfg)
 {
+    std::optional<std::string> errorMsg;
     // If previously scheduled step of load did not succeed, fail this loadgen
     // run.
     if (mFailed)
     {
-        CLOG_ERROR(LoadGen, "Load generation failed, ensure correct "
-                            "number parameters are set and accounts are "
-                            "created, or retry with smaller tx rate.");
+        errorMsg = "Load generation failed, ensure correct "
+                   "number parameters are set and accounts are "
+                   "created, or retry with smaller tx rate.";
+    }
+    // During load submission, we must have enough unique source accounts (with
+    // a buffer) to accommodate the desired tx rate.
+    if (cfg.mode != LoadGenMode::CREATE && cfg.nTxs > cfg.nAccounts &&
+        (cfg.txRate * Herder::EXP_LEDGER_TIMESPAN_SECONDS.count()) *
+                MIN_UNIQUE_ACCOUNT_MULTIPLIER >
+            cfg.nAccounts)
+    {
+        errorMsg = fmt::format(
+            "Tx rate is too high, there are not enough unique accounts. Make "
+            "sure there are at least {}x "
+            "unique accounts than desired number of transactions per ledger.",
+            MIN_UNIQUE_ACCOUNT_MULTIPLIER);
+    }
+
+    if (errorMsg)
+    {
+        CLOG_ERROR(LoadGen, "{}", *errorMsg);
         mLoadgenFail.Mark();
         reset();
         return;
     }
 
+    // First time calling tx load generation, mark all accounts "available" as
+    // source accounts
+    if (!mStarted && cfg.mode != LoadGenMode::CREATE)
+    {
+        for (auto i = 0u; i < cfg.nAccounts; i++)
+        {
+            mAccountsAvailable.insert(i + cfg.offset);
+        }
+    }
     if (!mLoadTimer)
     {
         mLoadTimer = std::make_unique<VirtualTimer>(mApp.getClock());
     }
+
+    mStarted = true;
 
     if (mApp.getState() == Application::APP_SYNCED_STATE)
     {
@@ -207,11 +249,49 @@ LoadGenerator::scheduleLoadGeneration(GeneratedLoadConfig cfg)
         CLOG_WARNING(
             LoadGen,
             "Application is not in sync, load generation inhibited. State {}",
-            mApp.getState());
+            mApp.getStateHuman());
         mLoadTimer->expires_from_now(std::chrono::seconds(10));
         mLoadTimer->async_wait(
             [this, cfg]() { this->scheduleLoadGeneration(cfg); },
             &VirtualTimer::onFailureNoop);
+    }
+}
+
+void
+LoadGenerator::cleanupAccounts()
+{
+    ZoneScoped;
+
+    // Check if creation source accounts have been created
+    for (auto it = mCreationSourceAccounts.begin();
+         it != mCreationSourceAccounts.end();)
+    {
+        if (loadAccount(it->second, mApp))
+        {
+            mAccountsAvailable.insert(it->first);
+            it = mCreationSourceAccounts.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    // "Free" any accounts that aren't used by the tx queue anymore
+    for (auto it = mAccountsInUse.begin(); it != mAccountsInUse.end();)
+    {
+        auto accIt = mAccounts.find(*it);
+        releaseAssert(accIt != mAccounts.end());
+        if (!mApp.getHerder().sourceAccountPending(
+                accIt->second->getPublicKey()))
+        {
+            mAccountsAvailable.insert(*it);
+            it = mAccountsInUse.erase(it);
+        }
+        else
+        {
+            it++;
+        }
     }
 }
 
@@ -221,8 +301,8 @@ LoadGenerator::scheduleLoadGeneration(GeneratedLoadConfig cfg)
 // with the remainder.
 void
 LoadGenerator::generateLoad(GeneratedLoadConfig cfg)
-
 {
+    ZoneScoped;
     bool isCreate = cfg.mode == LoadGenMode::CREATE;
     if (!mStartTime)
     {
@@ -255,15 +335,28 @@ LoadGenerator::generateLoad(GeneratedLoadConfig cfg)
     {
         cfg.txRate = 1;
     }
-    if (cfg.batchSize == 0)
-    {
-        cfg.batchSize = 1;
-    }
 
     auto txPerStep = getTxPerStep(cfg.txRate, cfg.spikeInterval, cfg.spikeSize);
+    if (cfg.mode == LoadGenMode::CREATE)
+    {
+        // Limit creation to the number of accounts we have. This is only the
+        // case at the very beginning, when only root account is available for
+        // account creation
+        size_t expectedSize =
+            mInitialAccountsCreated ? mAccountsAvailable.size() : 1;
+        txPerStep = std::min<int64_t>(txPerStep, expectedSize);
+    }
     auto& submitTimer =
         mApp.getMetrics().NewTimer({"loadgen", "step", "submit"});
     auto submitScope = submitTimer.TimeScope();
+
+    uint64_t now = mApp.timeNow();
+    // Cleaning up accounts every second, so we don't call potentially expensive
+    // cleanup function too often
+    if (now != mLastSecond)
+    {
+        cleanupAccounts();
+    }
 
     uint32_t ledgerNum = mApp.getLedgerManager().getLastClosedLedgerNum() + 1;
 
@@ -271,13 +364,22 @@ LoadGenerator::generateLoad(GeneratedLoadConfig cfg)
     {
         if (cfg.mode == LoadGenMode::CREATE)
         {
-            cfg.nAccounts = submitCreationTx(cfg.nAccounts, cfg.offset,
-                                             cfg.batchSize, ledgerNum);
+            cfg.nAccounts =
+                submitCreationTx(cfg.nAccounts, cfg.offset, ledgerNum);
         }
         else
         {
-            auto sourceAccountId =
-                rand_uniform<uint64_t>(0, cfg.nAccounts - 1) + cfg.offset;
+            if (mAccountsAvailable.empty())
+            {
+                CLOG_WARNING(
+                    LoadGen,
+                    "Load generation failed: no more accounts available");
+                mLoadgenFail.Mark();
+                reset();
+                return;
+            }
+
+            uint64_t sourceAccountId = getNextAvailableAccount();
 
             std::function<
                 std::pair<LoadGenerator::TestAccountPtr, TransactionFramePtr>()>
@@ -329,7 +431,8 @@ LoadGenerator::generateLoad(GeneratedLoadConfig cfg)
             case LoadGenMode::SOROBAN:
             {
                 generateTx = [&]() {
-                    return sorobanTransaction(ledgerNum, sourceAccountId);
+                    return sorobanTransaction(cfg.nAccounts, cfg.offset,
+                                              ledgerNum, sourceAccountId);
                 };
             }
             break;
@@ -354,13 +457,12 @@ LoadGenerator::generateLoad(GeneratedLoadConfig cfg)
 
     auto submit = submitScope.Stop();
 
-    uint64_t now = mApp.timeNow();
+    now = mApp.timeNow();
 
     // Emit a log message once per second.
     if (now != mLastSecond)
     {
-        logProgress(submit, cfg.mode, cfg.nAccounts, cfg.nTxs, cfg.batchSize,
-                    cfg.txRate);
+        logProgress(submit, cfg.mode, cfg.nAccounts, cfg.nTxs, cfg.txRate);
     }
 
     mLastSecond = now;
@@ -370,9 +472,10 @@ LoadGenerator::generateLoad(GeneratedLoadConfig cfg)
 
 uint32_t
 LoadGenerator::submitCreationTx(uint32_t nAccounts, uint32_t offset,
-                                uint32_t batchSize, uint32_t ledgerNum)
+                                uint32_t ledgerNum)
 {
-    uint32_t numToProcess = nAccounts < batchSize ? nAccounts : batchSize;
+    uint32_t numToProcess =
+        nAccounts < MAX_OPS_PER_TX ? nAccounts : MAX_OPS_PER_TX;
     TestAccountPtr from;
     TransactionFramePtr tx;
     std::tie(from, tx) =
@@ -382,7 +485,7 @@ LoadGenerator::submitCreationTx(uint32_t nAccounts, uint32_t offset,
     bool createDuplicate = false;
     uint32_t numTries = 0;
 
-    while ((status = execute(tx, LoadGenMode::CREATE, code, batchSize)) !=
+    while ((status = execute(tx, LoadGenMode::CREATE, code)) !=
            TransactionQueue::AddResult::ADD_STATUS_PENDING)
     {
         // Ignore duplicate transactions, simply continue generating load
@@ -401,7 +504,7 @@ LoadGenerator::submitCreationTx(uint32_t nAccounts, uint32_t offset,
         }
 
         // In case of bad seqnum, attempt refreshing it from the DB
-        maybeHandleFailedTx(from, status, code);
+        maybeHandleFailedTx(tx, from, status, code);
     }
 
     if (!createDuplicate)
@@ -424,7 +527,7 @@ LoadGenerator::submitTx(GeneratedLoadConfig const& cfg,
     TransactionQueue::AddResult status;
     uint32_t numTries = 0;
 
-    while ((status = execute(tx, cfg.mode, code, cfg.batchSize)) !=
+    while ((status = execute(tx, cfg.mode, code)) !=
            TransactionQueue::AddResult::ADD_STATUS_PENDING)
     {
 
@@ -449,7 +552,7 @@ LoadGenerator::submitTx(GeneratedLoadConfig const& cfg,
         }
 
         // In case of bad seqnum, attempt refreshing it from the DB
-        maybeHandleFailedTx(from, status, code); // Update seq num
+        maybeHandleFailedTx(tx, from, status, code); // Update seq num
 
         // Regenerate a new payment tx
         std::tie(from, tx) = generateTx();
@@ -458,10 +561,25 @@ LoadGenerator::submitTx(GeneratedLoadConfig const& cfg,
     return true;
 }
 
+uint64_t
+LoadGenerator::getNextAvailableAccount()
+{
+    releaseAssert(!mAccountsAvailable.empty());
+
+    auto sourceAccountIdx =
+        rand_uniform<uint64_t>(0, mAccountsAvailable.size() - 1);
+    auto it = mAccountsAvailable.begin();
+    std::advance(it, sourceAccountIdx);
+    uint64_t sourceAccountId = *it;
+    mAccountsAvailable.erase(it);
+    releaseAssert(mAccountsInUse.insert(sourceAccountId).second);
+    return sourceAccountId;
+}
+
 void
 LoadGenerator::logProgress(std::chrono::nanoseconds submitTimer,
                            LoadGenMode mode, uint32_t nAccounts, uint32_t nTxs,
-                           uint32_t batchSize, uint32_t txRate)
+                           uint32_t txRate)
 {
     using namespace std::chrono;
 
@@ -472,7 +590,7 @@ LoadGenerator::logProgress(std::chrono::nanoseconds submitTimer,
     auto submitSteps = duration_cast<milliseconds>(submitTimer).count();
 
     auto remainingTxCount =
-        (mode == LoadGenMode::CREATE) ? nAccounts / batchSize : nTxs;
+        (mode == LoadGenMode::CREATE) ? nAccounts / MAX_OPS_PER_TX : nTxs;
     auto etaSecs = (uint32_t)(((double)remainingTxCount) /
                               max<double>(1, applyTx.one_minute_rate()));
 
@@ -495,11 +613,16 @@ std::pair<LoadGenerator::TestAccountPtr, TransactionFramePtr>
 LoadGenerator::creationTransaction(uint64_t startAccount, uint64_t numItems,
                                    uint32_t ledgerNum)
 {
-    vector<Operation> creationOps =
-        createAccounts(startAccount, numItems, ledgerNum);
-    return std::make_pair(mRoot, createTransactionFramePtr(mRoot, creationOps,
-                                                           LoadGenMode::CREATE,
-                                                           std::nullopt));
+    TestAccountPtr sourceAcc =
+        mInitialAccountsCreated
+            ? findAccount(getNextAvailableAccount(), ledgerNum)
+            : mRoot;
+    vector<Operation> creationOps = createAccounts(
+        startAccount, numItems, ledgerNum, !mInitialAccountsCreated);
+    mInitialAccountsCreated = true;
+    return std::make_pair(sourceAcc, createTransactionFramePtr(
+                                         sourceAcc, creationOps,
+                                         LoadGenMode::CREATE, std::nullopt));
 }
 
 void
@@ -514,20 +637,24 @@ LoadGenerator::updateMinBalance()
 
 std::vector<Operation>
 LoadGenerator::createAccounts(uint64_t start, uint64_t count,
-                              uint32_t ledgerNum)
+                              uint32_t ledgerNum, bool initialAccounts)
 {
     vector<Operation> ops;
     SequenceNumber sn = static_cast<SequenceNumber>(ledgerNum) << 32;
+    auto balance = initialAccounts ? mMinBalance * 10000000 : mMinBalance * 100;
     for (uint64_t i = start; i < start + count; i++)
     {
         auto name = "TestAccount-" + to_string(i);
         auto account = TestAccount{mApp, txtest::getAccount(name.c_str()), sn};
-        ops.push_back(
-            txtest::createAccount(account.getPublicKey(), mMinBalance * 100));
+        ops.push_back(txtest::createAccount(account.getPublicKey(), balance));
 
         // Cache newly created account
-        mAccounts.insert(std::pair<uint64_t, TestAccountPtr>(
-            i, make_shared<TestAccount>(account)));
+        auto acc = make_shared<TestAccount>(account);
+        mAccounts.emplace(i, acc);
+        if (initialAccounts)
+        {
+            mCreationSourceAccounts.emplace(i, acc);
+        }
     }
     return ops;
 }
@@ -560,6 +687,8 @@ LoadGenerator::pickAccountPair(uint32_t numAccounts, uint32_t offset,
                                uint32_t ledgerNum, uint64_t sourceAccountId)
 {
     auto sourceAccount = findAccount(sourceAccountId, ledgerNum);
+    releaseAssert(
+        !mApp.getHerder().sourceAccountPending(sourceAccount->getPublicKey()));
 
     auto destAccountId = rand_uniform<uint64_t>(0, numAccounts - 1) + offset;
 
@@ -647,25 +776,22 @@ LoadGenerator::manageOfferTransaction(
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
 std::pair<LoadGenerator::TestAccountPtr, TransactionFramePtr>
-LoadGenerator::sorobanTransaction(uint32_t ledgerNum, uint64_t accountId)
+LoadGenerator::sorobanTransaction(uint32_t numAccounts, uint32_t offset,
+                                  uint32_t ledgerNum, uint64_t accountId)
 {
     auto account = findAccount(accountId, ledgerNum);
     Operation deployOp;
     deployOp.body.type(INVOKE_HOST_FUNCTION);
-    auto& uploadHF =
-        deployOp.body.invokeHostFunctionOp().functions.emplace_back();
-    uploadHF.args.type(HOST_FUNCTION_TYPE_UPLOAD_CONTRACT_WASM);
-    auto& uploadContractWasmArgs = uploadHF.args.uploadContractWasm();
-    uploadContractWasmArgs.code.resize(1000);
+    auto& uploadHF = deployOp.body.invokeHostFunctionOp().hostFunction;
+    uploadHF.type(HOST_FUNCTION_TYPE_UPLOAD_CONTRACT_WASM);
+    uploadHF.wasm().resize(1000);
     auto byteDistr = uniform_int_distribution<uint8_t>();
-    std::generate(uploadContractWasmArgs.code.begin(),
-                  uploadContractWasmArgs.code.end(),
+    std::generate(uploadHF.wasm().begin(), uploadHF.wasm().end(),
                   [&byteDistr]() { return byteDistr(gRandomEngine); });
 
     LedgerKey contractCodeLedgerKey;
     contractCodeLedgerKey.type(CONTRACT_CODE);
-    contractCodeLedgerKey.contractCode().hash =
-        xdrSha256(uploadContractWasmArgs);
+    contractCodeLedgerKey.contractCode().hash = xdrSha256(uploadHF.wasm());
 
     SorobanResources resources;
     resources.footprint.readWrite = {contractCodeLedgerKey};
@@ -714,7 +840,8 @@ LoadGenerator::pretendTransaction(uint32_t numAccounts, uint32_t offset,
 }
 
 void
-LoadGenerator::maybeHandleFailedTx(TestAccountPtr sourceAccount,
+LoadGenerator::maybeHandleFailedTx(TransactionFramePtr tx,
+                                   TestAccountPtr sourceAccount,
                                    TransactionQueue::AddResult status,
                                    TransactionResultCode code)
 {
@@ -723,9 +850,16 @@ LoadGenerator::maybeHandleFailedTx(TestAccountPtr sourceAccount,
     if (status == TransactionQueue::AddResult::ADD_STATUS_ERROR &&
         code == txBAD_SEQ)
     {
-        auto const& txQueue = mApp.getHerder().getTransactionQueue();
         auto txQueueSeqNum =
-            txQueue.getInQueueSeqNum(sourceAccount->getPublicKey());
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+            tx->isSoroban()
+                ? mApp.getHerder()
+                      .getSorobanTransactionQueue()
+                      .getInQueueSeqNum(sourceAccount->getPublicKey())
+                :
+#endif
+                mApp.getHerder().getTransactionQueue().getInQueueSeqNum(
+                    sourceAccount->getPublicKey());
         if (txQueueSeqNum)
         {
             sourceAccount->setSequenceNumber(*txQueueSeqNum);
@@ -918,7 +1052,7 @@ LoadGenerator::createTransactionFramePtr(
 
 TransactionQueue::AddResult
 LoadGenerator::execute(TransactionFramePtr& txf, LoadGenMode mode,
-                       TransactionResultCode& code, int32_t batchSize)
+                       TransactionResultCode& code)
 {
     TxMetrics txm(mApp.getMetrics());
 
@@ -926,7 +1060,7 @@ LoadGenerator::execute(TransactionFramePtr& txf, LoadGenMode mode,
     switch (mode)
     {
     case LoadGenMode::CREATE:
-        txm.mAccountCreated.Mark(batchSize);
+        txm.mAccountCreated.Mark(txf->getNumOperations());
         break;
     case LoadGenMode::PAY:
         txm.mNativePayment.Mark(txf->getNumOperations());
@@ -974,27 +1108,27 @@ LoadGenerator::execute(TransactionFramePtr& txf, LoadGenMode mode,
 }
 
 GeneratedLoadConfig
-GeneratedLoadConfig::createAccountsLoad(uint32_t nAccounts, uint32_t txRate,
-                                        uint32_t batchSize)
+GeneratedLoadConfig::createAccountsLoad(uint32_t nAccounts, uint32_t txRate)
 {
     GeneratedLoadConfig cfg;
     cfg.mode = LoadGenMode::CREATE;
     cfg.nAccounts = nAccounts;
     cfg.txRate = txRate;
-    cfg.batchSize = batchSize;
     return cfg;
 }
 
 GeneratedLoadConfig
 GeneratedLoadConfig::txLoad(LoadGenMode mode, uint32_t nAccounts, uint32_t nTxs,
-                            uint32_t txRate, uint32_t batchSize)
+                            uint32_t txRate, uint32_t offset,
+                            std::optional<uint32_t> maxFee)
 {
     GeneratedLoadConfig cfg;
     cfg.mode = mode;
     cfg.nAccounts = nAccounts;
     cfg.nTxs = nTxs;
     cfg.txRate = txRate;
-    cfg.batchSize = batchSize;
+    cfg.offset = offset;
+    cfg.maxGeneratedFeeRate = maxFee;
     return cfg;
 }
 }

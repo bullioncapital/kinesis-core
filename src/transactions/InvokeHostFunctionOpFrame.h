@@ -14,6 +14,9 @@ namespace stellar
 {
 class AbstractLedgerTxn;
 
+static constexpr ContractDataDurability CONTRACT_INSTANCE_CONTRACT_DURABILITY =
+    ContractDataDurability::PERSISTENT;
+
 class InvokeHostFunctionOpFrame : public OperationFrame
 {
     InvokeHostFunctionResult&
@@ -31,12 +34,11 @@ class InvokeHostFunctionOpFrame : public OperationFrame
     InvokeHostFunctionOpFrame(Operation const& op, OperationResult& res,
                               TransactionFrame& parentTx);
 
-    ThresholdLevel getThresholdLevel() const override;
-
     bool isOpSupported(LedgerHeader const& header) const override;
 
     bool doApply(AbstractLedgerTxn& ltx) override;
-    bool doApply(Application& app, AbstractLedgerTxn& ltx) override;
+    bool doApply(Application& app, AbstractLedgerTxn& ltx,
+                 Hash const& sorobanBasePrngSeed) override;
 
     bool doCheckValid(SorobanNetworkConfig const& config,
                       uint32_t ledgerVersion) override;

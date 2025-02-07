@@ -67,7 +67,10 @@ LedgerKey poolShareTrustLineKey(AccountID const& accountID,
                                 PoolID const& poolID);
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
 LedgerKey configSettingKey(ConfigSettingID const& configSettingID);
-LedgerKey contractDataKey(Hash const& contractID, SCVal const& dataKey);
+LedgerKey contractDataKey(SCAddress const& contract, SCVal const& dataKey,
+                          ContractDataDurability type,
+                          ContractEntryBodyType leType);
+LedgerKey contractCodeKey(Hash const& hash, ContractEntryBodyType leType);
 #endif
 InternalLedgerKey sponsorshipKey(AccountID const& sponsoredID);
 InternalLedgerKey sponsorshipCounterKey(AccountID const& sponsoringID);
@@ -142,9 +145,13 @@ LedgerTxnEntry loadPoolShareTrustLine(AbstractLedgerTxn& ltx,
 LedgerTxnEntry loadLiquidityPool(AbstractLedgerTxn& ltx, PoolID const& poolID);
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
-LedgerTxnEntry loadContractData(AbstractLedgerTxn& ltx, Hash const& contractID,
-                                SCVal const& dataKey);
-LedgerTxnEntry loadContractCode(AbstractLedgerTxn& ltx, Hash const& hash);
+ConstLedgerTxnEntry loadContractData(AbstractLedgerTxn& ltx,
+                                     SCAddress const& contract,
+                                     SCVal const& dataKey,
+                                     ContractDataDurability type,
+                                     bool loadExpiredEntry = false);
+ConstLedgerTxnEntry loadContractCode(AbstractLedgerTxn& ltx, Hash const& hash,
+                                     bool loadExpiredEntry = false);
 #endif
 
 void acquireLiabilities(AbstractLedgerTxn& ltx, LedgerTxnHeader const& header,

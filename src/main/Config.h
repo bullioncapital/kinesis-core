@@ -248,12 +248,40 @@ class Config : public std::enable_shared_from_this<Config>
     // processes `FLOW_CONTROL_SEND_MORE_BATCH_SIZE` messages
     uint32_t FLOW_CONTROL_SEND_MORE_BATCH_SIZE;
 
-    // A config parameter that controls how many bytes worth of flood messages
-    // (tx or SCP) from a particular peer core can process simultaneously
-    uint32_t PEER_FLOOD_READING_CAPACITY_BYTES;
+    // PEER_FLOOD_READING_CAPACITY_BYTES (C): This is the initial credit
+    // given to the sender. It is the maximum number of bytes that the
+    // sender can transmit to the receiver before it needs to wait for
+    // an acknowledgement from the receiver. It represents the initial
+    // 'capacity' of the connection.
 
-    // When flow control is enabled, peer asks for more data every time it
-    // processes `FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES` bytes
+    // MAX_CLASSIC_TX_SIZE_BYTES (M): This is the maximum size, in bytes, of
+    // a single message that can be sent by the sender. The sender can send
+    // messages of any size up to this limit, provided it has enough credit.
+
+    // FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES (A): This is the number of
+    // bytes that the receiver must process before it sends an
+    // acknowledgement back to the sender. The acknowledgement also serves
+    // to replenish the sender's credit by this amount, enabling it to send
+    // more data.
+
+    // The relationship between these three parameters should satisfy: C - A
+    // >= M. This ensures that the sender can always continue sending
+    // messages until it receives an acknowledgement for the previous data,
+    // thus preventing the system from getting stuck.
+
+    // Start with initial PEER_FLOOD_READING_CAPACITY_BYTES (C) credit
+    // Sender (C) -------- M1 bytes ----------> Receiver
+    //          \-- C-M1 --/
+
+    // Receiver processes received bytes and once
+    // FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES (A) or more is processed, an
+    // acknowledgement is sent, which replenishes the sender's credit
+    // Sender (C-M1+A) <-- A bytes ---------- Receiver
+    //             \--- (C-M1+A)-M2 --->/
+
+    // Note:  M1, M2... are message sizes such that M <=
+    // MAX_CLASSIC_TX_SIZE_BYTES
+    uint32_t PEER_FLOOD_READING_CAPACITY_BYTES;
     uint32_t FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES;
 
     // Enable flow control in bytes. This config allows core to process large
@@ -444,6 +472,15 @@ class Config : public std::enable_shared_from_this<Config>
     uint64_t TESTING_UPGRADE_DESIRED_MAX_FEE;        // max fee in stroops
     uint32_t TESTING_UPGRADE_MAX_TX_SET_SIZE;
     uint32_t TESTING_UPGRADE_FLAGS;
+    uint32_t TESTING_LEDGER_MAX_PROPAGATE_SIZE_BYTES;
+    int64_t TESTING_LEDGER_MAX_INSTRUCTIONS;
+    uint32_t TESTING_LEDGER_MAX_READ_LEDGER_ENTRIES;
+    uint32_t TESTING_LEDGER_MAX_READ_BYTES;
+    uint32_t TESTING_LEDGER_MAX_WRITE_LEDGER_ENTRIES;
+    uint32_t TESTING_LEDGER_MAX_WRITE_BYTES;
+    uint32_t TESTING_LEDGER_MAX_SOROBAN_TX_COUNT;
+    uint32_t TESTING_TX_MAX_SIZE_BYTES;
+
     unsigned short HTTP_PORT; // what port to listen for commands
     bool PUBLIC_HTTP_PORT;    // if you accept commands from not localhost
     int HTTP_MAX_CLIENT;      // maximum number of http clients, i.e backlog
@@ -463,6 +500,10 @@ class Config : public std::enable_shared_from_this<Config>
     int MAX_BATCH_WRITE_BYTES;
     double FLOOD_OP_RATE_PER_LEDGER;
     int FLOOD_TX_PERIOD_MS;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    double FLOOD_SOROBAN_RATE_PER_LEDGER;
+    int FLOOD_SOROBAN_TX_PERIOD_MS;
+#endif
     int32_t FLOOD_ARB_TX_BASE_ALLOWANCE;
     double FLOOD_ARB_TX_DAMPING_FACTOR;
 

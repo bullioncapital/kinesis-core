@@ -52,7 +52,7 @@ LoopbackPeer::initiate(Application& app, Application& otherApp)
         PeerBareAddress{peer->getIP(), peer->getApp().getConfig().PEER_PORT};
 
     app.getOverlayManager().addOutboundConnection(peer);
-    otherApp.getOverlayManager().addInboundConnection(otherPeer);
+    otherApp.getOverlayManager().maybeAddInboundConnection(otherPeer);
     // if connection was dropped during addPendingPeer, we don't want do call
     // connectHandler
     if (peer->mState != Peer::CONNECTED || otherPeer->mState != Peer::CONNECTED)
@@ -154,7 +154,7 @@ LoopbackPeer::drop(std::string const& reason, DropDirection direction, DropMode)
     if (mState != GOT_AUTH)
     {
         CLOG_DEBUG(Overlay, "LoopbackPeer::drop {} in state {} we called:{}",
-                   toString(), mState, mRole);
+                   toString(), format_as(mState), format_as(mRole));
     }
     else if (direction == Peer::DropDirection::WE_DROPPED_REMOTE)
     {
@@ -535,8 +535,9 @@ LoopbackPeer::checkCapacity(std::shared_ptr<LoopbackPeer> otherPeer) const
     {
         isValid = isValid &&
                   (otherPeer->getApp()
-                       .getConfig()
-                       .PEER_FLOOD_READING_CAPACITY_BYTES ==
+                       .getOverlayManager()
+                       .getFlowControlBytesConfig()
+                       .mTotal ==
                    getFlowControl()->getCapacityBytes()->getOutboundCapacity());
     }
 

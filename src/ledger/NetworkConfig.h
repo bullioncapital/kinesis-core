@@ -5,13 +5,17 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "ledger/LedgerTxn.h"
+#include "main/Config.h"
 #include <cstdint>
+#include <deque>
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
 #include "rust/RustBridge.h"
 #endif
 
 namespace stellar
 {
+
+class Application;
 
 // Defines the initial values of the network configuration
 // settings that are applied during the protocol version upgrade.
@@ -29,41 +33,71 @@ struct InitialSorobanNetworkConfig
         64 * 1024; // 64KB
 
     // Compute settings
-    static constexpr int64_t LEDGER_MAX_INSTRUCTIONS = 1;
-    static constexpr int64_t TX_MAX_INSTRUCTIONS = 40'000'000;
+    static constexpr int64_t TX_MAX_INSTRUCTIONS = 100'000'000;
+    static constexpr int64_t LEDGER_MAX_INSTRUCTIONS = 10 * TX_MAX_INSTRUCTIONS;
     static constexpr int64_t FEE_RATE_PER_INSTRUCTIONS_INCREMENT =
-        100;                                                   // 0.2 XLM/max tx
-    static constexpr uint32_t MEMORY_LIMIT = 50 * 1024 * 1024; // 50MB
+        100; // 0.2 XLM/max tx
+    static constexpr uint32_t MEMORY_LIMIT = 100 * 1024 * 1024; // 100MB
 
     // Ledger access settings
-    static constexpr uint32_t LEDGER_MAX_READ_LEDGER_ENTRIES = 1;
-    static constexpr uint32_t LEDGER_MAX_READ_BYTES = 1;
-    static constexpr uint32_t LEDGER_MAX_WRITE_LEDGER_ENTRIES = 1;
-    static constexpr uint32_t LEDGER_MAX_WRITE_BYTES = 1;
     static constexpr uint32_t TX_MAX_READ_LEDGER_ENTRIES = 40;
     static constexpr uint32_t TX_MAX_READ_BYTES = 200 * 1024;
     static constexpr uint32_t TX_MAX_WRITE_LEDGER_ENTRIES = 20;
     static constexpr uint32_t TX_MAX_WRITE_BYTES = 100 * 1024;
+    static constexpr uint32_t LEDGER_MAX_READ_LEDGER_ENTRIES =
+        10 * TX_MAX_READ_LEDGER_ENTRIES;
+    static constexpr uint32_t LEDGER_MAX_READ_BYTES = 10 * TX_MAX_READ_BYTES;
+    static constexpr uint32_t LEDGER_MAX_WRITE_LEDGER_ENTRIES =
+        10 * TX_MAX_WRITE_LEDGER_ENTRIES;
+    static constexpr uint32_t LEDGER_MAX_WRITE_BYTES = 10 * TX_MAX_WRITE_BYTES;
     static constexpr int64_t FEE_READ_LEDGER_ENTRY = 5'000;   // 0.02 XLM/max tx
     static constexpr int64_t FEE_WRITE_LEDGER_ENTRY = 20'000; // 0.04 XLM/max tx
     static constexpr int64_t FEE_READ_1KB = 1'000;            // 0.02 XLM/max tx
-    static constexpr int64_t FEE_WRITE_1KB = 4'000;           // 0.04 XLM/max tx
-    static constexpr int64_t BUCKET_LIST_SIZE_BYTES = 1;
-    static constexpr int64_t BUCKET_LIST_FEE_RATE_LOW = 1;
-    static constexpr int64_t BUCKET_LIST_FEE_RATE_HIGH = 1;
-    static constexpr uint32_t BUCKET_LIST_GROWTH_FACTOR = 1;
+    static constexpr int64_t BUCKET_LIST_TARGET_SIZE_BYTES =
+        30LL * 1024 * 1024 * 1024; // 30 GB
+    static constexpr int64_t BUCKET_LIST_FEE_1KB_BUCKET_LIST_LOW =
+        1'000; // 0.01 XLM/max tx
+    static constexpr int64_t BUCKET_LIST_FEE_1KB_BUCKET_LIST_HIGH =
+        10'000; // 0.1 XLM/max tx
+    // No growth fee initially to make sure fees are accessible
+    static constexpr uint32_t BUCKET_LIST_WRITE_FEE_GROWTH_FACTOR = 1;
+
+    static constexpr uint64_t BUCKET_LIST_SIZE_WINDOW_SAMPLE_SIZE =
+        30; // 30 day average
 
     // Historical data settings
     static constexpr int64_t FEE_HISTORICAL_1KB = 100; // 0.001 XLM/max tx
 
     // Bandwidth settings
-    static constexpr uint32_t LEDGER_MAX_PROPAGATE_SIZE_BYTES = 1;
     static constexpr uint32_t TX_MAX_SIZE_BYTES = 100 * 1024;
+    static constexpr uint32_t LEDGER_MAX_PROPAGATE_SIZE_BYTES =
+        10 * TX_MAX_SIZE_BYTES;
     static constexpr int64_t FEE_PROPAGATE_DATA_1KB = 2'000; // 0.02 XLM/max tx
 
     // Meta data settings
     static constexpr uint32_t TX_MAX_EXTENDED_META_DATA_SIZE_BYTES = 500 * 1024;
     static constexpr int64_t FEE_EXTENDED_META_DATA_1KB = 200;
+
+    // State expiration settings
+    // 1 year in ledgers
+    static constexpr uint32_t MAXIMUM_ENTRY_LIFETIME = 6'312'000;
+
+    // Live until level 6
+    static constexpr uint32_t MINIMUM_PERSISTENT_ENTRY_LIFETIME = 4096;
+    static constexpr uint32_t MINIMUM_TEMP_ENTRY_LIFETIME = 16;
+
+    static constexpr uint32_t AUTO_BUMP_NUM_LEDGERS = 0;
+
+    static constexpr uint64_t EVICTION_SCAN_SIZE = 1;
+    static constexpr uint32_t MAX_ENTRIES_TO_EXPIRE = 1;
+
+    // Rent payment of a write fee per ~25 days.
+    static constexpr int64_t PERSISTENT_RENT_RATE_DENOMINATOR = 252'480;
+    // Rent payment of a write fee per ~250 days.
+    static constexpr int64_t TEMP_RENT_RATE_DENOMINATOR = 2'524'800;
+
+    // General execution settings
+    static constexpr uint32_t LEDGER_MAX_TX_COUNT = 10;
 };
 
 // Wrapper for the contract-related network configuration.
@@ -73,15 +107,17 @@ class SorobanNetworkConfig
     // Creates the initial contract configuration entries for protocol v20.
     // This should happen once during the correspondent protocol version
     // upgrade.
-    static void createLedgerEntriesForV20(AbstractLedgerTxn& ltx);
+    static void createLedgerEntriesForV20(AbstractLedgerTxn& ltx,
+                                          Application& app);
     // Test-only function that initializes contract network configuration
     // bypassing the normal upgrade process (i.e. when genesis ledger starts not
     // at v1)
     static void
     initializeGenesisLedgerForTesting(uint32_t genesisLedgerProtocol,
-                                      AbstractLedgerTxn& ltx);
+                                      AbstractLedgerTxn& ltx, Application& app);
 
-    void loadFromLedger(AbstractLedgerTxn& ltx);
+    void loadFromLedger(AbstractLedgerTxn& ltx, uint32_t configMaxProtocol,
+                        uint32_t protocolVersion);
     // Maximum allowed size of the contract Wasm that can be uploaded (in
     // bytes).
     uint32_t maxContractSizeBytes() const;
@@ -125,15 +161,6 @@ class SorobanNetworkConfig
     int64_t feeRead1KB() const;
     // Fee for writing 1KB
     int64_t feeWrite1KB() const;
-    // Bucket list fees grow slowly up to that size
-    int64_t bucketListSizeBytes() const;
-    // Fee rate in stroops when the bucket list is empty
-    int64_t bucketListFeeRateLow() const;
-    // Fee rate in stroops when the bucket list reached bucketListSizeBytes
-    int64_t bucketListFeeRateHigh() const;
-    // Rate multiplier for any additional data past the first
-    // bucketListSizeBytes
-    uint32_t bucketListGrowthFactor() const;
 
     // Historical data (pushed to core archives) settings for contracts.
     // Fee for storing 1KB in archives
@@ -153,9 +180,27 @@ class SorobanNetworkConfig
     // Fee for propagating 1KB of data
     int64_t feePropagateData1KB() const;
 
+    // General execution ledger settings
+    uint32_t ledgerMaxTxCount() const;
+
+    // Number of samples in slidign window
+    uint32_t getBucketListSizeSnapshotPeriod() const;
+
+    // If currLedger is a ledger when we should snapshot, add a new snapshot to
+    // the sliding window and write it to disk.
+    void maybeSnapshotBucketListSize(uint32_t currLedger,
+                                     AbstractLedgerTxn& ltx, Application& app);
+
+    // Returns the average of all BucketList size snapshots in the sliding
+    // window.
+    uint64_t getAverageBucketListSize() const;
+
 #ifdef BUILD_TESTS
     uint32_t& maxContractDataKeySizeBytes();
     uint32_t& maxContractDataEntrySizeBytes();
+
+    void setBucketListSnapshotPeriodForTesting(uint32_t period);
+    std::deque<uint64_t> const& getBucketListSizeWindowForTesting() const;
 #endif
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
@@ -166,9 +211,19 @@ class SorobanNetworkConfig
     static bool isValidCostParams(ContractCostParams const& params);
 
     CxxFeeConfiguration rustBridgeFeeConfiguration() const;
+    CxxRentFeeConfiguration rustBridgeRentFeeConfiguration() const;
+
+    // State expiration settings
+    StateExpirationSettings const& stateExpirationSettings() const;
+#ifdef BUILD_TESTS
+    StateExpirationSettings& stateExpirationSettings();
+#endif
 #endif
 
   private:
+    static constexpr uint32_t BUCKETLIST_SIZE_SNAPSHOT_PERIOD =
+        17280; // 1 day, in ledgers
+
     void loadMaxContractSize(AbstractLedgerTxn& ltx);
     void loadMaxContractDataKeySize(AbstractLedgerTxn& ltx);
     void loadMaxContractDataEntrySize(AbstractLedgerTxn& ltx);
@@ -179,6 +234,20 @@ class SorobanNetworkConfig
     void loadBandwidthSettings(AbstractLedgerTxn& ltx);
     void loadCpuCostParams(AbstractLedgerTxn& ltx);
     void loadMemCostParams(AbstractLedgerTxn& ltx);
+    void loadStateExpirationSettings(AbstractLedgerTxn& ltx);
+    void loadExecutionLanesSettings(AbstractLedgerTxn& ltx);
+    void loadBucketListSizeWindow(AbstractLedgerTxn& ltx);
+    void computeWriteFee(uint32_t configMaxProtocol, uint32_t protocolVersion);
+    // If newSize is different than the current BucketList size sliding window,
+    // update the window. If newSize < currSize, pop entries off window. If
+    // newSize > currSize, add as many copies of the current BucketList size to
+    // window until it has newSize entries.
+    void maybeUpdateBucketListWindowSize(AbstractLedgerTxn& ltx);
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    void writeBucketListSizeWindow(AbstractLedgerTxn& ltxRoot) const;
+    void updateBucketListSizeAverage();
+#endif
 
     uint32_t mMaxContractSizeBytes{};
     uint32_t mMaxContractDataKeySizeBytes{};
@@ -195,6 +264,7 @@ class SorobanNetworkConfig
     uint32_t mLedgerMaxReadBytes{};
     uint32_t mLedgerMaxWriteLedgerEntries{};
     uint32_t mLedgerMaxWriteBytes{};
+    uint32_t mLedgerMaxTxCount{};
     uint32_t mTxMaxReadLedgerEntries{};
     uint32_t mTxMaxReadBytes{};
     uint32_t mTxMaxWriteLedgerEntries{};
@@ -203,10 +273,10 @@ class SorobanNetworkConfig
     int64_t mFeeWriteLedgerEntry{};
     int64_t mFeeRead1KB{};
     int64_t mFeeWrite1KB{};
-    int64_t mBucketListSizeBytes{};
-    int64_t mBucketListFeeRateLow{};
-    int64_t mBucketListFeeRateHigh{};
-    uint32_t mBucketListGrowthFactor{};
+    int64_t mBucketListTargetSizeBytes{};
+    int64_t mWriteFee1KBBucketListLow{};
+    int64_t mWriteFee1KBBucketListHigh{};
+    uint32_t mBucketListWriteFeeGrowthFactor{};
 
     // Historical data (pushed to core archives) settings for contracts.
     int64_t mFeeHistorical1KB{};
@@ -220,10 +290,22 @@ class SorobanNetworkConfig
     uint32_t mTxMaxSizeBytes{};
     int64_t mFeePropagateData1KB{};
 
+    // FIFO queue, push_back/pop_front
+    std::deque<uint64_t> mBucketListSizeSnapshots;
+    uint64_t mAverageBucketListSize{0};
+
+#ifdef BUILD_TESTS
+    std::optional<uint32_t> mBucketListSnapshotPeriodForTesting;
+#endif
+
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     // Host cost params
     ContractCostParams mCpuCostParams{};
     ContractCostParams mMemCostParams{};
+
+    // State expiration settings
+    StateExpirationSettings mStateExpirationSettings{};
+
 #endif
 };
 

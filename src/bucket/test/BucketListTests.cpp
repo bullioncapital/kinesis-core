@@ -166,8 +166,8 @@ TEST_CASE_VERSIONS("bucket list", "[bucket][bucketlist]")
     }
     catch (std::future_error& e)
     {
-        CLOG_DEBUG(Bucket, "Test caught std::future_error {}: {}", e.code(),
-                   e.what());
+        CLOG_DEBUG(Bucket, "Test caught std::future_error {}: {}",
+                   e.code().value(), e.what());
         REQUIRE(false);
     }
 }
@@ -496,8 +496,8 @@ TEST_CASE_VERSIONS("single entry bubbling up",
     }
     catch (std::future_error& e)
     {
-        CLOG_DEBUG(Bucket, "Test caught std::future_error {}: {}", e.code(),
-                   e.what());
+        CLOG_DEBUG(Bucket, "Test caught std::future_error {}: {}",
+                   e.code().value(), e.what());
         REQUIRE(false);
     }
 }
@@ -631,6 +631,150 @@ TEST_CASE("BucketList check bucket sizes", "[bucket][bucketlist][count]")
         }
     }
 }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+TEST_CASE_VERSIONS("network config snapshots BucketList size", "[bucketlist]")
+{
+    VirtualClock clock;
+    Config cfg(getTestConfig(0, Config::TESTDB_IN_MEMORY_SQLITE));
+    cfg.USE_CONFIG_FOR_GENESIS = true;
+
+    auto app = createTestApplication<BucketTestApplication>(clock, cfg);
+    for_versions_from(20, *app, [&] {
+        LedgerManagerForBucketTests& lm = app->getLedgerManager();
+
+        LedgerTxn ltx(app->getLedgerTxnRoot());
+        auto& networkConfig =
+            app->getLedgerManager().getSorobanNetworkConfig(ltx);
+        ltx.~LedgerTxn();
+
+        uint32_t windowSize = networkConfig.stateExpirationSettings()
+                                  .bucketListSizeWindowSampleSize;
+        std::deque<uint64_t> correctWindow;
+        for (auto i = 0u; i < windowSize; ++i)
+        {
+            correctWindow.push_back(0);
+        }
+
+        auto check = [&]() {
+            // Check in-memory average from BucketManager
+            uint64_t sum = 0;
+            for (auto e : correctWindow)
+            {
+                sum += e;
+            }
+
+            uint64_t correctAverage = sum / correctWindow.size();
+
+            LedgerTxn ltx(app->getLedgerTxnRoot(), false,
+                          TransactionMode::READ_ONLY_WITHOUT_SQL_TXN);
+            REQUIRE(networkConfig.getAverageBucketListSize() == correctAverage);
+
+            // Check on-disk sliding window
+            LedgerKey key(CONFIG_SETTING);
+            key.configSetting().configSettingID =
+                ConfigSettingID::CONFIG_SETTING_BUCKETLIST_SIZE_WINDOW;
+            auto txle = ltx.loadWithoutRecord(key, /*loadExpiredEntry=*/false);
+            releaseAssert(txle);
+            auto const& leVector =
+                txle.current().data.configSetting().bucketListSizeWindow();
+            std::vector<uint64_t> correctWindowVec(correctWindow.begin(),
+                                                   correctWindow.end());
+            REQUIRE(correctWindowVec == leVector);
+        };
+
+        // Check initial conditions
+        check();
+
+        // Take snapshots more frequently for faster testing
+        app->getLedgerManager()
+            .getMutableSorobanNetworkConfig(ltx)
+            .setBucketListSnapshotPeriodForTesting(64);
+
+        // Generate enough ledgers to fill sliding window
+        auto ledgersToGenerate =
+            (windowSize + 1) * networkConfig.getBucketListSizeSnapshotPeriod();
+        for (uint32_t ledger = 1; ledger < ledgersToGenerate; ++ledger)
+        {
+            // Note: BucketList size in the sliding window is snapshotted before
+            // adding new sliding window config entry with the resulting
+            // snapshot, so we have to take the snapshot here before closing the
+            // ledger to avoid counting the new  snapshot config entry
+            if ((ledger + 1) %
+                    networkConfig.getBucketListSizeSnapshotPeriod() ==
+                0)
+            {
+                correctWindow.pop_front();
+                correctWindow.push_back(
+                    app->getBucketManager().getBucketList().getSize());
+            }
+
+            lm.setNextLedgerEntryBatchForBucketTesting(
+                {}, LedgerTestUtils::generateValidUniqueLedgerEntries(10), {});
+            closeLedger(*app);
+            if ((ledger + 1) %
+                    networkConfig.getBucketListSizeSnapshotPeriod() ==
+                0)
+            {
+                check();
+            }
+        }
+    });
+}
+
+TEST_CASE_VERSIONS("new temp entry merges with expired entry with same key",
+                   "[bucket][bucketlist]")
+{
+    VirtualClock clock;
+    Config cfg(getTestConfig());
+    Application::pointer app = createTestApplication(clock, cfg);
+    BucketList& bl = app->getBucketManager().getBucketList();
+    uint32_t ledgerSeq = 1;
+
+    for_versions_from(20, *app, [&] {
+        auto startingLedger = ledgerSeq;
+        auto tempEntry =
+            LedgerTestUtils::generateValidLedgerEntryOfType(CONTRACT_DATA);
+        setExpirationLedger(tempEntry, startingLedger + 4);
+        tempEntry.data.contractData().durability = TEMPORARY;
+
+        bl.addBatch(*app, ledgerSeq, getAppLedgerVersion(app), {tempEntry}, {},
+                    {});
+        ++ledgerSeq;
+
+        // Run BucketList until entry has expired
+        for (; ledgerSeq <= startingLedger + 4; ++ledgerSeq)
+        {
+            bl.addBatch(*app, ledgerSeq, getAppLedgerVersion(app), {}, {}, {});
+        }
+
+        setExpirationLedger(tempEntry, startingLedger + 500);
+        bl.addBatch(*app, ledgerSeq, getAppLedgerVersion(app), {tempEntry}, {},
+                    {});
+        ++ledgerSeq;
+
+        // Run BucketList until entry has expired
+        for (; ledgerSeq <= startingLedger + 1024; ++ledgerSeq)
+        {
+            bl.addBatch(*app, ledgerSeq, getAppLedgerVersion(app), {}, {}, {});
+        }
+
+        bool foundValidEntry = false;
+        auto b = bl.getLevel(5).getCurr();
+        for (BucketInputIterator iter(b); iter; ++iter)
+        {
+            auto entry = *iter;
+            if (entry.type() == INITENTRY && entry.liveEntry() == tempEntry)
+            {
+                foundValidEntry = true;
+                break;
+            }
+        }
+
+        REQUIRE(foundValidEntry);
+    });
+}
+#endif
 
 static std::string
 formatX32(uint32_t v)

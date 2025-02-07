@@ -9,6 +9,7 @@
 #include "PeerDoor.h"
 #include "PeerManager.h"
 #include "herder/TxSetFrame.h"
+#include "ledger/LedgerTxn.h"
 #include "overlay/Floodgate.h"
 #include "overlay/ItemFetcher.h"
 #include "overlay/OverlayManager.h"
@@ -72,6 +73,8 @@ class OverlayManagerImpl : public OverlayManager
 
     PeersList mInboundPeers;
     PeersList mOutboundPeers;
+
+    std::shared_ptr<int> mLiveInboundPeersCounter;
 
     PeersList& getPeersList(Peer* peer);
 
@@ -140,7 +143,7 @@ class OverlayManagerImpl : public OverlayManager
                      std::optional<Hash> const hash = std::nullopt) override;
     void connectTo(PeerBareAddress const& address) override;
 
-    void addInboundConnection(Peer::pointer peer) override;
+    void maybeAddInboundConnection(Peer::pointer peer) override;
     bool addOutboundConnection(Peer::pointer peer) override;
     void removePeer(Peer* peer) override;
     void storeConfigPeers();
@@ -152,6 +155,9 @@ class OverlayManagerImpl : public OverlayManager
     std::vector<Peer::pointer> const& getInboundPendingPeers() const override;
     std::vector<Peer::pointer> const& getOutboundPendingPeers() const override;
     std::vector<Peer::pointer> getPendingPeers() const override;
+
+    virtual std::shared_ptr<int> getLiveInboundPeersCounter() const override;
+
     int getPendingPeersCount() const override;
     std::map<NodeID, Peer::pointer> const&
     getInboundAuthenticatedPeers() const override;
@@ -220,12 +226,14 @@ class OverlayManagerImpl : public OverlayManager
     int availableOutboundAuthenticatedSlots() const;
     int nonPreferredAuthenticatedCount() const;
 
-    bool isPossiblyPreferred(std::string const& ip);
+    virtual bool isPossiblyPreferred(std::string const& ip) const override;
+    virtual bool haveSpaceForConnection(std::string const& ip) const override;
 
     void updateSizeCounters();
 
     void extractPeersFromMap(std::map<NodeID, Peer::pointer> const& peerMap,
                              std::vector<Peer::pointer>& result);
     void shufflePeerList(std::vector<Peer::pointer>& peerList);
+    AdjustedFlowControlConfig getFlowControlBytesConfig() const override;
 };
 }

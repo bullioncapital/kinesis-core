@@ -6,6 +6,7 @@
 #include "transactions/OperationFrame.h"
 #include "transactions/AllowTrustOpFrame.h"
 #include "transactions/BeginSponsoringFutureReservesOpFrame.h"
+#include "transactions/BumpFootprintExpirationOpFrame.h"
 #include "transactions/BumpSequenceOpFrame.h"
 #include "transactions/ChangeTrustOpFrame.h"
 #include "transactions/ClaimClaimableBalanceOpFrame.h"
@@ -26,6 +27,7 @@
 #include "transactions/PathPaymentStrictReceiveOpFrame.h"
 #include "transactions/PathPaymentStrictSendOpFrame.h"
 #include "transactions/PaymentOpFrame.h"
+#include "transactions/RestoreFootprintOpFrame.h"
 #include "transactions/RevokeSponsorshipOpFrame.h"
 #include "transactions/SetOptionsOpFrame.h"
 #include "transactions/SetTrustLineFlagsOpFrame.h"
@@ -119,6 +121,10 @@ OperationFrame::makeHelper(Operation const& op, OperationResult& res,
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
     case INVOKE_HOST_FUNCTION:
         return std::make_shared<InvokeHostFunctionOpFrame>(op, res, tx);
+    case BUMP_FOOTPRINT_EXPIRATION:
+        return std::make_shared<BumpFootprintExpirationOpFrame>(op, res, tx);
+    case RESTORE_FOOTPRINT:
+        return std::make_shared<RestoreFootprintOpFrame>(op, res, tx);
 #endif
     default:
         ostringstream err;
@@ -136,7 +142,7 @@ OperationFrame::OperationFrame(Operation const& op, OperationResult& res,
 
 bool
 OperationFrame::apply(Application& app, SignatureChecker& signatureChecker,
-                      AbstractLedgerTxn& ltx)
+                      AbstractLedgerTxn& ltx, Hash const& sorobanBasePrngSeed)
 {
     ZoneScoped;
     bool res;
@@ -144,7 +150,7 @@ OperationFrame::apply(Application& app, SignatureChecker& signatureChecker,
     res = checkValid(app, signatureChecker, ltx, true);
     if (res)
     {
-        res = doApply(app, ltx);
+        res = doApply(app, ltx, sorobanBasePrngSeed);
         CLOG_TRACE(Tx, "{}", xdr_to_string(mResult, "OperationResult"));
     }
 
@@ -152,10 +158,11 @@ OperationFrame::apply(Application& app, SignatureChecker& signatureChecker,
 }
 
 bool
-OperationFrame::doApply(Application& _app, AbstractLedgerTxn& ltx)
+OperationFrame::doApply(Application& _app, AbstractLedgerTxn& ltx,
+                        Hash const& sorobanBasePrngSeed)
 {
-    // By default we ignore the app, but subclasses can override to
-    // intercept and use it.
+    // By default we ignore the app and seed, but subclasses can override to
+    // intercept and use them.
     return doApply(ltx);
 }
 
