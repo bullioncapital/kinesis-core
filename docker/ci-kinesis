@@ -30,14 +30,15 @@ setenv() {
 
 build() {
     set -e
-    export CC=clang-10
-    export CXX=clang++-10
+    export CC=clang
+    export CXX=clang++
+    export ASAN_OPTIONS="quarantine_size_mb=100:malloc_context_size=4:detect_leaks=0:strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1:log_path=stdout"
 
     if [ $ENABLE_TESTS -eq 1 ] ; then
         echo " Build with debug & test suites"
-        export CFLAGS='-O3 -g1 -fno-omit-frame-pointer'
-        export CXXFLAGS='-w -O3 -g1 -fno-omit-frame-pointer -D_KINESIS'
-        export CONFIGURE_FLAGS=''
+        export CFLAGS="-O2 -g1 -fno-omit-frame-pointer -fsanitize-address-use-after-scope -fno-common"
+        export CXXFLAGS="-w $CFLAGS -D_KINESIS"
+        export CONFIGURE_FLAGS="--enable-asan --enable-extrachecks --enable-ccache --enable-sdfprefs"
         cp pg_hba.conf /etc/postgresql/12/main/
     else 
         echo " Build for relase"
@@ -46,8 +47,10 @@ build() {
         export CONFIGURE_FLAGS='--disable-tests'
     fi
 
+    echo "config_flags = $CONFIGURE_FLAGS"
+
     ./autogen.sh
-    ./configure CC="${CC}" CXX="${CXX}" CFLAGS="${CFLAGS}" CXXFLAGS="${CXXFLAGS}" ${CONFIGURE_FLAGS}
+    ./configure ${CONFIGURE_FLAGS}
     make -j${NPROC}
     make install
 }
