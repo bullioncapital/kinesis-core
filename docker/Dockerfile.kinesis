@@ -1,5 +1,5 @@
 ARG DISTRO=focal
-ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:latest
+ARG CORE_BUILDER_IMAGE=core-builder:local
 
 ##########################################################################################################
 # # Build stage, includes everything needed to build.
