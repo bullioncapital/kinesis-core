@@ -50,7 +50,7 @@ build() {
     echo "config_flags = $CONFIGURE_FLAGS"
 
     ./autogen.sh
-    ./configure ${CONFIGURE_FLAGS}
+    ./configure $CONFIGURE_FLAGS
     make -j${NPROC}
     make install
 }
