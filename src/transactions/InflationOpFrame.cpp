@@ -32,7 +32,7 @@ InflationOpFrame::InflationOpFrame(Operation const& op, OperationResult& res,
 #ifdef _KINESIS
 
 bool
-InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
+InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx, Hash const& sorobanBasePrngSeed)
 {
     auto header = ltx.loadHeader();
     auto& lh = header.current();

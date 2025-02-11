@@ -227,6 +227,7 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
         thisConfig.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = gTestingVersion;
         LOG_INFO(DEFAULT_LOG, "Making config for {}",
                  thisConfig.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION);
+
         thisConfig.BUCKET_DIR_PATH = rootDir + "bucket";
 
         thisConfig.INVARIANT_CHECKS = {".*"};
