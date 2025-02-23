@@ -5,10 +5,18 @@
 #include "LedgerTestUtils.h"
 #include "crypto/SHA.h"
 #include "crypto/SecretKey.h"
+#include "ledger/LedgerHashUtils.h"
 #include "main/Config.h"
 #include "util/Logging.h"
 #include "util/Math.h"
+#include "util/UnorderedSet.h"
 #include "util/types.h"
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+#include "xdr/Stellar-contract.h"
+#endif
+#include "ledger/NetworkConfig.h"
+#include "xdr/Stellar-ledger-entries.h"
+#include <autocheck/generator.hpp>
 #include <locale>
 #include <string>
 #include <xdrpp/autocheck.h>
@@ -67,6 +75,16 @@ signerEqual(Signer const& s1, Signer const& s2)
     return s1.key == s2.key;
 }
 
+template <size_t MAX_SIZE>
+xdr::xvector<uint8_t, MAX_SIZE>
+generateOpaqueVector()
+{
+    static auto vecgen = autocheck::list_of(autocheck::generator<uint8_t>());
+    stellar::uniform_int_distribution<size_t> distr(1, MAX_SIZE);
+    auto vec = vecgen(distr(autocheck::rng()));
+    return xdr::xvector<uint8_t, MAX_SIZE>(vec.begin(), vec.end());
+}
+
 void
 randomlyModifyEntry(LedgerEntry& e)
 {
@@ -105,6 +123,34 @@ randomlyModifyEntry(LedgerEntry& e)
             autocheck::generator<int64>{}();
         makeValid(e.data.liquidityPool());
         break;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    case CONFIG_SETTING:
+    {
+        e.data.configSetting().configSettingID(
+            CONFIG_SETTING_CONTRACT_MAX_SIZE_BYTES);
+        e.data.configSetting().contractMaxSizeBytes() =
+            autocheck::generator<uint32_t>{}();
+        makeValid(e.data.configSetting());
+        break;
+    }
+    case CONTRACT_DATA:
+        if (e.data.contractData().body.bodyType() == DATA_ENTRY)
+        {
+            e.data.contractData().body.data().val.type(SCV_I32);
+            e.data.contractData().body.data().val.i32() =
+                autocheck::generator<int32_t>{}();
+        }
+        makeValid(e.data.contractData());
+        break;
+    case CONTRACT_CODE:
+        if (e.data.contractCode().body.bodyType() == DATA_ENTRY)
+        {
+            auto code = generateOpaqueVector<60000>();
+            e.data.contractCode().body.code().assign(code.begin(), code.end());
+        }
+        makeValid(e.data.contractCode());
+        break;
+#endif
     }
 }
 
@@ -287,6 +333,49 @@ makeValid(LiquidityPoolEntry& lp)
     cp.poolSharesTrustLineCount = std::abs(cp.poolSharesTrustLineCount);
 }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+void
+makeValid(ConfigSettingEntry& ce)
+{
+    auto ids = xdr::xdr_traits<ConfigSettingID>::enum_values();
+    ce.configSettingID(static_cast<ConfigSettingID>(
+        ids.at(ce.configSettingID() % ids.size())));
+}
+
+void
+makeValid(ContractDataEntry& cde)
+{
+    cde.body.bodyType(ContractEntryBodyType::DATA_ENTRY);
+    cde.body.data().flags = 0;
+    int t = cde.durability;
+    cde.durability = static_cast<ContractDataDurability>(std::abs(t % 3));
+
+    LedgerEntry le;
+    le.data.type(CONTRACT_DATA);
+    le.data.contractData() = cde;
+
+    auto key = LedgerEntryKey(le);
+    if (xdr::xdr_size(key) >
+        InitialSorobanNetworkConfig::MAX_CONTRACT_DATA_KEY_SIZE_BYTES)
+    {
+        // make the key small to prevent hitting the limit
+        static const uint32_t key_limit =
+            InitialSorobanNetworkConfig::MAX_CONTRACT_DATA_KEY_SIZE_BYTES - 50;
+        auto small_bytes =
+            autocheck::generator<xdr::opaque_vec<key_limit>>()(5);
+        SCVal val(SCV_BYTES);
+        val.bytes().assign(small_bytes.begin(), small_bytes.end());
+        cde.key = val;
+    }
+}
+
+void
+makeValid(ContractCodeEntry& cce)
+{
+    cce.body.bodyType(ContractEntryBodyType::DATA_ENTRY);
+}
+#endif
+
 void
 makeValid(std::vector<LedgerHeaderHistoryEntry>& lhv,
           LedgerHeaderHistoryEntry firstLedger,
@@ -371,11 +460,31 @@ static auto validLedgerEntryGenerator = autocheck::map(
         case LIQUIDITY_POOL:
             makeValid(led.liquidityPool());
             break;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        case CONFIG_SETTING:
+            makeValid(led.configSetting());
+            break;
+        case CONTRACT_DATA:
+            makeValid(led.contractData());
+            break;
+        case CONTRACT_CODE:
+            makeValid(led.contractCode());
+            break;
+#endif
         }
 
         return std::move(le);
     },
     autocheck::generator<LedgerEntry>());
+
+static auto ledgerKeyGenerator =
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    autocheck::such_that(
+        [](LedgerKey const& k) { return k.type() != CONFIG_SETTING; },
+        autocheck::generator<LedgerKey>());
+#else
+    autocheck::generator<LedgerKey>();
+#endif
 
 static auto validAccountEntryGenerator = autocheck::map(
     [](AccountEntry&& ae, size_t s) {
@@ -419,10 +528,44 @@ static auto validLiquidityPoolEntryGenerator = autocheck::map(
     },
     autocheck::generator<LiquidityPoolEntry>());
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+static auto validConfigSettingEntryGenerator = autocheck::map(
+    [](ConfigSettingEntry&& c, size_t s) {
+        makeValid(c);
+        return std::move(c);
+    },
+    autocheck::generator<ConfigSettingEntry>());
+
+static auto validContractDataEntryGenerator = autocheck::map(
+    [](ContractDataEntry&& c, size_t s) {
+        makeValid(c);
+        return std::move(c);
+    },
+    autocheck::generator<ContractDataEntry>());
+
+static auto validContractCodeEntryGenerator = autocheck::map(
+    [](ContractCodeEntry&& c, size_t s) {
+        makeValid(c);
+        return std::move(c);
+    },
+    autocheck::generator<ContractCodeEntry>());
+#endif
+
 LedgerEntry
 generateValidLedgerEntry(size_t b)
 {
     return validLedgerEntryGenerator(b);
+}
+
+LedgerEntry
+generateValidLedgerEntryOfType(LedgerEntryType type)
+{
+    auto entry = generateValidLedgerEntry();
+    while (entry.data.type() != type)
+    {
+        entry = generateValidLedgerEntry();
+    }
+    return entry;
 }
 
 std::vector<LedgerEntry>
@@ -430,6 +573,135 @@ generateValidLedgerEntries(size_t n)
 {
     static auto vecgen = autocheck::list_of(validLedgerEntryGenerator);
     return vecgen(n);
+}
+
+std::vector<LedgerEntry>
+generateValidUniqueLedgerEntries(size_t n)
+{
+    UnorderedSet<LedgerKey> keys;
+    std::vector<LedgerEntry> entries;
+    while (entries.size() < n)
+    {
+        auto entry = generateValidLedgerEntry();
+        auto key = LedgerEntryKey(entry);
+        if (keys.find(key) != keys.end())
+        {
+            continue;
+        }
+        keys.insert(key);
+        entries.push_back(entry);
+    }
+    return entries;
+}
+
+LedgerEntry
+generateValidLedgerEntryWithExclusions(
+    std::unordered_set<LedgerEntryType> const& excludedTypes, size_t b)
+{
+    while (true)
+    {
+        auto entry = generateValidLedgerEntry(b);
+        if (excludedTypes.find(entry.data.type()) == excludedTypes.end())
+        {
+            return entry;
+        }
+    }
+}
+
+std::vector<LedgerEntry>
+generateValidLedgerEntriesWithExclusions(
+    std::unordered_set<LedgerEntryType> const& excludedTypes, size_t n)
+{
+    std::vector<LedgerEntry> res;
+    res.reserve(n);
+    for (int i = 0; i < n; ++i)
+    {
+        res.push_back(generateValidLedgerEntryWithExclusions(excludedTypes));
+    }
+    return res;
+}
+
+std::vector<LedgerKey>
+generateValidLedgerEntryKeysWithExclusions(
+    std::unordered_set<LedgerEntryType> const& excludedTypes, size_t n)
+{
+    auto entries = LedgerTestUtils::generateValidLedgerEntriesWithExclusions(
+        excludedTypes, n);
+    std::vector<LedgerKey> keys;
+    keys.reserve(entries.size());
+    for (auto const& entry : entries)
+    {
+        keys.push_back(LedgerEntryKey(entry));
+    }
+    return keys;
+}
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+std::vector<LedgerKey>
+generateUniqueValidSorobanLedgerEntryKeys(size_t n)
+{
+    return LedgerTestUtils::generateValidUniqueLedgerEntryKeysWithExclusions(
+        {OFFER, DATA, CLAIMABLE_BALANCE, LIQUIDITY_POOL, CONFIG_SETTING}, n);
+}
+#endif
+
+std::vector<LedgerKey>
+generateValidUniqueLedgerEntryKeysWithExclusions(
+    std::unordered_set<LedgerEntryType> const& excludedTypes, size_t n)
+{
+    UnorderedSet<LedgerKey> keys;
+    std::vector<LedgerKey> res;
+    keys.reserve(n);
+    res.reserve(n);
+    while (keys.size() < n)
+    {
+        auto entry = generateValidLedgerEntryWithExclusions(excludedTypes, n);
+        auto key = LedgerEntryKey(entry);
+        if (keys.find(key) != keys.end())
+        {
+            continue;
+        }
+
+        keys.insert(key);
+        res.emplace_back(key);
+    }
+    return res;
+}
+
+LedgerEntry
+generateValidLedgerEntryWithTypes(
+    std::unordered_set<LedgerEntryType> const& types, size_t b)
+{
+    while (true)
+    {
+        auto entry = generateValidLedgerEntry(b);
+        if (types.find(entry.data.type()) != types.end())
+        {
+            return entry;
+        }
+    }
+}
+
+std::vector<LedgerEntry>
+generateValidUniqueLedgerEntriesWithTypes(
+    std::unordered_set<LedgerEntryType> const& types, size_t n)
+{
+    UnorderedSet<LedgerKey> keys;
+    std::vector<LedgerEntry> entries;
+    entries.reserve(n);
+    keys.reserve(n);
+    while (entries.size() < n)
+    {
+        auto entry = generateValidLedgerEntryWithTypes(types);
+        auto key = LedgerEntryKey(entry);
+        if (keys.find(key) != keys.end())
+        {
+            continue;
+        }
+
+        keys.insert(key);
+        entries.push_back(entry);
+    }
+    return entries;
 }
 
 AccountEntry
@@ -524,6 +796,47 @@ generateValidLiquidityPoolEntries(size_t n)
     return vecgen(n);
 }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+ConfigSettingEntry
+generateValidConfigSettingEntry(size_t b)
+{
+    return validConfigSettingEntryGenerator(b);
+}
+
+std::vector<ConfigSettingEntry>
+generateValidConfigSettingEntries(size_t n)
+{
+    static auto vecgen = autocheck::list_of(validConfigSettingEntryGenerator);
+    return vecgen(n);
+}
+
+ContractDataEntry
+generateValidContractDataEntry(size_t b)
+{
+    return validContractDataEntryGenerator(b);
+}
+
+std::vector<ContractDataEntry>
+generateValidContractDataEntries(size_t n)
+{
+    static auto vecgen = autocheck::list_of(validContractDataEntryGenerator);
+    return vecgen(n);
+}
+
+ContractCodeEntry
+generateValidContractCodeEntry(size_t b)
+{
+    return validContractCodeEntryGenerator(b);
+}
+
+std::vector<ContractCodeEntry>
+generateValidContractCodeEntries(size_t n)
+{
+    static auto vecgen = autocheck::list_of(validContractCodeEntryGenerator);
+    return vecgen(n);
+}
+#endif
+
 std::vector<LedgerHeaderHistoryEntry>
 generateLedgerHeadersForCheckpoint(
     LedgerHeaderHistoryEntry firstLedger, uint32_t size,
@@ -534,6 +847,14 @@ generateLedgerHeadersForCheckpoint(
     auto res = vecgen(size);
     makeValid(res, firstLedger, state);
     return res;
+}
+
+UpgradeType
+toUpgradeType(LedgerUpgrade const& upgrade)
+{
+    auto v = xdr::xdr_to_opaque(upgrade);
+    auto result = UpgradeType{v.begin(), v.end()};
+    return result;
 }
 }
 }

@@ -12,6 +12,66 @@
 namespace stellar
 {
 
+// Implementation of InMemoryLedgerTxn::FilteredEntryIteratorImpl
+// The LedgerTxnRoot backed LedgerTxn commit filters out non LEDGER_ENTRYs at
+// the top level in LedgerTxnRoot. This iterator imitates that behavior by
+// skipping the same entries.
+InMemoryLedgerTxn::FilteredEntryIteratorImpl::FilteredEntryIteratorImpl(
+    EntryIterator const& begin)
+    : mIter(begin)
+{
+    if (mIter && mIter.key().type() != InternalLedgerEntryType::LEDGER_ENTRY)
+    {
+        advance();
+    }
+}
+
+void
+InMemoryLedgerTxn::FilteredEntryIteratorImpl::advance()
+{
+    while (++mIter &&
+           mIter.key().type() != InternalLedgerEntryType::LEDGER_ENTRY)
+    {
+        // Do nothing
+    }
+}
+
+bool
+InMemoryLedgerTxn::FilteredEntryIteratorImpl::atEnd() const
+{
+    return !mIter;
+}
+
+InternalLedgerEntry const&
+InMemoryLedgerTxn::FilteredEntryIteratorImpl::entry() const
+{
+    return mIter.entry();
+}
+
+LedgerEntryPtr const&
+InMemoryLedgerTxn::FilteredEntryIteratorImpl::entryPtr() const
+{
+    return mIter.entryPtr();
+}
+
+bool
+InMemoryLedgerTxn::FilteredEntryIteratorImpl::entryExists() const
+{
+    return mIter.entryExists();
+}
+
+InternalLedgerKey const&
+InMemoryLedgerTxn::FilteredEntryIteratorImpl::key() const
+{
+    return mIter.key();
+}
+
+std::unique_ptr<EntryIterator::AbstractImpl>
+InMemoryLedgerTxn::FilteredEntryIteratorImpl::clone() const
+{
+    return std::make_unique<FilteredEntryIteratorImpl>(mIter);
+}
+
 InMemoryLedgerTxn::InMemoryLedgerTxn(InMemoryLedgerTxnRoot& parent,
                                      Database& db)
     : LedgerTxn(parent), mDb(db)
@@ -84,6 +144,14 @@ InMemoryLedgerTxn::updateLedgerKeyMap(EntryIterator iter)
     }
 }
 
+EntryIterator
+InMemoryLedgerTxn::getFilteredEntryIterator(EntryIterator const& iter)
+{
+    auto filteredIterImpl =
+        std::make_unique<InMemoryLedgerTxn::FilteredEntryIteratorImpl>(iter);
+    return EntryIterator(std::move(filteredIterImpl));
+}
+
 void
 InMemoryLedgerTxn::commitChild(EntryIterator iter,
                                LedgerTxnConsistency cons) noexcept
@@ -94,9 +162,10 @@ InMemoryLedgerTxn::commitChild(EntryIterator iter,
     }
     try
     {
-        updateLedgerKeyMap(iter);
+        auto filteredIter = getFilteredEntryIterator(iter);
+        updateLedgerKeyMap(filteredIter);
 
-        LedgerTxn::commitChild(iter, cons);
+        LedgerTxn::commitChild(filteredIter, cons);
         mTransaction->commit();
         mTransaction.reset();
     }
@@ -164,6 +233,14 @@ InMemoryLedgerTxn::create(InternalLedgerEntry const& entry)
     throw std::runtime_error("called create on InMemoryLedgerTxn");
 }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+LedgerTxnEntry
+InMemoryLedgerTxn::restore(InternalLedgerEntry const& entry)
+{
+    throw std::runtime_error("called restore on InMemoryLedgerTxn");
+}
+#endif
+
 void
 InMemoryLedgerTxn::erase(InternalLedgerKey const& key)
 {
@@ -177,7 +254,8 @@ InMemoryLedgerTxn::load(InternalLedgerKey const& key)
 }
 
 ConstLedgerTxnEntry
-InMemoryLedgerTxn::loadWithoutRecord(InternalLedgerKey const& key)
+InMemoryLedgerTxn::loadWithoutRecord(InternalLedgerKey const& key,
+                                     bool loadExpiredEntry)
 {
     throw std::runtime_error("called loadWithoutRecord on InMemoryLedgerTxn");
 }
@@ -202,7 +280,7 @@ InMemoryLedgerTxn::getOffersByAccountAndAsset(AccountID const& account,
             continue;
         }
 
-        auto newest = getNewestVersion(key);
+        auto newest = getNewestVersion(key, /*loadExpiredEntry=*/false);
         if (!newest)
         {
             throw std::runtime_error("Invalid ledger state");
@@ -239,8 +317,10 @@ InMemoryLedgerTxn::getPoolShareTrustLinesByAccountAndAsset(
             continue;
         }
 
-        auto pool = getNewestVersion(liquidityPoolKey(
-            key.ledgerKey().trustLine().asset.liquidityPoolID()));
+        auto pool = getNewestVersion(
+            liquidityPoolKey(
+                key.ledgerKey().trustLine().asset.liquidityPoolID()),
+            /*loadExpiredEntry=*/false);
         if (!pool)
         {
             throw std::runtime_error("Invalid ledger state");
@@ -250,7 +330,7 @@ InMemoryLedgerTxn::getPoolShareTrustLinesByAccountAndAsset(
         auto const& cp = lp.body.constantProduct();
         if (cp.params.assetA == asset || cp.params.assetB == asset)
         {
-            auto newest = getNewestVersion(key);
+            auto newest = getNewestVersion(key, /*loadExpiredEntry=*/false);
             if (!newest)
             {
                 throw std::runtime_error("Invalid ledger state");

@@ -9,12 +9,22 @@ AM_CPPFLAGS += -isystem "$(top_srcdir)/lib"             \
 	-isystem "$(top_srcdir)/lib/util"                   \
 	-isystem "$(top_srcdir)/lib/fmt/include"            \
 	-isystem "$(top_srcdir)/lib/soci/src/core"          \
-	-isystem "$(top_srcdir)/lib/tracy"                  \
-	-isystem "$(top_srcdir)/lib/spdlog/include"
+	-isystem "$(top_srcdir)/lib/tracy/public/tracy"     \
+	-isystem "$(top_srcdir)/lib/spdlog/include"         \
+	-isystem "$(top_srcdir)/rust/src"
 
 if USE_POSTGRES
 AM_CPPFLAGS += -DUSE_POSTGRES=1 $(libpq_CFLAGS)
 endif # USE_POSTGRES
+
+if ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+AM_CPPFLAGS += -I"$(top_builddir)/src/protocol-next"
+else
+AM_CPPFLAGS += -I"$(top_builddir)/src/protocol-curr"
+endif
+
+# Unconditionally add CEREAL_THREAD_SAFE, we always want it.
+AM_CPPFLAGS += -DCEREAL_THREAD_SAFE
 
 # USE_TRACY and tracy_CFLAGS here represent the case of enabling
 # tracy at configure-time; but even when it is disabled we want

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "transactions/TransactionFrame.h"
+#include "transactions/TransactionMetaFrame.h"
 
 namespace stellar
 {
@@ -42,8 +43,8 @@ class FeeBumpTransactionFrame : public TransactionFrameBase
     void removeOneTimeSignerKeyFromFeeSource(AbstractLedgerTxn& ltx) const;
 
   protected:
-    void resetResults(LedgerHeader const& header, int64_t baseFee,
-                      bool applying);
+    void resetResults(LedgerHeader const& header,
+                      std::optional<int64_t> baseFee, bool applying);
 
   public:
     FeeBumpTransactionFrame(Hash const& networkID,
@@ -57,17 +58,21 @@ class FeeBumpTransactionFrame : public TransactionFrameBase
     virtual ~FeeBumpTransactionFrame(){};
 
     bool apply(Application& app, AbstractLedgerTxn& ltx,
-               TransactionMeta& meta) override;
+               TransactionMetaFrame& meta,
+               Hash const& sorobanBasePrngSeed) override;
 
-    bool checkValid(AbstractLedgerTxn& ltxOuter, SequenceNumber current,
-                    uint64_t lowerBoundCloseTimeOffset,
+    void processPostApply(Application& app, AbstractLedgerTxn& ltx,
+                          TransactionMetaFrame& meta) override;
+
+    bool checkValid(Application& app, AbstractLedgerTxn& ltxOuter,
+                    SequenceNumber current, uint64_t lowerBoundCloseTimeOffset,
                     uint64_t upperBoundCloseTimeOffset) override;
 
     TransactionEnvelope const& getEnvelope() const override;
 
+    int64_t getFullFee() const override;
     int64_t getFeeBid() const override;
-    int64_t getMinFee(LedgerHeader const& header) const override;
-    int64_t getFee(LedgerHeader const& header, int64_t baseFee,
+    int64_t getFee(LedgerHeader const& header, std::optional<int64_t> baseFee,
                    bool applying) const override;
 
     Hash const& getContentsHash() const override;
@@ -75,6 +80,8 @@ class FeeBumpTransactionFrame : public TransactionFrameBase
     Hash const& getInnerFullHash() const;
 
     uint32_t getNumOperations() const override;
+    Resource getResources() const override;
+
     std::vector<Operation> const& getRawOperations() const override;
 
     TransactionResult& getResult() override;
@@ -83,16 +90,31 @@ class FeeBumpTransactionFrame : public TransactionFrameBase
     SequenceNumber getSeqNum() const override;
     AccountID getFeeSourceID() const override;
     AccountID getSourceID() const override;
+    std::optional<SequenceNumber const> const getMinSeqNum() const override;
+    Duration getMinSeqAge() const override;
+    uint32 getMinSeqLedgerGap() const override;
 
     void
     insertKeysForFeeProcessing(UnorderedSet<LedgerKey>& keys) const override;
     void insertKeysForTxApply(UnorderedSet<LedgerKey>& keys) const override;
 
-    void processFeeSeqNum(AbstractLedgerTxn& ltx, int64_t baseFee) override;
+    void processFeeSeqNum(AbstractLedgerTxn& ltx,
+                          std::optional<int64_t> baseFee) override;
 
     StellarMessage toStellarMessage() const override;
 
     static TransactionEnvelope
     convertInnerTxToV1(TransactionEnvelope const& envelope);
+
+    bool hasDexOperations() const override;
+
+    bool isSoroban() const override;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    SorobanResources const& sorobanResources() const override;
+    void
+    maybeComputeSorobanResourceFee(uint32_t protocolVersion,
+                                   SorobanNetworkConfig const& sorobanConfig,
+                                   Config const& cfg) override;
+#endif
 };
 }

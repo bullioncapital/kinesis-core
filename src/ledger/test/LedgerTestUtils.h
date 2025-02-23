@@ -28,12 +28,40 @@ void makeValid(OfferEntry& o);
 void makeValid(DataEntry& d);
 void makeValid(ClaimableBalanceEntry& c);
 void makeValid(LiquidityPoolEntry& lp);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+void makeValid(ConfigSettingEntry& ce);
+void makeValid(ContractDataEntry& cde);
+void makeValid(ContractCodeEntry& cce);
+#endif
 void makeValid(LedgerHeaderHistoryEntry& lh,
                LedgerHeaderHistoryEntry firstLedger,
                HistoryManager::LedgerVerificationStatus state);
 
 LedgerEntry generateValidLedgerEntry(size_t b = 3);
+LedgerEntry generateValidLedgerEntryOfType(LedgerEntryType type);
+
 std::vector<LedgerEntry> generateValidLedgerEntries(size_t n);
+std::vector<LedgerEntry> generateValidUniqueLedgerEntries(size_t n);
+
+std::vector<LedgerKey> generateValidLedgerEntryKeysWithExclusions(
+    std::unordered_set<LedgerEntryType> const& excludedTypes, size_t n);
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+std::vector<LedgerKey> generateUniqueValidSorobanLedgerEntryKeys(size_t n);
+#endif
+
+std::vector<LedgerKey> generateValidUniqueLedgerEntryKeysWithExclusions(
+    std::unordered_set<LedgerEntryType> const& excludedTypes, size_t n);
+
+LedgerEntry generateValidLedgerEntryWithExclusions(
+    std::unordered_set<LedgerEntryType> const& excludedTypes, size_t b = 3);
+std::vector<LedgerEntry> generateValidLedgerEntriesWithExclusions(
+    std::unordered_set<LedgerEntryType> const& excludedTypes, size_t n);
+
+LedgerEntry generateValidLedgerEntryWithTypes(
+    std::unordered_set<LedgerEntryType> const& types, size_t b = 3);
+std::vector<LedgerEntry> generateValidUniqueLedgerEntriesWithTypes(
+    std::unordered_set<LedgerEntryType> const& types, size_t n);
 
 AccountEntry generateValidAccountEntry(size_t b = 3);
 std::vector<AccountEntry> generateValidAccountEntries(size_t n);
@@ -55,9 +83,22 @@ generateValidClaimableBalanceEntries(size_t n);
 LiquidityPoolEntry generateValidLiquidityPoolEntry(size_t b = 3);
 std::vector<LiquidityPoolEntry> generateValidLiquidityPoolEntries(size_t n);
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+ConfigSettingEntry generateValidConfigSettingEntry(size_t b = 3);
+std::vector<ConfigSettingEntry> generateValidConfigSettingEntries(size_t n);
+
+ContractDataEntry generateValidContractDataEntry(size_t b = 3);
+std::vector<ContractDataEntry> generateValidContractDataEntries(size_t n);
+
+ContractCodeEntry generateValidContractCodeEntry(size_t b = 3);
+std::vector<ContractCodeEntry> generateValidContractCodeEntries(size_t n);
+#endif
+
 std::vector<LedgerHeaderHistoryEntry> generateLedgerHeadersForCheckpoint(
     LedgerHeaderHistoryEntry firstLedger, uint32_t size,
     HistoryManager::LedgerVerificationStatus state =
         HistoryManager::VERIFY_STATUS_OK);
+
+UpgradeType toUpgradeType(LedgerUpgrade const& upgrade);
 }
 }

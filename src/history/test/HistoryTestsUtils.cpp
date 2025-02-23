@@ -136,7 +136,7 @@ std::pair<std::string, uint256>
 BucketOutputIteratorForTesting::writeTmpTestBucket()
 {
     auto ledgerEntries =
-        LedgerTestUtils::generateValidLedgerEntries(NUM_ITEMS_PER_BUCKET);
+        LedgerTestUtils::generateValidUniqueLedgerEntries(NUM_ITEMS_PER_BUCKET);
     auto bucketEntries =
         Bucket::convertToBucketEntry(false, {}, ledgerEntries, {});
     for (auto const& bucketEntry : bucketEntries)
@@ -151,7 +151,8 @@ BucketOutputIteratorForTesting::writeTmpTestBucket()
     mBuf.reset();
     mOut.close();
 
-    return std::pair<std::string, uint256>(mFilename, mHasher.finish());
+    return std::pair<std::string, uint256>(mFilename.string(),
+                                           mHasher.finish());
 };
 
 TestBucketGenerator::TestBucketGenerator(
@@ -410,9 +411,6 @@ void
 CatchupSimulation::generateRandomLedger(uint32_t version)
 {
     auto& lm = mApp.getLedgerManager();
-    TxSetFramePtr txSet =
-        std::make_shared<TxSetFrame>(lm.getLastClosedLedgerHeader().hash);
-
     uint32_t ledgerSeq = lm.getLastClosedLedgerNum() + 1;
     uint64_t minBalance = lm.getLastMinBalance(5);
     uint64_t big = minBalance + ledgerSeq;
@@ -424,42 +422,59 @@ CatchupSimulation::generateRandomLedger(uint32_t version)
     auto bob = TestAccount{mApp, getAccount("bob")};
     auto carol = TestAccount{mApp, getAccount("carol")};
 
-    // Root sends to alice every tx, bob every other tx, carol every 4rd tx.
+    std::vector<TransactionFrameBasePtr> txs;
     if (ledgerSeq < 5)
     {
-        txSet->add(root.tx({createAccount(alice, big)}));
-        txSet->add(root.tx({createAccount(bob, big)}));
-        txSet->add(root.tx({createAccount(carol, big)}));
+        txs.push_back(
+            root.tx({createAccount(alice, big), createAccount(bob, big),
+                     createAccount(carol, big)}));
     }
     // Allow an occasional empty ledger
     else if (rand_flip() || rand_flip())
     {
-        txSet->add(root.tx({payment(alice, big)}));
-        txSet->add(root.tx({payment(bob, big)}));
-        txSet->add(root.tx({payment(carol, big)}));
-
         // They all randomly send a little to one another every ledger after #4
         if (rand_flip())
-            txSet->add(alice.tx({payment(bob, small)}));
-        if (rand_flip())
-            txSet->add(alice.tx({payment(carol, small)}));
+        {
+            txs.push_back(root.tx({payment(alice, big)}));
+        }
+        else
+        {
+            txs.push_back(root.tx({payment(bob, big)}));
+        }
 
         if (rand_flip())
-            txSet->add(bob.tx({payment(alice, small)}));
-        if (rand_flip())
-            txSet->add(bob.tx({payment(carol, small)}));
+        {
+            txs.push_back(alice.tx({payment(bob, small)}));
+        }
+        else
+        {
+            txs.push_back(alice.tx({payment(carol, small)}));
+        }
 
         if (rand_flip())
-            txSet->add(carol.tx({payment(alice, small)}));
+        {
+            txs.push_back(bob.tx({payment(alice, small)}));
+        }
+        else
+        {
+            txs.push_back(bob.tx({payment(carol, small)}));
+        }
+
         if (rand_flip())
-            txSet->add(carol.tx({payment(bob, small)}));
+        {
+            txs.push_back(carol.tx({payment(alice, small)}));
+        }
+        else
+        {
+            txs.push_back(carol.tx({payment(bob, small)}));
+        }
     }
-
-    // Provoke sortForHash and hash-caching:
-    txSet->getContentsHash();
+    TxSetFrameConstPtr txSet =
+        TxSetFrame::makeFromTransactions(txs, mApp, 0, 0);
 
     CLOG_DEBUG(History, "Closing synthetic ledger {} with {} txs (txhash:{})",
-               ledgerSeq, txSet->sizeTx(), hexAbbrev(txSet->getContentsHash()));
+               ledgerSeq, txSet->sizeTxTotal(),
+               hexAbbrev(txSet->getContentsHash()));
 
     auto upgrades = xdr::xvector<UpgradeType, 6>{};
     if (version > 0)
@@ -504,10 +519,12 @@ CatchupSimulation::generateRandomLedger(uint32_t version)
 }
 
 void
-CatchupSimulation::setProto12UpgradeLedger(uint32_t ledger)
+CatchupSimulation::setUpgradeLedger(uint32_t ledger,
+                                    ProtocolVersion upgradeProtocolVersion)
 {
     REQUIRE(mApp.getLedgerManager().getLastClosedLedgerNum() < ledger);
-    mTestProtocolShadowsRemovedLedgerSeq = ledger;
+    mUpgradeLedgerSeq = ledger;
+    mUpgradeProtocolVersion = upgradeProtocolVersion;
 }
 
 void
@@ -518,11 +535,11 @@ CatchupSimulation::ensureLedgerAvailable(uint32_t targetLedger)
     while (lm.getLastClosedLedgerNum() < targetLedger)
     {
         auto lcl = lm.getLastClosedLedgerNum();
-        if (lcl + 1 == mTestProtocolShadowsRemovedLedgerSeq)
+        if (lcl + 1 == mUpgradeLedgerSeq)
         {
-            // Force proto 12 upgrade
+            // Force protocol upgrade
             generateRandomLedger(
-                static_cast<uint32_t>(Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED));
+                static_cast<uint32_t>(mUpgradeProtocolVersion));
         }
         else
         {
@@ -643,7 +660,7 @@ Application::pointer
 CatchupSimulation::createCatchupApplication(uint32_t count,
                                             Config::TestDbMode dbMode,
                                             std::string const& appName,
-                                            bool publish)
+                                            bool publish, bool useBucketListDB)
 {
     CLOG_INFO(History, "****");
     CLOG_INFO(History, "**** Create app for catchup: '{}'", appName);
@@ -654,6 +671,7 @@ CatchupSimulation::createCatchupApplication(uint32_t count,
     mCfgs.back().CATCHUP_COMPLETE =
         count == std::numeric_limits<uint32_t>::max();
     mCfgs.back().CATCHUP_RECENT = count;
+    mCfgs.back().EXPERIMENTAL_BUCKETLIST_DB = useBucketListDB;
     mSpawnedAppsClocks.emplace_front();
     auto newApp = createTestApplication(
         mSpawnedAppsClocks.front(),
@@ -842,10 +860,8 @@ CatchupSimulation::externalizeLedger(HerderImpl& herder, uint32_t ledger)
               "force-externalizing LedgerCloseData for {} has txhash:{}",
               ledger, hexAbbrev(lcd.getTxSet()->getContentsHash()));
 
-    auto txSet = std::static_pointer_cast<TxSetFrame>(lcd.getTxSet());
-
     herder.getPendingEnvelopes().putTxSet(lcd.getTxSet()->getContentsHash(),
-                                          lcd.getLedgerSeq(), txSet);
+                                          lcd.getLedgerSeq(), lcd.getTxSet());
     herder.getHerderSCPDriver().valueExternalized(
         lcd.getLedgerSeq(), xdr::xdr_to_opaque(lcd.getValue()));
 }

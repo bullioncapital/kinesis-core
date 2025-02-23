@@ -205,7 +205,8 @@ class CatchupSimulation
     std::vector<SequenceNumber> bobSeqs;
     std::vector<SequenceNumber> carolSeqs;
 
-    uint32_t mTestProtocolShadowsRemovedLedgerSeq{0};
+    uint32_t mUpgradeLedgerSeq{0};
+    ProtocolVersion mUpgradeProtocolVersion;
 
   public:
     explicit CatchupSimulation(
@@ -255,7 +256,8 @@ class CatchupSimulation
     Application::pointer createCatchupApplication(uint32_t count,
                                                   Config::TestDbMode dbMode,
                                                   std::string const& appName,
-                                                  bool publish = false);
+                                                  bool publish = false,
+                                                  bool useBucketListDB = false);
     bool catchupOffline(Application::pointer app, uint32_t toLedger,
                         bool extraValidation = false);
     bool catchupOnline(Application::pointer app, uint32_t initLedger,
@@ -270,7 +272,7 @@ class CatchupSimulation
                     std::function<bool()> const& predicate,
                     VirtualClock::duration duration);
 
-    void setProto12UpgradeLedger(uint32_t ledger);
+    void setUpgradeLedger(uint32_t ledger, ProtocolVersion upgradeVersion);
 };
 }
 }

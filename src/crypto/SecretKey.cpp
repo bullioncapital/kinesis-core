@@ -27,6 +27,10 @@
 #include <sanitizer/msan_interface.h>
 #endif
 
+#ifdef BUILD_TESTS
+#include "lib/catch.hpp"
+#endif
+
 namespace stellar
 {
 
@@ -229,8 +233,9 @@ SecretKey::benchmarkOpsPerSecond(size_t& sign, size_t& verify,
 }
 
 #ifdef BUILD_TESTS
+template <typename Rng>
 static std::vector<uint8_t>
-getPRNGBytes(size_t n, stellar_default_random_engine& engine)
+getPRNGBytes(size_t n, Rng& engine)
 {
     std::vector<uint8_t> bytes;
     for (size_t i = 0; i < n; ++i)
@@ -240,8 +245,9 @@ getPRNGBytes(size_t n, stellar_default_random_engine& engine)
     return bytes;
 }
 
+template <typename Rng>
 static SecretKey
-pseudoRandomForTestingFromPRNG(stellar_default_random_engine& engine)
+pseudoRandomForTestingFromPRNG(Rng& engine)
 {
     return SecretKey::fromSeed(getPRNGBytes(crypto_sign_SEEDBYTES, engine));
 }
@@ -252,7 +258,7 @@ SecretKey::pseudoRandomForTesting()
     // Reminder: this is not cryptographic randomness or even particularly hard
     // to guess PRNG-ness. It's intended for _deterministic_ use, when you want
     // "slightly random-ish" keys, for test-data generation.
-    return pseudoRandomForTestingFromPRNG(gRandomEngine);
+    return pseudoRandomForTestingFromPRNG(Catch::rng());
 }
 
 SecretKey
@@ -343,6 +349,13 @@ KeyFunctions<PublicKey>::getKeyVersionIsSupported(
     }
 }
 
+bool
+KeyFunctions<PublicKey>::getKeyVersionIsVariableLength(
+    strKey::StrKeyVersionByte keyVersion)
+{
+    return false;
+}
+
 PublicKeyType
 KeyFunctions<PublicKey>::toKeyType(strKey::StrKeyVersionByte keyVersion)
 {
@@ -368,7 +381,7 @@ KeyFunctions<PublicKey>::toKeyVersion(PublicKeyType keyType)
 }
 
 uint256&
-KeyFunctions<PublicKey>::getKeyValue(PublicKey& key)
+KeyFunctions<PublicKey>::getEd25519Value(PublicKey& key)
 {
     switch (key.type())
     {
@@ -380,12 +393,32 @@ KeyFunctions<PublicKey>::getKeyValue(PublicKey& key)
 }
 
 uint256 const&
-KeyFunctions<PublicKey>::getKeyValue(PublicKey const& key)
+KeyFunctions<PublicKey>::getEd25519Value(PublicKey const& key)
 {
     switch (key.type())
     {
     case PUBLIC_KEY_TYPE_ED25519:
         return key.ed25519();
+    default:
+        throw CryptoError("invalid public key type");
+    }
+}
+
+std::vector<uint8_t>
+KeyFunctions<PublicKey>::getKeyValue(PublicKey const& key)
+{
+    return xdr::xdr_to_opaque(getEd25519Value(key));
+}
+
+void
+KeyFunctions<PublicKey>::setKeyValue(PublicKey& key,
+                                     std::vector<uint8_t> const& data)
+{
+    switch (key.type())
+    {
+    case PUBLIC_KEY_TYPE_ED25519:
+        xdr::xdr_from_opaque(data, key.ed25519());
+        break;
     default:
         throw CryptoError("invalid public key type");
     }

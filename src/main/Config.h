@@ -188,6 +188,10 @@ class Config : public std::enable_shared_from_this<Config>
     // and should be false in all normal cases.
     bool ARTIFICIALLY_REDUCE_MERGE_COUNTS_FOR_TESTING;
 
+    // A config parameter that skips adjustment of target outbound connections
+    // based on the inbound connections.
+    bool ARTIFICIALLY_SKIP_CONNECTION_ADJUSTMENT_FOR_TESTING;
+
     // A config parameter that forces replay to use the newest bucket logic;
     // this implicitly means that replay will _not_ check bucket-list hashes
     // along the way, but rather will use the stated hashes from ledger headers
@@ -233,22 +237,60 @@ class Config : public std::enable_shared_from_this<Config>
     // A config parameter that controls how many messages from a particular peer
     // core can process simultaneously. If core is at capacity, it temporarily
     // stops reading from a peer until it completes processing of at least one
-    // in-flight message. This config only takes effect if
-    // ENABLE_OVERLAY_FLOW_CONTROL=true.
+    // in-flight message
     uint32_t PEER_READING_CAPACITY;
 
     // A config parameter that controls how many flood messages (tx or SCP) from
-    // a particular peer core can process simultaneously. This config only takes
-    // effect if ENABLE_OVERLAY_FLOW_CONTROL=true.
+    // a particular peer core can process simultaneously
     uint32_t PEER_FLOOD_READING_CAPACITY;
-
-    // A config parameter that allows core to enable or disable flow control
-    // when communicating with peers.
-    bool ENABLE_OVERLAY_FLOW_CONTROL;
 
     // When flow control is enabled, peer asks for more data every time it
     // processes `FLOW_CONTROL_SEND_MORE_BATCH_SIZE` messages
     uint32_t FLOW_CONTROL_SEND_MORE_BATCH_SIZE;
+
+    // PEER_FLOOD_READING_CAPACITY_BYTES (C): This is the initial credit
+    // given to the sender. It is the maximum number of bytes that the
+    // sender can transmit to the receiver before it needs to wait for
+    // an acknowledgement from the receiver. It represents the initial
+    // 'capacity' of the connection.
+
+    // MAX_CLASSIC_TX_SIZE_BYTES (M): This is the maximum size, in bytes, of
+    // a single message that can be sent by the sender. The sender can send
+    // messages of any size up to this limit, provided it has enough credit.
+
+    // FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES (A): This is the number of
+    // bytes that the receiver must process before it sends an
+    // acknowledgement back to the sender. The acknowledgement also serves
+    // to replenish the sender's credit by this amount, enabling it to send
+    // more data.
+
+    // The relationship between these three parameters should satisfy: C - A
+    // >= M. This ensures that the sender can always continue sending
+    // messages until it receives an acknowledgement for the previous data,
+    // thus preventing the system from getting stuck.
+
+    // Start with initial PEER_FLOOD_READING_CAPACITY_BYTES (C) credit
+    // Sender (C) -------- M1 bytes ----------> Receiver
+    //          \-- C-M1 --/
+
+    // Receiver processes received bytes and once
+    // FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES (A) or more is processed, an
+    // acknowledgement is sent, which replenishes the sender's credit
+    // Sender (C-M1+A) <-- A bytes ---------- Receiver
+    //             \--- (C-M1+A)-M2 --->/
+
+    // Note:  M1, M2... are message sizes such that M <=
+    // MAX_CLASSIC_TX_SIZE_BYTES
+    uint32_t PEER_FLOOD_READING_CAPACITY_BYTES;
+    uint32_t FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES;
+
+    // Enable flow control in bytes. This config allows core to process large
+    // transactions on the network more efficiently and apply back pressure if
+    // needed.
+    bool ENABLE_FLOW_CONTROL_BYTES;
+
+    // Byte limit for outbound transaction queue.
+    uint32_t OUTBOUND_TX_QUEUE_BYTE_LIMIT;
 
     // A config parameter that allows a node to generate buckets. This should
     // be set to `false` only for testing purposes.
@@ -263,6 +305,31 @@ class Config : public std::enable_shared_from_this<Config>
     // A config parameter that can be set to true (in a captive-core
     // configuration) to delay emitting metadata by one ledger.
     bool EXPERIMENTAL_PRECAUTION_DELAY_META;
+
+    // A config parameter that when set uses the BucketList as the primary
+    // key-value store for LedgerEntry lookups
+    bool EXPERIMENTAL_BUCKETLIST_DB;
+
+    // Page size exponent used by BucketIndex when indexing ranges of
+    // BucketEntry's. If set to 0, BucketEntry's are individually indexed.
+    // Otherwise, pageSize ==
+    // 2^EXPERIMENTAL_BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT.
+    size_t EXPERIMENTAL_BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT;
+
+    // Size, in MB, determining whether a bucket should have an individual
+    // key index or a key range index. If bucket size is below this value, range
+    // based index will be used. If set to 0, all buckets are range indexed. If
+    // index page size == 0, value ingnored and all buckets have individual key
+    // index.
+    size_t EXPERIMENTAL_BUCKETLIST_DB_INDEX_CUTOFF;
+
+    // When set to true, BucketListDB indexes are persisted on-disk so that the
+    // BucketList does not need to be reindexed on startup. Defaults to true.
+    // This should only be set to false for testing purposes
+    // Validators do not currently support persisted indexes. If
+    // NODE_IS_VALIDATOR=true, this value is ingnored and indexes are never
+    // persisted.
+    bool EXPERIMENTAL_BUCKETLIST_DB_PERSIST_INDEX;
 
     // A config parameter that stores historical data, such as transactions,
     // fees, and scp history in the database
@@ -305,6 +372,11 @@ class Config : public std::enable_shared_from_this<Config>
     // You might want to set this if you are running your own network and
     //  aren't concerned with byzantine failures.
     bool UNSAFE_QUORUM;
+
+    // If set to true, the node will limit its transaction queue to 1
+    // transaction per source account. This impacts which transactions the
+    // node will nominate and flood to others.
+    bool LIMIT_TX_QUEUE_SOURCE_ACCOUNT;
 
     // If set to true, bucket GC will not be performed. It can lead to massive
     // disk usage, but it is useful for recovering of nodes.
@@ -364,6 +436,22 @@ class Config : public std::enable_shared_from_this<Config>
     // first time
     time_t MAXIMUM_LEDGER_CLOSETIME_DRIFT;
 
+    // Maximum allowed number of DEX-related operations in the transaction set.
+    //
+    // Transaction is considered to have DEX-related operations if it has path
+    // payments or manage offer operations.
+    //
+    // Setting this to non-nullopt value results in the following:
+    // - The node will limit the number of accepted DEX-related transactions
+    //   proportional to `MAX_DEX_TX_OPERATIONS_IN_TX_SET / maxTxSetSize`
+    //   (ledger header parameter).
+    // - The node will broadcast less DEX-related transactions according to the
+    //   proportion above.
+    // - Starting from protocol 20 the node will nominate TX sets that respect
+    //   this limit and potentially have DEX-related transactions surge-priced
+    //   against each other.
+    std::optional<uint32_t> MAX_DEX_TX_OPERATIONS_IN_TX_SET;
+
     // note: all versions in the range
     // [OVERLAY_PROTOCOL_MIN_VERSION, OVERLAY_PROTOCOL_VERSION] must be handled
     uint32_t OVERLAY_PROTOCOL_MIN_VERSION; // min overlay version understood
@@ -372,17 +460,27 @@ class Config : public std::enable_shared_from_this<Config>
     std::string LOG_FILE_PATH;
     bool LOG_COLOR;
     std::string BUCKET_DIR_PATH;
+
     // Ledger protocol version for testing purposes. Defaulted to
     // LEDGER_PROTOCOL_VERSION. Used in the following scenarios: 1. to specify
     // the genesis ledger version (only when USE_CONFIG_FOR_GENESIS is true) 2.
     // as the protocol version for Upgrades.
     uint32_t TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION;
-    uint32_t TESTING_UPGRADE_DESIRED_FEE; // in stroops
-    uint32_t TESTING_UPGRADE_RESERVE;     // in stroops
+    uint32_t TESTING_UPGRADE_DESIRED_FEE;            // in stroops
+    uint32_t TESTING_UPGRADE_RESERVE;                // in stroops
     uint32_t TESTING_UPGRADE_DESIRED_PERCENTAGE_FEE; // in basis points
-    uint64_t TESTING_UPGRADE_DESIRED_MAX_FEE; // max fee in stroops
+    uint64_t TESTING_UPGRADE_DESIRED_MAX_FEE;        // max fee in stroops
     uint32_t TESTING_UPGRADE_MAX_TX_SET_SIZE;
     uint32_t TESTING_UPGRADE_FLAGS;
+    uint32_t TESTING_LEDGER_MAX_PROPAGATE_SIZE_BYTES;
+    int64_t TESTING_LEDGER_MAX_INSTRUCTIONS;
+    uint32_t TESTING_LEDGER_MAX_READ_LEDGER_ENTRIES;
+    uint32_t TESTING_LEDGER_MAX_READ_BYTES;
+    uint32_t TESTING_LEDGER_MAX_WRITE_LEDGER_ENTRIES;
+    uint32_t TESTING_LEDGER_MAX_WRITE_BYTES;
+    uint32_t TESTING_LEDGER_MAX_SOROBAN_TX_COUNT;
+    uint32_t TESTING_TX_MAX_SIZE_BYTES;
+
     unsigned short HTTP_PORT; // what port to listen for commands
     bool PUBLIC_HTTP_PORT;    // if you accept commands from not localhost
     int HTTP_MAX_CLIENT;      // maximum number of http clients, i.e backlog
@@ -402,8 +500,16 @@ class Config : public std::enable_shared_from_this<Config>
     int MAX_BATCH_WRITE_BYTES;
     double FLOOD_OP_RATE_PER_LEDGER;
     int FLOOD_TX_PERIOD_MS;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    double FLOOD_SOROBAN_RATE_PER_LEDGER;
+    int FLOOD_SOROBAN_TX_PERIOD_MS;
+#endif
     int32_t FLOOD_ARB_TX_BASE_ALLOWANCE;
     double FLOOD_ARB_TX_DAMPING_FACTOR;
+
+    std::chrono::milliseconds FLOOD_DEMAND_PERIOD_MS;
+    std::chrono::milliseconds FLOOD_ADVERT_PERIOD_MS;
+    std::chrono::milliseconds FLOOD_DEMAND_BACKOFF_DELAY_MS;
     static constexpr size_t const POSSIBLY_PREFERRED_EXTRA = 2;
     static constexpr size_t const REALLY_DEAD_NUM_FAILURES_CUTOFF = 120;
 
@@ -469,6 +575,15 @@ class Config : public std::enable_shared_from_this<Config>
     // The default value is false.
     bool HALT_ON_INTERNAL_TRANSACTION_ERROR;
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    // If set to true, env will return additional diagnostic Soroban events
+    // that are not part of the protocol. These events will be put into a list
+    // in the non-hashed portion of the meta, and this list will contain all
+    // events so ordering can be maintained between all events. The default
+    // value is false, and this should not be enabled on validators.
+    bool ENABLE_SOROBAN_DIAGNOSTIC_EVENTS;
+#endif
+
 #ifdef BUILD_TESTS
     // If set to true, the application will be aware this run is for a test
     // case.  This is used right now in the signal handler to exit() instead of
@@ -505,9 +620,10 @@ class Config : public std::enable_shared_from_this<Config>
     void setInMemoryMode();
     bool isInMemoryMode() const;
     bool isInMemoryModeWithoutMinimalDB() const;
+    bool isUsingBucketListDB() const;
+    bool isPersistingBucketListDBIndexes() const;
     bool modeStoresAllHistory() const;
     bool modeStoresAnyHistory() const;
-
     void logBasicInfo();
     void setNoListen();
     void setNoPublish();

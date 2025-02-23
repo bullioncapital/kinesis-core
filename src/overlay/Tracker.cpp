@@ -21,8 +21,8 @@
 namespace stellar
 {
 
-static std::chrono::milliseconds const MS_TO_WAIT_FOR_FETCH_REPLY{1500};
-static int const MAX_REBUILD_FETCH_LIST = 10;
+std::chrono::milliseconds const Tracker::MS_TO_WAIT_FOR_FETCH_REPLY{1500};
+int const Tracker::MAX_REBUILD_FETCH_LIST = 10;
 
 Tracker::Tracker(Application& app, Hash const& hash, AskPeer& askPeer)
     : mAskPeer(askPeer)
@@ -52,13 +52,14 @@ Tracker::pop()
 
 // returns false if no one cares about this guy anymore
 bool
-Tracker::clearEnvelopesBelow(uint64 slotIndex)
+Tracker::clearEnvelopesBelow(uint64 slotIndex, uint64 slotToKeep)
 {
     ZoneScoped;
     for (auto iter = mWaitingEnvelopes.begin();
          iter != mWaitingEnvelopes.end();)
     {
-        if (iter->second.statement.slotIndex < slotIndex)
+        if (auto index = iter->second.statement.slotIndex;
+            index < slotIndex && index != slotToKeep)
         {
             iter = mWaitingEnvelopes.erase(iter);
         }

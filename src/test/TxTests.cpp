@@ -7,10 +7,12 @@
 #include "crypto/SignerKey.h"
 #include "database/Database.h"
 #include "herder/Herder.h"
+#include "herder/simulation/TxSimTxSetFrame.h"
 #include "invariant/InvariantManager.h"
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/LedgerTxnHeader.h"
+#include "ledger/test/LedgerTestUtils.h"
 #include "main/Application.h"
 #include "test/TestAccount.h"
 #include "test/TestExceptions.h"
@@ -21,13 +23,14 @@
 #include "transactions/TransactionFrame.h"
 #include "transactions/TransactionSQL.h"
 #include "transactions/TransactionUtils.h"
+#include "util/GlobalChecks.h"
 #include "util/Logging.h"
 #include "util/ProtocolVersion.h"
 #include "util/XDROperators.h"
 #include "util/types.h"
+#include "xdrpp/autocheck.h"
 
 #include <lib/catch.hpp>
-#include "util/XDRCereal.h"
 
 using namespace stellar;
 using namespace stellar::txtest;
@@ -115,10 +118,11 @@ expectedResult(int64_t fee, size_t opsCount, TransactionResultCode code,
 bool
 applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
 {
+    // Close the ledger here to advance ledgerSeq
+    closeLedger(app);
+
     LedgerTxn ltx(app.getLedgerTxnRoot());
-    // Increment ledgerSeq to simulate the behavior of closeLedger, which begins
-    // by advancing the ledgerSeq.
-    ++ltx.loadHeader().current().ledgerSeq;
+
     auto ledgerVersion = ltx.loadHeader().current().ledgerVersion;
 
     bool check = false;
@@ -132,7 +136,7 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
     {
         LedgerTxn ltxFeeProc(ltx);
         // use checkedTx here for validity check as to keep tx untouched
-        check = checkedTx->checkValid(ltxFeeProc, 0, 0, 0);
+        check = checkedTx->checkValid(app, ltxFeeProc, 0, 0, 0);
         checkResult = checkedTx->getResult();
         REQUIRE((!check || checkResult.result.code() == txSUCCESS));
 
@@ -155,7 +159,8 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
             // else, leave feeCharged as per checkValid
             try
             {
-                TransactionMeta cleanTm(2);
+                TransactionMetaFrame cleanTm(
+                    ltxCleanTx.loadHeader().current().ledgerVersion);
                 checkedTxApplyRes = checkedTx->apply(app, ltxCleanTx, cleanTm);
             }
             catch (...)
@@ -220,7 +225,7 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
     bool res = false;
     {
         LedgerTxn ltxTx(ltx);
-        TransactionMeta tm(2);
+        TransactionMetaFrame tm(ltxTx.loadHeader().current().ledgerVersion);
         try
         {
             res = tx->apply(app, ltxTx, tm);
@@ -239,14 +244,14 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
 
         if (!res || tx->getResultCode() != txSUCCESS)
         {
-            REQUIRE(tm.v2().operations.size() == 0);
+            REQUIRE(tm.getNumOperations() == 0);
         }
         // checks that the failure is the same if pre checks failed
         if (!check)
         {
-            if (tx->getResultCode() != txFAILED)        
+            if (tx->getResultCode() != txFAILED)
             {
-                 REQUIRE(checkResult == tx->getResult());
+                REQUIRE(checkResult == tx->getResult());
             }
             else
             {
@@ -273,7 +278,7 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
                 bool earlyFailure =
                     (code == txMISSING_OPERATION || code == txTOO_EARLY ||
                      code == txTOO_LATE || code == txINSUFFICIENT_FEE ||
-                     code == txBAD_SEQ);
+                     code == txBAD_SEQ || code == txMALFORMED);
                 // verify that the sequence number changed (v10+)
                 // do not perform the check if there was a failure before
                 // or during the sequence number processing
@@ -313,6 +318,7 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
                             REQUIRE(previous);
                             REQUIRE(previous->type() ==
                                     InternalLedgerEntryType::LEDGER_ENTRY);
+
                             // From V13, it's possible to remove one-time
                             // signers on early failures
                             if (protocolVersionStartsFrom(
@@ -325,8 +331,26 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
                                     previous->ledgerEntry().data.account();
                                 REQUIRE(currAcc.signers.size() + 1 ==
                                         prevAcc.signers.size());
+                                REQUIRE(hasAccountEntryExtV2(currAcc) ==
+                                        hasAccountEntryExtV2(prevAcc));
+
                                 // signers should be the only change so this
                                 // should make the accounts equivalent
+                                if (hasAccountEntryExtV2(currAcc))
+                                {
+                                    auto& currSignerSponsoringIDs =
+                                        getAccountEntryExtensionV2(currAcc)
+                                            .signerSponsoringIDs;
+                                    auto const& prevSignerSponsoringIDs =
+                                        getAccountEntryExtensionV2(prevAcc)
+                                            .signerSponsoringIDs;
+
+                                    REQUIRE(currSignerSponsoringIDs.size() +
+                                                1 ==
+                                            prevSignerSponsoringIDs.size());
+                                    currSignerSponsoringIDs =
+                                        prevSignerSponsoringIDs;
+                                }
                                 currAcc.signers = prevAcc.signers;
                                 currAcc.numSubEntries = prevAcc.numSubEntries;
                                 REQUIRE(currAcc == prevAcc);
@@ -338,14 +362,11 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
             }
         }
         ltxTx.commit();
-        recordOrCheckGlobalTestTxMetadata(tm);
+        recordOrCheckGlobalTestTxMetadata(tm.getXDR());
     }
 
-    // Undo the increment from the beginning of this function. Note that if this
-    // function exits without reaching this point, then ltx will not be
-    // committed and the increment will be rolled back anyway.
-    --ltx.loadHeader().current().ledgerSeq;
     ltx.commit();
+
     return res;
 }
 
@@ -364,6 +385,18 @@ applyTx(TransactionFramePtr const& tx, Application& app, bool checkSeqNum)
     applyCheck(tx, app, checkSeqNum);
     throwIf(tx->getResult());
     checkTransaction(*tx, app);
+
+    LedgerTxn ltx(app.getLedgerTxnRoot());
+    auto account = stellar::loadAccount(ltx, tx->getSourceID());
+    if (protocolVersionStartsFrom(ltx.loadHeader().current().ledgerVersion,
+                                  ProtocolVersion::V_19) &&
+        account)
+    {
+        auto const& v3 =
+            getAccountEntryExtensionV3(account.current().data.account());
+        REQUIRE(v3.seqLedger == ltx.loadHeader().current().ledgerSeq);
+        REQUIRE(v3.seqTime == ltx.loadHeader().current().scpValue.closeTime);
+    }
 }
 
 void
@@ -377,7 +410,7 @@ validateTxResults(TransactionFramePtr const& tx, Application& app,
         app.getNetworkID(), tx->getEnvelope());
     {
         LedgerTxn ltx(app.getLedgerTxnRoot());
-        REQUIRE(checkedTx->checkValid(ltx, 0, 0, 0) == shouldValidateOk);
+        REQUIRE(checkedTx->checkValid(app, ltx, 0, 0, 0) == shouldValidateOk);
     }
     REQUIRE(checkedTx->getResult().result.code() == validationResult.code);
     REQUIRE(checkedTx->getResult().feeCharged == validationResult.fee);
@@ -427,47 +460,91 @@ closeLedgerOn(Application& app, uint32 ledgerSeq, int day, int month, int year,
                          strictOrder);
 }
 
-class TxSetFrameStrictOrderForTesting : public TxSetFrame
-{
-  public:
-    TxSetFrameStrictOrderForTesting(Hash const& previousLedgerHash)
-        : TxSetFrame(previousLedgerHash){};
-
-    std::vector<TransactionFrameBasePtr>
-    sortForApply() override
-    {
-        return mTransactions;
-    };
-
-    void sortForHash() override{};
-};
-
 TxSetResultMeta
-closeLedgerOn(Application& app, uint32 ledgerSeq, time_t closeTime,
+closeLedgerOn(Application& app, int day, int month, int year,
               std::vector<TransactionFrameBasePtr> const& txs, bool strictOrder)
 {
-    std::shared_ptr<TxSetFrame> txSet;
-    auto lclHash = app.getLedgerManager().getLastClosedLedgerHeader().hash;
+    auto nextLedgerSeq = app.getLedgerManager().getLastClosedLedgerNum() + 1;
+    return closeLedgerOn(app, nextLedgerSeq, getTestDate(day, month, year), txs,
+                         strictOrder);
+}
+
+TxSetResultMeta
+closeLedger(Application& app, std::vector<TransactionFrameBasePtr> const& txs,
+            bool strictOrder)
+{
+    auto lastCloseTime = app.getLedgerManager()
+                             .getLastClosedLedgerHeader()
+                             .header.scpValue.closeTime;
+
+    auto nextLedgerSeq = app.getLedgerManager().getLastClosedLedgerNum() + 1;
+
+    return closeLedgerOn(app, nextLedgerSeq, lastCloseTime, txs, strictOrder);
+}
+
+TxSetResultMeta
+closeLedgerOn(Application& app, uint32 ledgerSeq, TimePoint closeTime,
+              std::vector<TransactionFrameBasePtr> const& txs, bool strictOrder)
+{
+    auto lastCloseTime = app.getLedgerManager()
+                             .getLastClosedLedgerHeader()
+                             .header.scpValue.closeTime;
+    if (closeTime < lastCloseTime)
+    {
+        closeTime = lastCloseTime;
+    }
+
+    TxSetFrameConstPtr txSet;
     if (strictOrder)
     {
-        txSet = std::make_shared<TxSetFrameStrictOrderForTesting>(lclHash);
+        txSet = std::make_shared<txsimulation::SimApplyOrderTxSetFrame const>(
+            app.getLedgerManager().getLastClosedLedgerHeader(), txs);
     }
     else
     {
-        txSet = std::make_shared<TxSetFrame>(lclHash);
+        txSet = TxSetFrame::makeFromTransactions(txs, app, 0, 0);
     }
-
-    for (auto const& tx : txs)
-    {
-        txSet->add(tx);
-    }
-
-    txSet->sortForHash();
     if (!strictOrder)
     {
+        // `strictOrder` means the txs in the txSet will be applied in the exact
+        // same order as they were constructed. It could also imply the txs
+        // themselves maybe intentionally invalid for testing purpose.
         REQUIRE(txSet->checkValid(app, 0, 0));
     }
 
+    app.getHerder().externalizeValue(txSet, ledgerSeq, closeTime,
+                                     emptyUpgradeSteps);
+
+    auto z1 = getTransactionHistoryResults(app.getDatabase(), ledgerSeq);
+    auto z2 = getTransactionFeeMeta(app.getDatabase(), ledgerSeq);
+
+    REQUIRE(app.getLedgerManager().getLastClosedLedgerNum() == ledgerSeq);
+
+    TxSetResultMeta res;
+    std::transform(
+        z1.results.begin(), z1.results.end(), z2.begin(),
+        std::back_inserter(res),
+        [](TransactionResultPair const& r1, LedgerEntryChanges const& r2) {
+            return std::make_pair(r1, r2);
+        });
+
+    return res;
+}
+
+TxSetResultMeta
+closeLedger(Application& app, TxSetFrameConstPtr txSet)
+{
+    auto lastCloseTime = app.getLedgerManager()
+                             .getLastClosedLedgerHeader()
+                             .header.scpValue.closeTime;
+    auto nextLedgerSeq = app.getLedgerManager().getLastClosedLedgerNum() + 1;
+    return closeLedgerOn(app, nextLedgerSeq, lastCloseTime, txSet);
+}
+
+TxSetResultMeta
+closeLedgerOn(Application& app, uint32 ledgerSeq, time_t closeTime,
+              TxSetFrameConstPtr txSet)
+{
     app.getHerder().externalizeValue(txSet, ledgerSeq, closeTime,
                                      emptyUpgradeSteps);
 
@@ -538,16 +615,15 @@ getAccountSigners(PublicKey const& k, Application& app)
 TransactionFramePtr
 transactionFromOperationsV0(Application& app, SecretKey const& from,
                             SequenceNumber seq,
-                            const std::vector<Operation>& ops, int fee)
+                            const std::vector<Operation>& ops, uint32_t fee)
 {
     TransactionEnvelope e(ENVELOPE_TYPE_TX_V0);
     e.v0().tx.sourceAccountEd25519 = from.getPublicKey().ed25519();
     e.v0().tx.fee =
         fee != 0 ? fee
-                    : static_cast<uint32_t>(
-                        (ops.size() * app.getLedgerManager().getLastTxFee()) &
-                        UINT32_MAX);
-
+                 : static_cast<uint32_t>(
+                       (ops.size() * app.getLedgerManager().getLastTxFee()) &
+                       UINT32_MAX);
     e.v0().tx.seqNum = seq;
     std::copy(std::begin(ops), std::end(ops),
               std::back_inserter(e.v0().tx.operations));
@@ -561,18 +637,25 @@ transactionFromOperationsV0(Application& app, SecretKey const& from,
 TransactionFramePtr
 transactionFromOperationsV1(Application& app, SecretKey const& from,
                             SequenceNumber seq,
-                            const std::vector<Operation>& ops, int fee)
+                            const std::vector<Operation>& ops, uint32_t fee,
+                            std::optional<PreconditionsV2> cond)
 {
     TransactionEnvelope e(ENVELOPE_TYPE_TX);
     e.v1().tx.sourceAccount = toMuxedAccount(from.getPublicKey());
     e.v1().tx.fee =
         fee != 0 ? fee
-                : static_cast<uint32_t>(
-                        (ops.size() * app.getLedgerManager().getLastTxFee()) &
-                        UINT32_MAX);
+                 : static_cast<uint32_t>(
+                       (ops.size() * app.getLedgerManager().getLastTxFee()) &
+                       UINT32_MAX);
     e.v1().tx.seqNum = seq;
     std::copy(std::begin(ops), std::end(ops),
               std::back_inserter(e.v1().tx.operations));
+
+    if (cond)
+    {
+        e.v1().tx.cond.type(PRECOND_V2);
+        e.v1().tx.cond.v2() = *cond;
+    }
 
     auto res = std::static_pointer_cast<TransactionFrame>(
         TransactionFrameBase::makeTransactionFromWire(app.getNetworkID(), e));
@@ -583,7 +666,7 @@ transactionFromOperationsV1(Application& app, SecretKey const& from,
 TransactionFramePtr
 transactionFromOperations(Application& app, SecretKey const& from,
                           SequenceNumber seq, const std::vector<Operation>& ops,
-                          int fee)
+                          uint32_t fee)
 {
     uint32_t ledgerVersion;
     {
@@ -595,6 +678,34 @@ transactionFromOperations(Application& app, SecretKey const& from,
         return transactionFromOperationsV0(app, from, seq, ops, fee);
     }
     return transactionFromOperationsV1(app, from, seq, ops, fee);
+}
+
+TransactionFramePtr
+transactionWithV2Precondition(Application& app, TestAccount& account,
+                              int64_t sequenceDelta, uint32_t fee,
+                              PreconditionsV2 const& cond)
+{
+    return transactionFromOperationsV1(
+        app, account, account.getLastSequenceNumber() + sequenceDelta,
+        {payment(account.getPublicKey(), 1)}, fee, cond);
+}
+
+TransactionFrameBasePtr
+feeBump(Application& app, TestAccount& feeSource, TransactionFrameBasePtr tx,
+        int64_t fee)
+{
+    REQUIRE(tx->getEnvelope().type() == ENVELOPE_TYPE_TX);
+    TransactionEnvelope fb(ENVELOPE_TYPE_TX_FEE_BUMP);
+    fb.feeBump().tx.feeSource = toMuxedAccount(feeSource);
+    fb.feeBump().tx.fee = fee;
+    fb.feeBump().tx.innerTx.type(ENVELOPE_TYPE_TX);
+    fb.feeBump().tx.innerTx.v1() = tx->getEnvelope().v1();
+
+    auto hash = sha256(xdr::xdr_to_opaque(
+        app.getNetworkID(), ENVELOPE_TYPE_TX_FEE_BUMP, fb.feeBump().tx));
+    fb.feeBump().signatures.emplace_back(SignatureUtils::sign(feeSource, hash));
+    return TransactionFrameBase::makeTransactionFromWire(app.getNetworkID(),
+                                                         fb);
 }
 
 Operation
@@ -686,6 +797,61 @@ createCreditPaymentTx(Application& app, SecretKey const& from,
     auto op = payment(to, asset, amount);
     return transactionFromOperations(app, from, seq, {op});
 }
+
+TransactionFramePtr
+createSimpleDexTx(Application& app, TestAccount& account, uint32 nbOps,
+                  uint32_t fee)
+{
+    std::vector<Operation> ops;
+    Asset asset1(ASSET_TYPE_NATIVE);
+    Asset asset2(ASSET_TYPE_CREDIT_ALPHANUM4);
+    strToAssetCode(asset2.alphaNum4().assetCode, "USD");
+    REQUIRE(nbOps > 0);
+    uint32 nonDexOps = autocheck::generator<uint32>()(nbOps - 1);
+    for (uint32 i = 0; i < nbOps - nonDexOps; ++i)
+    {
+        ops.emplace_back(
+            manageBuyOffer(i + 1, asset1, asset2, Price{2, 5}, 10));
+    }
+    for (uint32 i = nbOps - nonDexOps; i < nbOps; ++i)
+    {
+        ops.emplace_back(payment(account.getPublicKey(), 1000));
+    }
+    stellar::shuffle(ops.begin(), ops.end(), autocheck::rng());
+    return transactionFromOperations(app, account, account.nextSequenceNumber(),
+                                     ops, fee);
+}
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+TransactionFramePtr
+createUploadWasmTx(Application& app, TestAccount& account, uint32_t fee,
+                   uint32_t refundableFee, SorobanResources resources,
+                   std::optional<std::string> memo)
+{
+    Operation deployOp;
+    deployOp.body.type(INVOKE_HOST_FUNCTION);
+    auto& uploadHF = deployOp.body.invokeHostFunctionOp().hostFunction;
+    uploadHF.type(HOST_FUNCTION_TYPE_UPLOAD_CONTRACT_WASM);
+    uploadHF.wasm().resize(1000);
+    auto byteDistr = uniform_int_distribution<uint8_t>();
+    std::generate(uploadHF.wasm().begin(), uploadHF.wasm().end(),
+                  [&byteDistr]() { return byteDistr(gRandomEngine); });
+
+    if (resources.footprint.readWrite.empty() &&
+        resources.footprint.readOnly.empty())
+    {
+        LedgerKey contractCodeLedgerKey;
+        contractCodeLedgerKey.type(CONTRACT_CODE);
+        contractCodeLedgerKey.contractCode().hash = xdrSha256(uploadHF.wasm());
+        resources.footprint.readWrite = {contractCodeLedgerKey};
+    }
+
+    auto tx =
+        sorobanTransactionFrameFromOps(app.getNetworkID(), account, {deployOp},
+                                       {}, resources, fee, refundableFee, memo);
+    return std::dynamic_pointer_cast<TransactionFrame>(tx);
+}
+#endif
 
 Asset
 makeNativeAsset()
@@ -1411,12 +1577,50 @@ sign(Hash const& networkID, SecretKey key, TransactionV1Envelope& env)
 static TransactionEnvelope
 envelopeFromOps(Hash const& networkID, TestAccount& source,
                 std::vector<Operation> const& ops,
-                std::vector<SecretKey> const& opKeys)
+                std::vector<SecretKey> const& opKeys,
+                std::optional<PreconditionsV2> cond = std::nullopt)
 {
     TransactionEnvelope tx(ENVELOPE_TYPE_TX);
     tx.v1().tx.sourceAccount = toMuxedAccount(source);
     tx.v1().tx.fee = uint32_t(100) * uint32_t(ops.size());
     tx.v1().tx.seqNum = source.nextSequenceNumber();
+    std::copy(ops.begin(), ops.end(),
+              std::back_inserter(tx.v1().tx.operations));
+
+    if (cond)
+    {
+        tx.v1().tx.cond.type(PRECOND_V2);
+        tx.v1().tx.cond.v2() = *cond;
+    }
+    sign(networkID, source, tx.v1());
+    for (auto const& opKey : opKeys)
+    {
+        sign(networkID, opKey, tx.v1());
+    }
+    return tx;
+}
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+static TransactionEnvelope
+sorobanEnvelopeFromOps(Hash const& networkID, TestAccount& source,
+                       std::vector<Operation> const& ops,
+                       std::vector<SecretKey> const& opKeys,
+                       SorobanResources const& resources, uint32_t fee,
+                       uint32_t refundableFee, std::optional<std::string> memo)
+{
+    TransactionEnvelope tx(ENVELOPE_TYPE_TX);
+    tx.v1().tx.sourceAccount = toMuxedAccount(source);
+    tx.v1().tx.fee = fee;
+    tx.v1().tx.seqNum = source.nextSequenceNumber();
+    tx.v1().tx.ext.v(1);
+    tx.v1().tx.ext.sorobanData().resources = resources;
+    tx.v1().tx.ext.sorobanData().refundableFee = refundableFee;
+    if (memo)
+    {
+        Memo textMemo(MEMO_TEXT);
+        textMemo.text() = *memo;
+        tx.v1().tx.memo = textMemo;
+    }
     std::copy(ops.begin(), ops.end(),
               std::back_inserter(tx.v1().tx.operations));
 
@@ -1427,15 +1631,32 @@ envelopeFromOps(Hash const& networkID, TestAccount& source,
     }
     return tx;
 }
+#endif
 
 TransactionFrameBasePtr
 transactionFrameFromOps(Hash const& networkID, TestAccount& source,
                         std::vector<Operation> const& ops,
-                        std::vector<SecretKey> const& opKeys)
+                        std::vector<SecretKey> const& opKeys,
+                        std::optional<PreconditionsV2> cond)
 {
     return TransactionFrameBase::makeTransactionFromWire(
-        networkID, envelopeFromOps(networkID, source, ops, opKeys));
+        networkID, envelopeFromOps(networkID, source, ops, opKeys, cond));
 }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+TransactionFrameBasePtr
+sorobanTransactionFrameFromOps(Hash const& networkID, TestAccount& source,
+                               std::vector<Operation> const& ops,
+                               std::vector<SecretKey> const& opKeys,
+                               SorobanResources const& resources, uint32_t fee,
+                               uint32_t refundableFee,
+                               std::optional<std::string> memo)
+{
+    return TransactionFrameBase::makeTransactionFromWire(
+        networkID, sorobanEnvelopeFromOps(networkID, source, ops, opKeys,
+                                          resources, fee, refundableFee, memo));
+}
+#endif
 
 LedgerUpgrade
 makeBaseReserveUpgrade(int baseReserve)
@@ -1445,31 +1666,85 @@ makeBaseReserveUpgrade(int baseReserve)
     return result;
 }
 
-UpgradeType
-toUpgradeType(LedgerUpgrade const& upgrade)
-{
-    auto v = xdr::xdr_to_opaque(upgrade);
-    auto result = UpgradeType{v.begin(), v.end()};
-    return result;
-}
-
 LedgerHeader
-executeUpgrades(Application& app, xdr::xvector<UpgradeType, 6> const& upgrades)
+executeUpgrades(Application& app, xdr::xvector<UpgradeType, 6> const& upgrades,
+                bool upgradesIgnored)
 {
     auto& lm = app.getLedgerManager();
-    auto const& lcl = lm.getLastClosedLedgerHeader();
-    auto txSet = std::make_shared<TxSetFrame>(lcl.hash);
+    auto currLh = app.getLedgerManager().getLastClosedLedgerHeader().header;
 
-    app.getHerder().externalizeValue(txSet, lcl.header.ledgerSeq + 1, 2,
-                                     upgrades);
+    auto const& lcl = lm.getLastClosedLedgerHeader();
+    auto txSet = TxSetFrame::makeEmpty(lcl);
+    auto lastCloseTime = lcl.header.scpValue.closeTime;
+    app.getHerder().externalizeValue(txSet, lcl.header.ledgerSeq + 1,
+                                     lastCloseTime, upgrades);
+    if (upgradesIgnored)
+    {
+        auto const& newHeader = lm.getLastClosedLedgerHeader().header;
+        REQUIRE(currLh.baseFee == newHeader.baseFee);
+        REQUIRE(currLh.baseReserve == newHeader.baseReserve);
+        REQUIRE(currLh.ledgerVersion == newHeader.ledgerVersion);
+        REQUIRE(currLh.maxTxSetSize == newHeader.maxTxSetSize);
+        REQUIRE(currLh.ext.v() == newHeader.ext.v());
+        if (currLh.ext.v() == 1)
+        {
+            REQUIRE(currLh.ext.v1().flags == newHeader.ext.v1().flags);
+        }
+    }
     return lm.getLastClosedLedgerHeader().header;
 };
 
 LedgerHeader
-executeUpgrade(Application& app, LedgerUpgrade const& lupgrade)
+executeUpgrade(Application& app, LedgerUpgrade const& lupgrade,
+               bool upgradeIgnored)
 {
-    return executeUpgrades(app, {toUpgradeType(lupgrade)});
+    return executeUpgrades(app, {LedgerTestUtils::toUpgradeType(lupgrade)},
+                           upgradeIgnored);
 };
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+ConfigUpgradeSetFrameConstPtr
+makeConfigUpgradeSet(AbstractLedgerTxn& ltx, ConfigUpgradeSet configUpgradeSet)
+{
+    // Make entry for the upgrade
+    auto opaqueUpgradeSet = xdr::xdr_to_opaque(configUpgradeSet);
+    auto hashOfUpgradeSet = sha256(opaqueUpgradeSet);
+    auto contractID = sha256("contract_id");
+
+    SCVal key;
+    key.type(SCV_BYTES);
+    key.bytes().insert(key.bytes().begin(), hashOfUpgradeSet.begin(),
+                       hashOfUpgradeSet.end());
+
+    SCVal val;
+    val.type(SCV_BYTES);
+    val.bytes().insert(val.bytes().begin(), opaqueUpgradeSet.begin(),
+                       opaqueUpgradeSet.end());
+
+    LedgerEntry le;
+    le.data.type(CONTRACT_DATA);
+    le.data.contractData().body.bodyType(DATA_ENTRY);
+    le.data.contractData().contract.type(SC_ADDRESS_TYPE_CONTRACT);
+    le.data.contractData().contract.contractId() = contractID;
+    le.data.contractData().durability = PERSISTENT;
+    le.data.contractData().expirationLedgerSeq = UINT32_MAX;
+    le.data.contractData().key = key;
+    le.data.contractData().body.data().val = val;
+
+    ltx.create(InternalLedgerEntry(le));
+
+    auto upgradeKey = ConfigUpgradeSetKey{contractID, hashOfUpgradeSet};
+    return ConfigUpgradeSetFrame::makeFromKey(ltx, upgradeKey);
+}
+
+LedgerUpgrade
+makeConfigUpgrade(ConfigUpgradeSetFrame const& configUpgradeSet)
+{
+    auto result = LedgerUpgrade{LEDGER_UPGRADE_CONFIG};
+    result.newConfig() = configUpgradeSet.getKey();
+    return result;
+}
+#endif
 
 // trades is a vector of pairs, where the bool indicates if assetA or assetB is
 // sent in the payment, and the int64_t is the amount

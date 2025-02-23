@@ -55,6 +55,8 @@ class Tracker
     LogSlowExecution mFetchTime;
 
   public:
+    static std::chrono::milliseconds const MS_TO_WAIT_FOR_FETCH_REPLY;
+    static int const MAX_REBUILD_FETCH_LIST;
     /**
      * Create Tracker that tracks data identified by @p hash. @p askPeer
      * delegate is used to fetch the data.
@@ -101,11 +103,12 @@ class Tracker
 
     /**
      * Called periodically to remove old envelopes from list (with ledger id
-     * below some @p slotIndex).
+     * below some @p slotIndex). Envolope not removed if ledger id ==
+     * slotToKeep.
      *
      * Returns true if at least one envelope remained in list.
      */
-    bool clearEnvelopesBelow(uint64 slotIndex);
+    bool clearEnvelopesBelow(uint64 slotIndex, uint64 slotToKeep);
 
     /**
      * Add @p env to list of envelopes that will be resend to Herder when data

@@ -1,9 +1,9 @@
 ARG DISTRO=focal
-ARG CORE_BUILDER_IMAGE=abxit/kinesis-core-builder:latest
+ARG CORE_BUILDER_IMAGE=core-builder:local
 
 ##########################################################################################################
 # # Build stage, includes everything needed to build.
-FROM ${CORE_BUILDER_IMAGE} as buildstage
+FROM ${CORE_BUILDER_IMAGE} AS buildstage
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG NPROC=2
@@ -30,8 +30,9 @@ RUN ./setup.sh
 
 # We need to repeat ARG here to make it available inside build context
 # See https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
+# For STELLAR_CORE_VERSION, refer https://apt.stellar.org/pool/stable/s/stellar-core/
 ARG DISTRO=focal
-ARG STELLAR_CORE_VERSION=18.5.0-877.d387c6a71.focal
+ARG STELLAR_CORE_VERSION=19.11.0-1323.7fb6d5e88.focal
 
 #install stellar-core
 RUN wget -qO - https://apt.stellar.org/SDF.asc | apt-key add -

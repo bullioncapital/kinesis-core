@@ -33,12 +33,25 @@ MergeOpFrame::getThresholdLevel() const
 }
 
 bool
-MergeOpFrame::isSeqnumTooFar(LedgerTxnHeader const& header,
+MergeOpFrame::isSeqnumTooFar(AbstractLedgerTxn& ltx,
+                             LedgerTxnHeader const& header,
                              AccountEntry const& sourceAccount)
 {
     // don't allow the account to be merged if recreating it would cause it
     // to jump backwards
     SequenceNumber maxSeq = getStartingSequenceNumber(header);
+
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_19))
+    {
+        auto ltxe = loadMaxSeqNumToApply(ltx, getSourceID());
+        if (ltxe &&
+            ltxe.currentGeneralized().maxSeqNumToApplyEntry().maxSeqNum >=
+                maxSeq)
+        {
+            return true;
+        }
+    }
     return sourceAccount.seqNum >= maxSeq;
 }
 
@@ -85,7 +98,8 @@ MergeOpFrame::doApplyBeforeV16(AbstractLedgerTxn& ltx)
         // in versions < 8, merge account could be called with a stale account
         LedgerKey key(ACCOUNT);
         key.account().accountID = getSourceID();
-        auto thisAccount = ltx.loadWithoutRecord(key);
+        auto thisAccount =
+            ltx.loadWithoutRecord(key, /*loadExpiredEntry=*/false);
         if (!thisAccount)
         {
             innerResult().code(ACCOUNT_MERGE_NO_ACCOUNT);
@@ -125,7 +139,7 @@ MergeOpFrame::doApplyBeforeV16(AbstractLedgerTxn& ltx)
     if (protocolVersionStartsFrom(header.current().ledgerVersion,
                                   ProtocolVersion::V_10))
     {
-        if (isSeqnumTooFar(header, sourceAccount))
+        if (isSeqnumTooFar(ltx, header, sourceAccount))
         {
             innerResult().code(ACCOUNT_MERGE_SEQNUM_TOO_FAR);
             return false;
@@ -201,7 +215,7 @@ MergeOpFrame::doApplyFromV16(AbstractLedgerTxn& ltx)
         return false;
     }
 
-    if (isSeqnumTooFar(header, sourceAccount()))
+    if (isSeqnumTooFar(ltx, header, sourceAccount()))
     {
         innerResult().code(ACCOUNT_MERGE_SEQNUM_TOO_FAR);
         return false;

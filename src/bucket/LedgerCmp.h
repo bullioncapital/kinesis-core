@@ -4,6 +4,9 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include <type_traits>
+
+#include "ledger/LedgerTypeUtils.h"
 #include "overlay/StellarXDR.h"
 #include "util/XDROperators.h"
 
@@ -82,6 +85,39 @@ struct LedgerEntryIdCmp
         case LIQUIDITY_POOL:
             return a.liquidityPool().liquidityPoolID <
                    b.liquidityPool().liquidityPoolID;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        case CONTRACT_DATA:
+        {
+            return lexCompare(a.contractData().contract,
+                              b.contractData().contract, a.contractData().key,
+                              b.contractData().key, a.contractData().durability,
+                              b.contractData().durability, getLeType(a),
+                              getLeType(b));
+        }
+        case CONTRACT_CODE:
+            return lexCompare(a.contractCode().hash, b.contractCode().hash,
+                              getLeType(a), getLeType(b));
+        case CONFIG_SETTING:
+        {
+            auto getConfigSettingId = [](auto const& v) -> ConfigSettingID {
+                using ConfigT = decltype(v);
+                if constexpr (std::is_same_v<ConfigT, LedgerKey const&>)
+                {
+                    return v.configSetting().configSettingID;
+                }
+                else if constexpr (std::is_same_v<ConfigT,
+                                                  LedgerEntry::_data_t const&>)
+                {
+                    return v.configSetting().configSettingID();
+                }
+                else
+                {
+                    throw std::runtime_error("Unexpected entry type");
+                }
+            };
+            return getConfigSettingId(a) < getConfigSettingId(b);
+        }
+#endif
         }
         return false;
     }

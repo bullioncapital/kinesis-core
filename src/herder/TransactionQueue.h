@@ -5,6 +5,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "crypto/SecretKey.h"
+#include "herder/TxQueueLimiter.h"
 #include "herder/TxSetFrame.h"
 #include "ledger/LedgerTxn.h"
 #include "transactions/TransactionFrame.h"
@@ -30,7 +31,6 @@ namespace stellar
 {
 
 class Application;
-class TxQueueLimiter;
 
 /**
  * TransactionQueue keeps received transactions that are valid and have not yet
@@ -106,6 +106,7 @@ class TransactionQueue
         TransactionFrameBasePtr mTx;
         bool mBroadcasted;
         VirtualClock::time_point mInsertionTime;
+        bool mSubmittedFromSelf;
     };
     using TimestampedTransactions = std::vector<TimestampedTx>;
     using Transactions = std::vector<TransactionFrameBasePtr>;
@@ -119,13 +120,14 @@ class TransactionQueue
     };
 
     explicit TransactionQueue(Application& app, uint32 pendingDepth,
-                              uint32 banDepth, uint32 poolLedgerMultiplier);
-    ~TransactionQueue();
+                              uint32 banDepth, uint32 poolLedgerMultiplier,
+                              bool isSoroban);
+    virtual ~TransactionQueue();
 
     static std::vector<AssetPair>
     findAllAssetPairsInvolvedInPaymentLoops(TransactionFrameBasePtr tx);
 
-    AddResult tryAdd(TransactionFrameBasePtr tx);
+    AddResult tryAdd(TransactionFrameBasePtr tx, bool submittedFromSelf);
     void removeApplied(Transactions const& txs);
     void ban(Transactions const& txs);
 
@@ -141,9 +143,9 @@ class TransactionQueue
 
     size_t countBanned(int index) const;
     bool isBanned(Hash const& hash) const;
+    TransactionFrameBaseConstPtr getTx(Hash const& hash) const;
 
-    std::shared_ptr<TxSetFrame>
-    toTxSet(LedgerHeaderHistoryEntry const& lcl) const;
+    TxSetFrame::Transactions getTransactions(LedgerHeader const& lcl) const;
 
     struct ReplacedTransaction
     {
@@ -156,8 +158,9 @@ class TransactionQueue
     void rebroadcast();
 
     void shutdown();
+    bool sourceAccountPending(AccountID const& accountID) const;
 
-  private:
+  protected:
     /**
      * The AccountState for every account. As noted above, an AccountID is in
      * AccountStates iff at least one of the following is true for the
@@ -186,16 +189,20 @@ class TransactionQueue
     medida::Counter& mArbTxSeenCounter;
     medida::Counter& mArbTxDroppedCounter;
     medida::Timer& mTransactionsDelay;
+    medida::Timer& mTransactionsSelfDelay;
 
     UnorderedSet<OperationType> mFilteredTypes;
 
     bool mShutdown{false};
     bool mWaiting{false};
-    size_t mBroadcastOpCarryover{0};
     VirtualTimer mBroadcastTimer;
 
-    size_t getMaxOpsToFloodThisPeriod() const;
-    bool broadcastSome();
+    virtual std::pair<Resource, std::optional<Resource>>
+    getMaxResourcesToFloodThisPeriod() const = 0;
+    virtual bool broadcastSome() = 0;
+    virtual int getFloodPeriod() const = 0;
+    virtual size_t getMaxQueueSizeOps() const = 0;
+
     void broadcast(bool fromCallback);
     // broadcasts a single transaction
     enum class BroadcastStatus
@@ -205,10 +212,10 @@ class TransactionQueue
         BROADCAST_STATUS_SKIPPED
     };
     BroadcastStatus broadcastTx(AccountState& state, TimestampedTx& tx);
-
     AddResult canAdd(TransactionFrameBasePtr tx,
                      AccountStates::iterator& stateIter,
-                     TimestampedTransactions::iterator& oldTxIter);
+                     TimestampedTransactions::iterator& oldTxIter,
+                     std::vector<std::pair<TxStackPtr, bool>>& txsToEvict);
 
     void releaseFeeMaybeEraseAccountState(TransactionFrameBasePtr tx);
 
@@ -224,15 +231,61 @@ class TransactionQueue
     std::unique_ptr<TxQueueLimiter> mTxQueueLimiter;
     UnorderedMap<AssetPair, uint32_t, AssetPairHash> mArbitrageFloodDamping;
 
+    UnorderedMap<Hash, TransactionFrameBasePtr> mKnownTxHashes;
+
     size_t mBroadcastSeed;
 
-    friend struct TxQueueTracker;
+    friend class TxQueueTracker;
 
 #ifdef BUILD_TESTS
   public:
     size_t getQueueSizeOps() const;
+    std::optional<int64_t> getInQueueSeqNum(AccountID const& account) const;
     std::function<void(TransactionFrameBasePtr&)> mTxBroadcastedEvent;
 #endif
+};
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+class SorobanTransactionQueue : public TransactionQueue
+{
+  public:
+    SorobanTransactionQueue(Application& app, uint32 pendingDepth,
+                            uint32 banDepth, uint32 poolLedgerMultiplier);
+    int
+    getFloodPeriod() const override
+    {
+        return mApp.getConfig().FLOOD_SOROBAN_TX_PERIOD_MS;
+    }
+
+    size_t getMaxQueueSizeOps() const override;
+
+  private:
+    virtual std::pair<Resource, std::optional<Resource>>
+    getMaxResourcesToFloodThisPeriod() const override;
+    virtual bool broadcastSome() override;
+    std::vector<Resource> mBroadcastOpCarryover;
+};
+#endif
+
+class ClassicTransactionQueue : public TransactionQueue
+{
+  public:
+    ClassicTransactionQueue(Application& app, uint32 pendingDepth,
+                            uint32 banDepth, uint32 poolLedgerMultiplier);
+
+    int
+    getFloodPeriod() const override
+    {
+        return mApp.getConfig().FLOOD_TX_PERIOD_MS;
+    }
+
+    size_t getMaxQueueSizeOps() const override;
+
+  private:
+    virtual std::pair<Resource, std::optional<Resource>>
+    getMaxResourcesToFloodThisPeriod() const override;
+    virtual bool broadcastSome() override;
+    std::vector<Resource> mBroadcastOpCarryover;
 };
 
 extern std::array<const char*,

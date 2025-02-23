@@ -250,7 +250,7 @@ if test "$FS_WORKS" = "no"; then
 fi
 
 # prefer 10 as it's the one we use
-AC_CHECK_PROGS(CLANG_FORMAT, [clang-format-10 clang-format])
+AC_CHECK_PROGS(CLANG_FORMAT, [clang-format-12 clang-format])
 AM_CONDITIONAL([USE_CLANG_FORMAT], [test "x$CLANG_FORMAT" != "x"])
 
 AX_VALGRIND_CHECK
@@ -335,7 +335,7 @@ AC_ARG_ENABLE(tracy,
     AS_HELP_STRING([--enable-tracy],
         [Enable 'tracy' profiler/tracer client stub]))
 AM_CONDITIONAL(USE_TRACY, [test x$enable_tracy = xyes])
-tracy_CFLAGS='-DTRACY_ENABLE -DTRACY_ON_DEMAND -DTRACY_NO_BROADCAST -DTRACY_ONLY_LOCALHOST -DTRACY_ONLY_IPV4'
+tracy_CFLAGS='-DTRACY_ENABLE -DTRACY_ON_DEMAND -DTRACY_NO_BROADCAST -DTRACY_ONLY_LOCALHOST -DTRACY_ONLY_IPV4 -DTRACY_DELAYED_INIT -DTRACY_MANUAL_LIFETIME'
 if test x"$enable_tracy" = xyes; then
     case "${host_os}" in
         *darwin*)
@@ -385,6 +385,12 @@ AC_ARG_ENABLE(next-protocol-version-unsafe-for-production,
 AM_CONDITIONAL(ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION,
     [test x$enable_next_protocol_version_unsafe_for_production = xyes])
 
+AC_ARG_ENABLE(protocol-upgrade-via-soroban-env-host-prev,
+    AS_HELP_STRING([--enable-protocol-upgrade-via-soroban-env-host-prev],
+        [Pass "--feature=soroban-env-host-prev" to "cargo build" to enable protocol upgrades]))
+AM_CONDITIONAL(ENABLE_PROTOCOL_UPGRADE_VIA_SOROBAN_ENV_HOST_PREV,
+    [test x$enable_protocol_upgrade_via_soroban_env_host_prev = xyes])
+
 AC_ARG_ENABLE(libunwind,
     AS_HELP_STRING([--disable-libunwind],
         [Disable backtraces using libunwind]))
@@ -423,6 +429,32 @@ if test x"$enable_libunwind" != xno; then
     esac
 else
   AC_MSG_NOTICE([not using libunwind as it was not requested])
+fi
+
+# When we shift to having Rust in the current protocol version, this block should be
+# made unconditional. For the time being Rust is still "in the next protocol".
+if test x"$enable_next_protocol_version_unsafe_for_production" = xyes; then
+  AC_PATH_PROG(CARGO, cargo)
+  if test x"$CARGO" = x; then
+    AC_MSG_ERROR([cannot find cargo, needed for rust code])
+  fi
+  CARGO_VERSION="$(${CARGO} --version)"
+  CARGO_VERSION="${CARGO_VERSION#cargo}"
+  AX_COMPARE_VERSION([${CARGO_VERSION}],[ge],[1.57],[],[
+    AC_MSG_ERROR([cargo version too old (need >= 1.57)])
+  ])
+  AC_ARG_VAR(CARGO)
+
+  AC_PATH_PROG(RUSTC, rustc)
+  if test x"$RUSTC" = x; then
+    AC_MSG_ERROR([cannot find rustc, needed for rust code])
+  fi
+  RUSTC_VERSION="$(${RUSTC} --version)"
+  RUSTC_VERSION="${RUSTC_VERSION#rustc}"
+  AX_COMPARE_VERSION([${RUSTC_VERSION}],[ge],[1.57],[],[
+    AC_MSG_ERROR([rustc version too old (need >= 1.57)])
+  ])
+  AC_ARG_VAR(RUSTC)
 fi
 
 # Need this to pass through ccache for xdrpp, libsodium

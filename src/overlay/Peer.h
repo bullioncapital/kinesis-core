@@ -7,26 +7,29 @@
 #include "util/asio.h"
 #include "database/Database.h"
 #include "lib/json/json.h"
+#include "medida/timer.h"
 #include "overlay/PeerBareAddress.h"
 #include "overlay/StellarXDR.h"
+#include "overlay/TxAdvertQueue.h"
+#include "util/HashOfHash.h"
 #include "util/NonCopyable.h"
+#include "util/RandomEvictionCache.h"
 #include "util/Timer.h"
 #include "xdrpp/message.h"
-
-namespace medida
-{
-class Timer;
-class Meter;
-}
 
 namespace stellar
 {
 
 typedef std::shared_ptr<SCPQuorumSet> SCPQuorumSetPtr;
 
+static auto const MAX_MESSAGE_SIZE = 0x1000000;
+// max tx size is 100KB
+static const uint32_t MAX_CLASSIC_TX_SIZE_BYTES = 100 * 1024;
+
 class Application;
 class LoopbackPeer;
 struct OverlayMetrics;
+class FlowControl;
 
 // Peer class represents a connected peer (either inbound or outbound)
 //
@@ -54,10 +57,22 @@ class Peer : public std::enable_shared_from_this<Peer>,
 {
 
   public:
-    static constexpr uint32_t FIRST_VERSION_SUPPORTING_FLOW_CONTROL = 20;
+    static constexpr uint32_t FIRST_VERSION_SUPPORTING_GENERALIZED_TX_SET = 23;
     static constexpr std::chrono::seconds PEER_SEND_MODE_IDLE_TIMEOUT =
         std::chrono::seconds(60);
+    static constexpr std::chrono::nanoseconds PEER_METRICS_DURATION_UNIT =
+        std::chrono::milliseconds(1);
+    static constexpr std::chrono::nanoseconds PEER_METRICS_RATE_UNIT =
+        std::chrono::seconds(1);
+    static constexpr uint32_t FIRST_VERSION_SUPPORTING_FLOW_CONTROL_IN_BYTES =
+        28;
 
+    // The reporting will be based on the previous
+    // PEER_METRICS_WINDOW_SIZE-second time window.
+    static constexpr std::chrono::seconds PEER_METRICS_WINDOW_SIZE =
+        std::chrono::seconds(300);
+
+    bool peerKnowsHash(Hash const& hash);
     typedef std::shared_ptr<Peer> pointer;
 
     enum PeerState
@@ -69,11 +84,24 @@ class Peer : public std::enable_shared_from_this<Peer>,
         CLOSING = 4
     };
 
+    static inline int
+    format_as(PeerState const& s)
+    {
+        return static_cast<int>(s);
+    }
+
     enum PeerRole
     {
         REMOTE_CALLED_US,
         WE_CALLED_REMOTE
     };
+
+    static inline std::string
+    format_as(PeerRole const& r)
+    {
+        return (r == REMOTE_CALLED_US) ? "REMOTE_CALLED_US"
+                                       : "WE_CALLED_REMOTE";
+    }
 
     enum class DropMode
     {
@@ -94,7 +122,16 @@ class Peer : public std::enable_shared_from_this<Peer>,
         uint64_t mMessageWrite;
         uint64_t mByteRead;
         uint64_t mByteWrite;
+        uint64_t mAsyncRead;
+        uint64_t mAsyncWrite;
+        uint64_t mMessageDrop;
 
+        medida::Timer mMessageDelayInWriteQueueTimer;
+        medida::Timer mMessageDelayInAsyncWriteTimer;
+        medida::Timer mAdvertQueueDelay;
+        medida::Timer mPullLatency;
+
+        uint64_t mDemandTimeouts;
         uint64_t mUniqueFloodBytesRecv;
         uint64_t mDuplicateFloodBytesRecv;
         uint64_t mUniqueFetchBytesRecv;
@@ -105,7 +142,14 @@ class Peer : public std::enable_shared_from_this<Peer>,
         uint64_t mUniqueFetchMessageRecv;
         uint64_t mDuplicateFetchMessageRecv;
 
+        uint64_t mTxHashReceived;
+        uint64_t mTxDemandSent;
+
         VirtualClock::time_point mConnectedTime;
+
+        uint64_t mMessagesFulfilled;
+        uint64_t mBannedMessageUnfulfilled;
+        uint64_t mUnknownMessageUnfulfilled;
     };
 
     struct TimestampedMessage
@@ -113,27 +157,16 @@ class Peer : public std::enable_shared_from_this<Peer>,
         VirtualClock::time_point mEnqueuedTime;
         VirtualClock::time_point mIssuedTime;
         VirtualClock::time_point mCompletedTime;
-        void recordWriteTiming(OverlayMetrics& metrics);
+        void recordWriteTiming(OverlayMetrics& metrics,
+                               PeerMetrics& peerMetrics);
         xdr::msg_ptr mMessage;
     };
 
-    struct QueuedOutboundMessage
-    {
-        std::shared_ptr<StellarMessage const> mMessage;
-        VirtualClock::time_point mTimeEmplaced;
-    };
+    void startExecutionDelayedTimer(
+        VirtualClock::duration d, std::function<void()> const& onSuccess,
+        std::function<void(asio::error_code)> const& onFailure);
 
-    // Does this peer want flow control enabled
-    enum class FlowControlState
-    {
-        ENABLED,
-        DISABLED,
-        DONT_KNOW
-    };
-
-    Peer::FlowControlState flowControlEnabled() const;
-
-    Json::Value getFlowControlJsonInfo() const;
+    Json::Value getJsonInfo(bool compact) const;
 
   protected:
     Application& mApp;
@@ -143,6 +176,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
     NodeID mPeerID;
     uint256 mSendNonce;
     uint256 mRecvNonce;
+
+    std::shared_ptr<FlowControl> mFlowControl;
 
     class MsgCapacityTracker : private NonMovableOrCopyable
     {
@@ -156,32 +191,11 @@ class Peer : public std::enable_shared_from_this<Peer>,
         std::weak_ptr<Peer> getPeer();
     };
 
-    struct ReadingCapacity
-    {
-        uint64_t mFloodCapacity;
-        uint64_t mTotalCapacity;
-    };
-
-    // Outbound queues indexes by priority
-    // Priority 0 - SCP messages
-    // Priority 1 - transactions
-    std::array<std::deque<QueuedOutboundMessage>, 2> mOutboundQueues;
-
-    // This methods drops obsolete load from the outbound queue
-    void addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg);
-
-    // How many flood messages have we received and processed since sending
-    // SEND_MORE to this peer
-    uint64_t mFloodMsgsProcessed{0};
-
-    // How many flood messages can we send to this peer
-    uint64_t mOutboundCapacity{0};
-
     // Is this peer currently throttled due to lack of capacity
     bool mIsPeerThrottled{false};
 
     // Does local node have capacity to read from this peer
-    bool hasReadingCapacity() const;
+    bool canRead() const;
 
     HmacSha256Key mSendMacKey;
     HmacSha256Key mRecvMacKey;
@@ -196,9 +210,10 @@ class Peer : public std::enable_shared_from_this<Peer>,
     VirtualClock::time_point mCreationTime;
 
     VirtualTimer mRecurringTimer;
+    VirtualTimer mDelayedExecutionTimer;
+
     VirtualClock::time_point mLastRead;
     VirtualClock::time_point mLastWrite;
-    std::optional<VirtualClock::time_point> mNoOutboundCapacity;
     VirtualClock::time_point mEnqueueTimeOfLastWrite;
 
     static Hash pingIDfromTimePoint(VirtualClock::time_point const& tp);
@@ -208,8 +223,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
     std::chrono::milliseconds mLastPing;
 
     PeerMetrics mPeerMetrics;
-    FlowControlState mFlowControlState;
-    ReadingCapacity mCapacity;
 
     OverlayMetrics& getOverlayMetrics();
 
@@ -233,11 +246,14 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
     void recvGetTxSet(StellarMessage const& msg);
     void recvTxSet(StellarMessage const& msg);
+    void recvGeneralizedTxSet(StellarMessage const& msg);
     void recvTransaction(StellarMessage const& msg);
     void recvGetSCPQuorumSet(StellarMessage const& msg);
     void recvSCPQuorumSet(StellarMessage const& msg);
     void recvSCPMessage(StellarMessage const& msg);
     void recvGetSCPState(StellarMessage const& msg);
+    void recvFloodAdvert(StellarMessage const& msg);
+    void recvFloodDemand(StellarMessage const& msg);
 
     void sendHello();
     void sendAuth();
@@ -245,7 +261,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void sendDontHave(MessageType type, uint256 const& itemID);
     void sendPeers();
     void sendError(ErrorCode error, std::string const& message);
-    void sendSendMore(uint32_t numMessages);
 
     // NB: This is a move-argument because the write-buffer has to travel
     // with the write-request through the async IO system, and we might have
@@ -271,16 +286,29 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void startRecurrentTimer();
     void recurrentTimerExpired(asio::error_code const& error);
     std::chrono::seconds getIOTimeout() const;
+    void rememberHash(Hash const& hash, uint32_t ledgerSeq);
 
     // helper method to acknownledge that some bytes were received
     void receivedBytes(size_t byteCount, bool gotFullMessage);
 
     void sendAuthenticatedMessage(StellarMessage const& msg);
-
-    void beginMesssageProcessing(StellarMessage const& msg);
+    void beginMessageProcessing(StellarMessage const& msg);
     void endMessageProcessing(StellarMessage const& msg);
+    TxAdvertQueue mTxAdvertQueue;
 
-    void maybeSendNextBatch();
+    // As of MIN_OVERLAY_VERSION_FOR_FLOOD_ADVERT, peers accumulate an _advert_
+    // of flood messages, then periodically flush the advert and await a
+    // _demand_ message with a list of flood messages to send. Adverts are
+    // typically smaller than full messages and batching them means we also
+    // amortize the authentication framing.
+    TxAdvertVector mTxHashesToAdvertise;
+    void flushAdvert();
+    VirtualTimer mAdvertTimer;
+    void startAdvertTimer();
+    // transaction hash -> ledger number
+    RandomEvictionCache<Hash, uint32_t> mAdvertHistory;
+
+    bool mShuttingDown{false};
 
   public:
     Peer(Application& app, PeerRole role);
@@ -290,6 +318,9 @@ class Peer : public std::enable_shared_from_this<Peer>,
     {
         return mApp;
     }
+
+    void shutdown();
+    void clearBelow(uint32_t ledgerSeq);
 
     std::string msgSummary(StellarMessage const& stellarMsg);
     void sendGetTxSet(uint256 const& setID);
@@ -361,12 +392,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
         return mPeerMetrics;
     }
 
-    bool
-    isFlowControlled() const
-    {
-        return mFlowControlState == Peer::FlowControlState::ENABLED;
-    }
-
     std::string const& toString();
     virtual std::string getIP() const = 0;
 
@@ -374,29 +399,34 @@ class Peer : public std::enable_shared_from_this<Peer>,
     // shared_ptr<Peer> as a captured shared_from_this().
     virtual void connectHandler(asio::error_code const& ec);
 
-    virtual void
-    writeHandler(asio::error_code const& error, size_t bytes_transferred,
-                 size_t messages_transferred)
-    {
-    }
-
-    virtual void
-    readHeaderHandler(asio::error_code const& error, size_t bytes_transferred)
-    {
-    }
-
-    virtual void
-    readBodyHandler(asio::error_code const& error, size_t bytes_transferred,
-                    size_t expected_length)
-    {
-    }
-
     virtual void drop(std::string const& reason, DropDirection dropDirection,
                       DropMode dropMode) = 0;
     virtual ~Peer()
     {
     }
 
+    void sendTxDemand(TxDemandVector&& demands);
+    void fulfillDemand(FloodDemand const& dmd);
+    void queueTxHashToAdvertise(Hash const& hash);
+    void queueTxHashAndMaybeTrim(Hash const& hash);
+    TxAdvertQueue&
+    getTxAdvertQueue()
+    {
+        return mTxAdvertQueue;
+    };
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    void handleMaxTxSizeIncrease(uint32_t increase);
+#endif
+
     friend class LoopbackPeer;
+
+#ifdef BUILD_TESTS
+    std::shared_ptr<FlowControl>
+    getFlowControl() const
+    {
+        return mFlowControl;
+    }
+#endif
 };
 }

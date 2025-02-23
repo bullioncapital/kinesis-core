@@ -23,7 +23,7 @@
 using namespace stellar;
 using namespace stellar::txtest;
 
-TEST_CASE("bump sequence", "[tx][bumpsequence]")
+TEST_CASE_VERSIONS("bump sequence", "[tx][bumpsequence]")
 {
     Config const& cfg = getTestConfig();
 
@@ -85,18 +85,57 @@ TEST_CASE("bump sequence", "[tx][bumpsequence]")
 
     SECTION("seqnum equals starting sequence")
     {
-        closeLedgerOn(*app, 2, 1, 1, 2020);
+        for_versions_from(10, *app, [&]() {
+            int64_t newSeq = 0;
+            {
+                LedgerTxn ltx(app->getLedgerTxnRoot());
+                auto ledgerSeq = ltx.loadHeader().current().ledgerSeq + 2;
+                newSeq = getStartingSequenceNumber(ledgerSeq) - 1;
+            }
 
-        int64_t newSeq = 0;
-        {
-            LedgerTxn ltx(app->getLedgerTxnRoot());
-            auto ledgerSeq = ltx.loadHeader().current().ledgerSeq + 1;
-            newSeq = getStartingSequenceNumber(ledgerSeq) - 1;
-        }
+            a.bumpSequence(newSeq);
+            REQUIRE(a.loadSequenceNumber() == newSeq);
+            REQUIRE_THROWS_AS(applyTx({a.tx({payment(root, 1)})}, *app),
+                              ex_txBAD_SEQ);
+        });
+    }
 
-        a.bumpSequence(newSeq);
-        REQUIRE(a.loadSequenceNumber() == newSeq);
-        REQUIRE_THROWS_AS(applyTx({a.tx({payment(root, 1)})}, *app),
-                          ex_txBAD_SEQ);
+    SECTION("minSeq conditions fail due to bump sequence")
+    {
+        for_versions_from(19, *app, [&]() {
+            closeLedger(*app);
+            closeLedger(*app);
+
+            auto tx1 = transactionFrameFromOps(app->getNetworkID(), root,
+                                               {a.op(bumpSequence(0))}, {a});
+
+            auto runTest = [&](PreconditionsV2 const& cond) {
+                auto tx2 = transactionWithV2Precondition(*app, a, 1, 100, cond);
+
+                auto preTxSeqNum = a.loadSequenceNumber();
+                auto r = closeLedger(*app, {tx1, tx2}, true);
+
+                checkTx(0, r, txSUCCESS);
+                checkTx(1, r, txBAD_MIN_SEQ_AGE_OR_GAP);
+
+                // seq was consumed even though tx2 return
+                // txBAD_MIN_SEQ_AGE_OR_GAP
+                REQUIRE(a.loadSequenceNumber() - 1 == preTxSeqNum);
+            };
+
+            SECTION("minSeqLedgerGap")
+            {
+                PreconditionsV2 cond;
+                cond.minSeqLedgerGap = 1;
+                runTest(cond);
+            }
+
+            SECTION("minSeqAge")
+            {
+                PreconditionsV2 cond;
+                cond.minSeqAge = 1;
+                runTest(cond);
+            }
+        });
     }
 }

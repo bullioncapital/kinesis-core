@@ -90,7 +90,8 @@ InMemoryLedgerTxnRoot::getInflationWinners(size_t maxWinners,
 }
 
 std::shared_ptr<InternalLedgerEntry const>
-InMemoryLedgerTxnRoot::getNewestVersion(InternalLedgerKey const& key) const
+InMemoryLedgerTxnRoot::getNewestVersion(InternalLedgerKey const& key,
+                                        bool loadExpiredEntry) const
 {
     return nullptr;
 }
@@ -115,34 +116,51 @@ InMemoryLedgerTxnRoot::deleteObjectsModifiedOnOrAfterLedger(
 }
 
 void
-InMemoryLedgerTxnRoot::dropAccounts()
+InMemoryLedgerTxnRoot::dropAccounts(bool)
 {
 }
 
 void
-InMemoryLedgerTxnRoot::dropData()
+InMemoryLedgerTxnRoot::dropData(bool)
 {
 }
 
 void
-InMemoryLedgerTxnRoot::dropOffers()
+InMemoryLedgerTxnRoot::dropOffers(bool)
 {
 }
 
 void
-InMemoryLedgerTxnRoot::dropTrustLines()
+InMemoryLedgerTxnRoot::dropTrustLines(bool)
 {
 }
 
 void
-InMemoryLedgerTxnRoot::dropClaimableBalances()
+InMemoryLedgerTxnRoot::dropClaimableBalances(bool)
 {
 }
 
 void
-InMemoryLedgerTxnRoot::dropLiquidityPools()
+InMemoryLedgerTxnRoot::dropLiquidityPools(bool)
 {
 }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+void
+InMemoryLedgerTxnRoot::dropContractData(bool)
+{
+}
+
+void
+InMemoryLedgerTxnRoot::dropContractCode(bool)
+{
+}
+
+void
+InMemoryLedgerTxnRoot::dropConfigSettings(bool)
+{
+}
+#endif
 
 double
 InMemoryLedgerTxnRoot::getPrefetchHitRate() const
@@ -151,7 +169,7 @@ InMemoryLedgerTxnRoot::getPrefetchHitRate() const
 }
 
 uint32_t
-InMemoryLedgerTxnRoot::prefetch(UnorderedSet<LedgerKey> const& keys)
+InMemoryLedgerTxnRoot::prefetch(UnorderedSet<LedgerKey> const&)
 {
     return 0;
 }

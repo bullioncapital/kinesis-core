@@ -89,34 +89,34 @@ hash -r
 
 if test $CXX = 'clang++'; then
     RUN_PARTITIONS=$(seq 0 $((NPROCS-1)))
-    which clang-10
-    ln -s `which clang-10` bin/clang
-    which clang++-10
-    ln -s `which clang++-10` bin/clang++
-    which llvm-symbolizer-10
-    ln -s `which llvm-symbolizer-10` bin/llvm-symbolizer
+    which clang-12
+    ln -s `which clang-12` bin/clang
+    which clang++-12
+    ln -s `which clang++-12` bin/clang++
+    which llvm-symbolizer-12
+    ln -s `which llvm-symbolizer-12` bin/llvm-symbolizer
     clang -v
     llvm-symbolizer --version || true
 elif test $CXX = 'g++'; then
     RUN_PARTITIONS=$(seq $NPROCS $((2*NPROCS-1)))
-    which gcc-8
-    ln -s `which gcc-8` bin/gcc
-    which g++-8
-    ln -s `which g++-8` bin/g++
+    which gcc-10
+    ln -s `which gcc-10` bin/gcc
+    which g++-10
+    ln -s `which g++-10` bin/g++
     which g++
     g++ -v
 fi
 
 config_flags="--enable-asan --enable-extrachecks --enable-ccache --enable-sdfprefs ${PROTOCOL_CONFIG}"
-export CFLAGS="-O2 -g1"
-export CXXFLAGS="-w -O2 -g1"
+export CFLAGS="-O2 -g1 -fno-omit-frame-pointer -fsanitize-address-use-after-scope -fno-common"
+export CXXFLAGS="-w $CFLAGS"
 
 # quarantine_size_mb / malloc_context_size : reduce memory usage to avoid
 # crashing in tests that churn a lot of memory
 # disable leak detection: this requires the container to be run with
 # "--cap-add SYS_PTRACE" or "--privileged"
 # as the leak detector relies on ptrace
-export ASAN_OPTIONS="quarantine_size_mb=100:malloc_context_size=4:detect_leaks=0"
+export ASAN_OPTIONS="quarantine_size_mb=100:malloc_context_size=4:detect_leaks=0:strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1:log_path=stdout"
 
 echo "config_flags = $config_flags"
 
@@ -148,6 +148,14 @@ if [ $d -ne 0 ]
 then
     echo "clang format must be run as part of the pull request, current diff:"
     git diff
+    exit 1
+fi
+
+crlf=$(find . ! \( -type d -o -path './.git/*' -o -path './Builds/*' -o -path './lib/*' \) -print0 | xargs -0 -n1 -P9 file "{}" | grep CRLF || true)
+if [ -n "$crlf" ]
+then
+    echo "Found some files with Windows line endings:"
+    echo "$crlf"
     exit 1
 fi
 

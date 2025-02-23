@@ -7,6 +7,7 @@
 #include "crypto/SHA.h"
 #include "crypto/SignerKey.h"
 #include "crypto/SignerKeyUtils.h"
+#include "ledger/LedgerManager.h"
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnEntry.h"
 #include "ledger/LedgerTxnHeader.h"
@@ -14,12 +15,11 @@
 #include "transactions/SignatureChecker.h"
 #include "transactions/SignatureUtils.h"
 #include "transactions/SponsorshipUtils.h"
+#include "transactions/TransactionMetaFrame.h"
 #include "transactions/TransactionUtils.h"
 #include "util/GlobalChecks.h"
 #include "util/ProtocolVersion.h"
 #include "util/numeric128.h"
-#include "util/Logging.h"
-#include "util/XDRCereal.h"
 #include "xdrpp/marshal.h"
 
 #include <numeric>
@@ -34,6 +34,35 @@ FeeBumpTransactionFrame::convertInnerTxToV1(TransactionEnvelope const& envelope)
     e.v1() = envelope.feeBump().tx.innerTx.v1();
     return e;
 }
+
+bool
+FeeBumpTransactionFrame::hasDexOperations() const
+{
+    return mInnerTx->hasDexOperations();
+}
+
+bool
+FeeBumpTransactionFrame::isSoroban() const
+{
+    return mInnerTx->isSoroban();
+}
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+SorobanResources const&
+FeeBumpTransactionFrame::sorobanResources() const
+{
+    return mInnerTx->sorobanResources();
+}
+
+void
+FeeBumpTransactionFrame::maybeComputeSorobanResourceFee(
+    uint32_t protocolVersion, SorobanNetworkConfig const& sorobanConfig,
+    Config const& cfg)
+{
+    mInnerTx->maybeComputeSorobanResourceFee(protocolVersion, sorobanConfig,
+                                             cfg);
+}
+#endif
 
 FeeBumpTransactionFrame::FeeBumpTransactionFrame(
     Hash const& networkID, TransactionEnvelope const& envelope)
@@ -85,15 +114,14 @@ updateResult(TransactionResult& outerRes, TransactionFrameBasePtr innerTx)
 
 bool
 FeeBumpTransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
-                               TransactionMeta& meta)
+                               TransactionMetaFrame& meta,
+                               Hash const& sorobanBasePrngSeed)
 {
     try
     {
         LedgerTxn ltxTx(ltx);
         removeOneTimeSignerKeyFromFeeSource(ltxTx);
-
-        auto& txChanges = meta.v2().txChangesBefore;
-        txChanges = ltxTx.getChanges();
+        meta.pushTxChangesBefore(ltxTx.getChanges());
         ltxTx.commit();
     }
     catch (std::exception& e)
@@ -110,7 +138,7 @@ FeeBumpTransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
 
     try
     {
-        bool res = mInnerTx->apply(app, ltx, meta, false);
+        bool res = mInnerTx->apply(app, ltx, meta, false, sorobanBasePrngSeed);
         // If this throws, then we may not have the correct TransactionResult so
         // we must crash.
         updateResult(getResult(), mInnerTx);
@@ -126,6 +154,14 @@ FeeBumpTransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
         printErrorAndAbort(
             "Unknown exception while applying inner transaction");
     }
+}
+
+void
+FeeBumpTransactionFrame::processPostApply(Application& app,
+                                          AbstractLedgerTxn& ltx,
+                                          TransactionMetaFrame& meta)
+{
+    mInnerTx->processPostApply(app, ltx, meta);
 }
 
 bool
@@ -146,13 +182,19 @@ FeeBumpTransactionFrame::checkSignature(SignatureChecker& signatureChecker,
 }
 
 bool
-FeeBumpTransactionFrame::checkValid(AbstractLedgerTxn& ltxOuter,
+FeeBumpTransactionFrame::checkValid(Application& app,
+                                    AbstractLedgerTxn& ltxOuter,
                                     SequenceNumber current,
                                     uint64_t lowerBoundCloseTimeOffset,
                                     uint64_t upperBoundCloseTimeOffset)
 {
     LedgerTxn ltx(ltxOuter);
-    auto minBaseFee = ltx.loadHeader().current().baseFee;
+    int64_t minBaseFee = ltx.loadHeader().current().baseFee;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    mInnerTx->maybeComputeSorobanResourceFee(
+        ltx.loadHeader().current().ledgerVersion,
+        app.getLedgerManager().getSorobanNetworkConfig(ltx), app.getConfig());
+#endif
     resetResults(ltx.loadHeader().current(), minBaseFee, false);
 
     SignatureChecker signatureChecker{ltx.loadHeader().current().ledgerVersion,
@@ -169,9 +211,9 @@ FeeBumpTransactionFrame::checkValid(AbstractLedgerTxn& ltxOuter,
         return false;
     }
 
-    bool res =
-        mInnerTx->checkValid(ltx, current, false, lowerBoundCloseTimeOffset,
-                             upperBoundCloseTimeOffset);
+    bool res = mInnerTx->checkValidWithOptionallyChargedFee(
+        app, ltx, current, false, lowerBoundCloseTimeOffset,
+        upperBoundCloseTimeOffset);
     updateResult(getResult(), mInnerTx);
     return res;
 }
@@ -189,19 +231,19 @@ FeeBumpTransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx)
         getResult().result.code(txNOT_SUPPORTED);
         return false;
     }
-    // std::cout << "\n  FeeBumpTransactionFrame::commonValidPreSeqNum ====== " << getFeeBid();
-    if (getFeeBid() < getMinFee(header.current()))
+
+    if (getFeeBid() < getMinFee(*this, header.current()))
     {
         getResult().result.code(txINSUFFICIENT_FEE);
         return false;
     }
 
     auto const& lh = header.current();
-    uint128_t v1 = bigMultiply(getFeeBid(), mInnerTx->getMinFee(lh));
-    uint128_t v2 = bigMultiply(mInnerTx->getFeeBid(), getMinFee(lh));
+    uint128_t v1 = bigMultiply(getFeeBid(), getMinFee(*mInnerTx, lh));
+    uint128_t v2 = bigMultiply(mInnerTx->getFeeBid(), getMinFee(*this, lh));
     if (v1 < v2)
     {
-        if (!bigDivide128(getResult().feeCharged, v2, mInnerTx->getMinFee(lh),
+        if (!bigDivide128(getResult().feeCharged, v2, getMinFee(*mInnerTx, lh),
                           Rounding::ROUND_UP))
         {
             getResult().feeCharged = INT64_MAX;
@@ -246,7 +288,7 @@ FeeBumpTransactionFrame::commonValid(SignatureChecker& signatureChecker,
     // if we are in applying mode fee was already deduced from signing account
     // balance, if not, we need to check if after that deduction this account
     // will still have minimum balance
-    int64_t feeToPay = applying ? 0 : getFeeBid();
+    int64_t feeToPay = applying ? 0 : getFullFee();
     // don't let the account go below the reserve after accounting for
     // liabilities
     if (getAvailableBalance(header, feeSource) < feeToPay)
@@ -265,43 +307,36 @@ FeeBumpTransactionFrame::getEnvelope() const
 }
 
 int64_t
-FeeBumpTransactionFrame::getFeeBid() const
+FeeBumpTransactionFrame::getFullFee() const
 {
     return mEnvelope.feeBump().tx.fee;
 }
 
-#ifdef _KINESIS
 int64_t
-FeeBumpTransactionFrame::getMinFee(LedgerHeader const& header) const
+FeeBumpTransactionFrame::getFeeBid() const
 {
-    auto innerTxMinFee = mInnerTx->getMinFee(header);
-    auto feeBumpMinFee = ((int64_t)header.baseFee) + innerTxMinFee;
-    CLOG_DEBUG(Tx, "FeeBumpTransactionFrame - {} getMinFee {}",
-            xdr_to_string(getFullHash(), "fullHash"),
-            feeBumpMinFee);
-    return feeBumpMinFee;
+    int64_t flatFee = mInnerTx->getFullFee() - mInnerTx->getFeeBid();
+    return mEnvelope.feeBump().tx.fee - flatFee;
 }
-#else
-int64_t
-FeeBumpTransactionFrame::getMinFee(LedgerHeader const& header) const
-{
-    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
-}
-#endif
 
 int64_t
-FeeBumpTransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
+FeeBumpTransactionFrame::getFee(LedgerHeader const& header,
+                                std::optional<int64_t> baseFee,
                                 bool applying) const
 {
-    CLOG_DEBUG(Tx, "**Kinesis** FeeBumpTransactionFrame::getFee() - called, baseFee: {}", baseFee);
-    int64_t adjustedFee = baseFee * std::max<int64_t>(1, getNumOperations());
+    if (!baseFee)
+    {
+        return getFullFee();
+    }
+    int64_t flatFee = mInnerTx->getFullFee() - mInnerTx->getFeeBid();
+    int64_t adjustedFee = *baseFee * std::max<int64_t>(1, getNumOperations());
     if (applying)
     {
-        return std::min<int64_t>(getFeeBid(), adjustedFee);
+        return flatFee + std::min<int64_t>(getFeeBid(), adjustedFee);
     }
     else
     {
-        return adjustedFee;
+        return flatFee + adjustedFee;
     }
 }
 
@@ -336,6 +371,19 @@ uint32_t
 FeeBumpTransactionFrame::getNumOperations() const
 {
     return mInnerTx->getNumOperations() + 1;
+}
+
+Resource
+FeeBumpTransactionFrame::getResources() const
+{
+    if (mInnerTx->isSoroban())
+    {
+        return mInnerTx->getResources();
+    }
+    else
+    {
+        return Resource(getNumOperations());
+    }
 }
 
 std::vector<Operation> const&
@@ -374,6 +422,24 @@ FeeBumpTransactionFrame::getSourceID() const
     return mInnerTx->getSourceID();
 }
 
+std::optional<SequenceNumber const> const
+FeeBumpTransactionFrame::getMinSeqNum() const
+{
+    return mInnerTx->getMinSeqNum();
+}
+
+Duration
+FeeBumpTransactionFrame::getMinSeqAge() const
+{
+    return mInnerTx->getMinSeqAge();
+}
+
+uint32
+FeeBumpTransactionFrame::getMinSeqLedgerGap() const
+{
+    return mInnerTx->getMinSeqLedgerGap();
+}
+
 void
 FeeBumpTransactionFrame::insertKeysForFeeProcessing(
     UnorderedSet<LedgerKey>& keys) const
@@ -391,7 +457,7 @@ FeeBumpTransactionFrame::insertKeysForTxApply(
 
 void
 FeeBumpTransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx,
-                                          int64_t baseFee)
+                                          std::optional<int64_t> baseFee)
 {
     resetResults(ltx.loadHeader().current(), baseFee, true);
 
@@ -438,7 +504,8 @@ FeeBumpTransactionFrame::removeOneTimeSignerKeyFromFeeSource(
 
 void
 FeeBumpTransactionFrame::resetResults(LedgerHeader const& header,
-                                      int64_t baseFee, bool applying)
+                                      std::optional<int64_t> baseFee,
+                                      bool applying)
 {
     mInnerTx->resetResults(header, baseFee, applying);
     mResult.result.code(txFEE_BUMP_INNER_SUCCESS);

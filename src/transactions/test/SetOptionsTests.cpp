@@ -34,7 +34,7 @@ using namespace stellar::txtest;
 // try setting high threshold ones without the correct sigs
 // make sure it doesn't allow us to add signers when we don't have the
 // minbalance
-TEST_CASE("set options", "[tx][setoptions]")
+TEST_CASE_VERSIONS("set options", "[tx][setoptions]")
 {
     Config const& cfg = getTestConfig();
 
@@ -356,8 +356,9 @@ TEST_CASE("set options", "[tx][setoptions]")
                         {acc1.getSecretKey()});
 
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(tx->apply(*app, ltx, txm));
 
                     checkSponsorship(ltx, acc1.getPublicKey(), 0, nullptr, 2, 2,
@@ -395,8 +396,9 @@ TEST_CASE("set options", "[tx][setoptions]")
                         {acc1.getSecretKey()});
 
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(tx->apply(*app, ltx, txm));
 
                     checkSponsorship(ltx, acc1.getPublicKey(), 0, nullptr, 2, 2,
@@ -471,7 +473,7 @@ TEST_CASE("set options", "[tx][setoptions]")
                 ops.emplace_back(root.op(setOptions(setSigner(signer))));
 
                 stellar::uniform_int_distribution<size_t> dist(0, 1);
-                if (dist(gRandomEngine))
+                if (dist(Catch::rng()))
                 {
                     auto sk = SecretKey::pseudoRandomForTesting();
                     keys.emplace_back(sk);
@@ -493,8 +495,9 @@ TEST_CASE("set options", "[tx][setoptions]")
                 auto tx = transactionFrameFromOps(app->getNetworkID(), root,
                                                   ops, keys);
                 LedgerTxn ltx(app->getLedgerTxnRoot());
-                TransactionMeta txm(2);
-                REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                TransactionMetaFrame txm(
+                    ltx.loadHeader().current().ledgerVersion);
+                REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                 REQUIRE(tx->apply(*app, ltx, txm));
                 ltx.commit();
 
@@ -517,7 +520,7 @@ TEST_CASE("set options", "[tx][setoptions]")
                 // 67% change to add, 33% chance to remove
                 while (signers.size() < MAX_SIGNERS)
                 {
-                    if (dist(gRandomEngine))
+                    if (dist(Catch::rng()))
                     {
                         addSigner();
                     }
@@ -530,7 +533,7 @@ TEST_CASE("set options", "[tx][setoptions]")
                 // 33% change to add, 67% chance to remove
                 while (!signers.empty())
                 {
-                    if (dist(gRandomEngine))
+                    if (dist(Catch::rng()))
                     {
                         removeSigner();
                     }
@@ -539,6 +542,38 @@ TEST_CASE("set options", "[tx][setoptions]")
                         addSigner();
                     }
                 }
+            });
+        }
+        SECTION("ed25519 payload signer")
+        {
+            SignerKey a1Signer;
+            a1Signer.type(SIGNER_KEY_TYPE_ED25519_SIGNED_PAYLOAD);
+            a1Signer.ed25519SignedPayload().ed25519 =
+                a1.getPublicKey().ed25519();
+            a1Signer.ed25519SignedPayload().payload.emplace_back('s');
+            Signer sk(a1Signer, 1);
+
+            a1Signer.ed25519SignedPayload().payload.clear();
+            Signer skEmptyPayload(a1Signer, 1);
+
+            for_versions_to(18, *app, [&]() {
+                REQUIRE_THROWS_AS(root.setOptions(setSigner(sk)),
+                                  ex_SET_OPTIONS_BAD_SIGNER);
+
+                REQUIRE_THROWS_AS(root.setOptions(setSigner(skEmptyPayload)),
+                                  ex_SET_OPTIONS_BAD_SIGNER);
+            });
+
+            for_versions_from(19, *app, [&]() {
+                root.setOptions(setSigner(sk));
+                REQUIRE(root.getNumSubEntries() == 1);
+
+                sk.weight = 0;
+                root.setOptions(setSigner(sk));
+                REQUIRE(root.getNumSubEntries() == 0);
+
+                REQUIRE_THROWS_AS(root.setOptions(setSigner(skEmptyPayload)),
+                                  ex_SET_OPTIONS_BAD_SIGNER);
             });
         }
     }

@@ -11,7 +11,7 @@
             "program": "${workspaceFolder}/src/stellar-core",
             "args": [
                 "test",
-                "[herder][txset]",
+                "[tx][envelope]",
                 "-r",
                 "junit",
                 "-o",

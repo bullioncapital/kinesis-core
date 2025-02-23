@@ -19,9 +19,8 @@
 
 namespace stellar
 {
-Floodgate::FloodRecord::FloodRecord(StellarMessage const& msg, uint32_t ledger,
-                                    Peer::pointer peer)
-    : mLedgerSeq(ledger), mMessage(msg)
+Floodgate::FloodRecord::FloodRecord(uint32_t ledger, Peer::pointer peer)
+    : mLedgerSeq(ledger)
 {
     if (peer)
         mPeersTold.insert(peer->toString());
@@ -33,6 +32,8 @@ Floodgate::Floodgate(Application& app)
           app.getMetrics().NewCounter({"overlay", "memory", "flood-known"}))
     , mSendFromBroadcast(app.getMetrics().NewMeter(
           {"overlay", "flood", "broadcast"}, "message"))
+    , mMessagesAdvertised(app.getMetrics().NewMeter(
+          {"overlay", "flood", "advertised"}, "message"))
     , mShuttingDown(false)
 {
 }
@@ -69,7 +70,7 @@ Floodgate::addRecord(StellarMessage const& msg, Peer::pointer peer, Hash& index)
     if (result == mFloodMap.end())
     { // we have never seen this message
         mFloodMap[index] = std::make_shared<FloodRecord>(
-            msg, mApp.getHerder().trackingConsensusLedgerIndex(), peer);
+            mApp.getHerder().trackingConsensusLedgerIndex(), peer);
         mFloodMapSize.set_count(mFloodMap.size());
         TracyPlot("overlay.memory.flood-known",
                   static_cast<int64_t>(mFloodMap.size()));
@@ -84,12 +85,18 @@ Floodgate::addRecord(StellarMessage const& msg, Peer::pointer peer, Hash& index)
 
 // send message to anyone you haven't gotten it from
 bool
-Floodgate::broadcast(StellarMessage const& msg, bool force)
+Floodgate::broadcast(StellarMessage const& msg, bool force,
+                     std::optional<Hash> const& hash)
 {
     ZoneScoped;
     if (mShuttingDown)
     {
         return false;
+    }
+    if (msg.type() == TRANSACTION)
+    {
+        // Must pass a hash when broadcasting transactions.
+        releaseAssert(hash.has_value());
     }
     Hash index = xdrBlake2(msg);
 
@@ -98,8 +105,7 @@ Floodgate::broadcast(StellarMessage const& msg, bool force)
     if (result == mFloodMap.end() || force)
     { // no one has sent us this message / start from scratch
         fr = std::make_shared<FloodRecord>(
-            msg, mApp.getHerder().trackingConsensusLedgerIndex(),
-            Peer::pointer());
+            mApp.getHerder().trackingConsensusLedgerIndex(), Peer::pointer());
         mFloodMap[index] = fr;
         mFloodMapSize.set_count(mFloodMap.size());
     }
@@ -118,21 +124,32 @@ Floodgate::broadcast(StellarMessage const& msg, bool force)
     for (auto peer : peers)
     {
         releaseAssert(peer.second->isAuthenticated());
-        if (peersTold.insert(peer.second->toString()).second)
+        bool pullMode = msg.type() == TRANSACTION;
+        bool hasAdvert = pullMode && peer.second->peerKnowsHash(hash.value());
+
+        if (peersTold.insert(peer.second->toString()).second && !hasAdvert)
         {
-            mSendFromBroadcast.Mark();
-            std::weak_ptr<Peer> weak(
-                std::static_pointer_cast<Peer>(peer.second));
-            mApp.postOnMainThread(
-                [smsg, weak, log = !broadcasted]() {
-                    auto strong = weak.lock();
-                    if (strong)
-                    {
-                        strong->sendMessage(smsg, log);
-                    }
-                },
-                fmt::format(FMT_STRING("broadcast to {}"),
-                            peer.second->toString()));
+            if (pullMode)
+            {
+                mMessagesAdvertised.Mark();
+                peer.second->queueTxHashToAdvertise(hash.value());
+            }
+            else
+            {
+                mSendFromBroadcast.Mark();
+                std::weak_ptr<Peer> weak(
+                    std::static_pointer_cast<Peer>(peer.second));
+                mApp.postOnMainThread(
+                    [smsg, weak, log = !broadcasted]() {
+                        auto strong = weak.lock();
+                        if (strong)
+                        {
+                            strong->sendMessage(smsg, log);
+                        }
+                    },
+                    fmt::format(FMT_STRING("broadcast to {}"),
+                                peer.second->toString()));
+            }
             broadcasted = true;
         }
     }
@@ -172,24 +189,5 @@ void
 Floodgate::forgetRecord(Hash const& h)
 {
     mFloodMap.erase(h);
-}
-
-void
-Floodgate::updateRecord(StellarMessage const& oldMsg,
-                        StellarMessage const& newMsg)
-{
-    ZoneScoped;
-    Hash oldHash = xdrBlake2(oldMsg);
-    Hash newHash = xdrBlake2(newMsg);
-
-    auto oldIter = mFloodMap.find(oldHash);
-    if (oldIter != mFloodMap.end())
-    {
-        auto record = oldIter->second;
-        record->mMessage = newMsg;
-
-        mFloodMap.erase(oldIter);
-        mFloodMap.emplace(newHash, record);
-    }
 }
 }

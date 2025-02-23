@@ -18,6 +18,11 @@
 #include "overlay/BanManager.h"
 #include "overlay/OverlayManager.h"
 #include "overlay/SurveyManager.h"
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+#include "ledger/InternalLedgerEntry.h"
+#include "ledger/LedgerTxnImpl.h"
+#include "transactions/InvokeHostFunctionOpFrame.h"
+#endif
 #include "transactions/TransactionBridge.h"
 #include "transactions/TransactionUtils.h"
 #include "util/Logging.h"
@@ -30,6 +35,8 @@
 #include "util/Decoder.h"
 #include "util/XDRCereal.h"
 #include "util/XDROperators.h"
+#include "xdr/Stellar-ledger-entries.h"
+#include "xdr/Stellar-transaction.h"
 #include "xdrpp/marshal.h"
 
 #include "ExternalQueue.h"
@@ -108,6 +115,9 @@ CommandHandler::CommandHandler(Application& app) : mApp(app)
     addRoute("manualclose", &CommandHandler::manualClose);
     addRoute("metrics", &CommandHandler::metrics);
     addRoute("tx", &CommandHandler::tx);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    addRoute("getledgerentry", &CommandHandler::getLedgerEntry);
+#endif
     addRoute("upgrades", &CommandHandler::upgrades);
     addRoute("self-check", &CommandHandler::selfCheck);
 
@@ -213,6 +223,20 @@ parseOptionalParamOrDefault(std::map<std::string, std::string> const& map,
     }
 }
 
+template <>
+bool
+parseOptionalParamOrDefault<bool>(std::map<std::string, std::string> const& map,
+                                  std::string const& key,
+                                  bool const& defaultValue)
+{
+    auto paramStr = parseOptionalParam<std::string>(map, key);
+    if (!paramStr)
+    {
+        return defaultValue;
+    }
+    return *paramStr == "true";
+}
+
 // Return a value only if the key exists and the value parses.
 // Otherwise, this throws an error.
 template <typename T>
@@ -258,6 +282,9 @@ CommandHandler::peers(std::string const& params, std::string& retStr)
     http::server::server::parseParams(params, retMap);
 
     bool fullKeys = retMap["fullkeys"] == "true";
+    // compact should be true by default
+    // as the response can be quite verbose.
+    bool compact = retMap["compact"] != "false";
     Json::Value root;
 
     auto& pendingPeers = root["pending_peers"];
@@ -284,15 +311,9 @@ CommandHandler::peers(std::string const& params, std::string& retStr)
             for (auto const& peer : peers)
             {
                 auto& peerNode = node[counter++];
-                peerNode["address"] = peer.second->toString();
-                peerNode["elapsed"] = (int)peer.second->getLifeTime().count();
-                peerNode["latency"] = (int)peer.second->getPing().count();
-                peerNode["ver"] = peer.second->getRemoteVersion();
-                peerNode["olver"] = (int)peer.second->getRemoteOverlayVersion();
+                peerNode = peer.second->getJsonInfo(compact);
                 peerNode["id"] =
                     mApp.getConfig().toStrKey(peer.first, fullKeys);
-                peerNode["flow_control"] =
-                    peer.second->getFlowControlJsonInfo();
             }
         };
     addAuthenticatedPeers(
@@ -304,10 +325,13 @@ CommandHandler::peers(std::string const& params, std::string& retStr)
 }
 
 void
-CommandHandler::info(std::string const&, std::string& retStr)
+CommandHandler::info(std::string const& params, std::string& retStr)
 {
     ZoneScoped;
-    retStr = mApp.getJsonInfo().toStyledString();
+    std::map<std::string, std::string> retMap;
+    http::server::server::parseParams(params, retMap);
+
+    retStr = mApp.getJsonInfo(retMap["compact"] == "false").toStyledString();
 }
 
 static bool
@@ -547,6 +571,30 @@ CommandHandler::upgrades(std::string const& params, std::string& retStr)
             parseOptionalParam<uint32>(retMap, "protocolversion");
         p.mFlags = parseOptionalParam<uint32>(retMap, "flags");
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        auto configXdrIter = retMap.find("configupgradesetkey");
+        if (configXdrIter != retMap.end())
+        {
+            std::vector<uint8_t> buffer;
+            decoder::decode_b64(configXdrIter->second, buffer);
+            ConfigUpgradeSetKey key;
+            xdr::xdr_from_opaque(buffer, key);
+            LedgerTxn ltx(mApp.getLedgerTxnRoot());
+
+            auto ptr = ConfigUpgradeSetFrame::makeFromKey(ltx, key);
+
+            if (!ptr ||
+                ptr->isValidForApply() != Upgrades::UpgradeValidity::VALID)
+            {
+                retStr = "Error setting configUpgradeSet";
+                return;
+            }
+
+            p.mConfigUpgradeSetKey = key;
+        }
+        p.mMaxSorobanTxSetSize =
+            parseOptionalParam<uint32>(retMap, "maxsorobantxsetsize");
+#endif
         mApp.getHerder().setUpgrades(p);
     }
     else if (s == "clear")
@@ -659,17 +707,58 @@ CommandHandler::ll(std::string const& params, std::string& retStr)
     retStr = root.toStyledString();
 }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+void
+CommandHandler::getLedgerEntry(std::string const& params, std::string& retStr)
+{
+    ZoneScoped;
+    Json::Value root;
+
+    std::map<std::string, std::string> paramMap;
+    http::server::server::parseParams(params, paramMap);
+    std::string key = paramMap["key"];
+    if (!key.empty())
+    {
+        LedgerTxn ltx(mApp.getLedgerTxnRoot());
+        root["ledger"] = ltx.loadHeader().current().ledgerSeq;
+
+        LedgerKey k;
+        fromOpaqueBase64(k, key);
+        auto le = ltx.loadWithoutRecord(k, /*loadExpiredEntry=*/false);
+        if (le)
+        {
+            root["state"] = "live";
+            root["entry"] = toOpaqueBase64(le.current());
+        }
+        else
+        {
+            root["state"] = "dead";
+        }
+    }
+    else
+    {
+        throw std::invalid_argument(
+            "Must specify ledger key: getLedgerEntry?key=<LedgerKey in base64 "
+            "XDR format>");
+    }
+    retStr = Json::FastWriter().write(root);
+}
+
+#endif
+
 void
 CommandHandler::tx(std::string const& params, std::string& retStr)
 {
     ZoneScoped;
-    std::ostringstream output;
+    Json::Value root;
 
-    const std::string prefix("?blob=");
-    if (params.compare(0, prefix.size(), prefix) == 0)
+    std::map<std::string, std::string> paramMap;
+    http::server::server::parseParams(params, paramMap);
+    std::string blob = paramMap["blob"];
+
+    if (!blob.empty())
     {
         TransactionEnvelope envelope;
-        std::string blob = params.substr(prefix.size());
         std::vector<uint8_t> binBlob;
         decoder::decode_b64(blob, binBlob);
         xdr::xdr_from_opaque(binBlob, envelope);
@@ -687,15 +776,11 @@ CommandHandler::tx(std::string const& params, std::string& retStr)
             mApp.getNetworkID(), envelope);
         if (transaction)
         {
-            // add it to our current set
-            // and make sure it is valid
+            // Add it to our current set and make sure it is valid.
             TransactionQueue::AddResult status =
-                mApp.getHerder().recvTransaction(transaction);
+                mApp.getHerder().recvTransaction(transaction, true);
 
-            output << "{"
-                   << "\"status\": "
-                   << "\"" << TX_STATUS_STRING[static_cast<int>(status)]
-                   << "\"";
+            root["status"] = TX_STATUS_STRING[static_cast<int>(status)];
             if (status == TransactionQueue::AddResult::ADD_STATUS_ERROR)
             {
                 std::string resultBase64;
@@ -703,19 +788,17 @@ CommandHandler::tx(std::string const& params, std::string& retStr)
                 resultBase64.reserve(decoder::encoded_size64(resultBin.size()) +
                                      1);
                 resultBase64 = decoder::encode_b64(resultBin);
-
-                output << " , \"error\": \"" << resultBase64 << "\"";
+                root["error"] = resultBase64;
             }
-            output << "}";
         }
     }
     else
     {
         throw std::invalid_argument("Must specify a tx blob: tx?blob=<tx in "
-                                    "xdr format>\"}");
+                                    "xdr format>");
     }
 
-    retStr = output.str();
+    retStr = Json::FastWriter().write(root);
 }
 
 void
@@ -882,41 +965,56 @@ CommandHandler::generateLoad(std::string const& params, std::string& retStr)
     {
         std::map<std::string, std::string> map;
         http::server::server::parseParams(params, map);
-
-        LoadGenMode mode = LoadGenerator::getMode(
+        GeneratedLoadConfig cfg;
+        cfg.mode = LoadGenerator::getMode(
             parseOptionalParamOrDefault<std::string>(map, "mode", "create"));
-        bool isCreate = mode == LoadGenMode::CREATE;
+        bool isCreate = cfg.mode == LoadGenMode::CREATE;
 
-        uint32_t nAccounts =
+        cfg.nAccounts =
             parseOptionalParamOrDefault<uint32_t>(map, "accounts", 1000);
-        uint32_t nTxs = parseOptionalParamOrDefault<uint32_t>(map, "txs", 0);
-        uint32_t txRate =
-            parseOptionalParamOrDefault<uint32_t>(map, "txrate", 10);
-        uint32_t batchSize = parseOptionalParamOrDefault<uint32_t>(
-            map, "batchsize", 100); // Only for account creations
-        uint32_t offset =
-            parseOptionalParamOrDefault<uint32_t>(map, "offset", 0);
+        cfg.nTxs = parseOptionalParamOrDefault<uint32_t>(map, "txs", 0);
+        cfg.txRate = parseOptionalParamOrDefault<uint32_t>(map, "txrate", 10);
+        auto batchSize = parseOptionalParamOrDefault<uint32_t>(map, "batchsize",
+                                                               MAX_OPS_PER_TX);
+        if (batchSize != MAX_OPS_PER_TX)
+        {
+            CLOG_WARNING(LoadGen,
+                         "LoadGenerator: batchSize is deprecated, "
+                         "automatically set to {}",
+                         MAX_OPS_PER_TX);
+        }
+        cfg.offset = parseOptionalParamOrDefault<uint32_t>(map, "offset", 0);
         uint32_t spikeIntervalInt =
             parseOptionalParamOrDefault<uint32_t>(map, "spikeinterval", 0);
-        std::chrono::seconds spikeInterval(spikeIntervalInt);
-        uint32_t spikeSize =
+        cfg.spikeInterval = std::chrono::seconds(spikeIntervalInt);
+        cfg.spikeSize =
             parseOptionalParamOrDefault<uint32_t>(map, "spikesize", 0);
+        cfg.maxGeneratedFeeRate =
+            parseOptionalParam<uint32_t>(map, "maxfeerate");
+        cfg.skipLowFeeTxs =
+            parseOptionalParamOrDefault<bool>(map, "skiplowfeetxs", false);
+        // Only for MIXED_TX mode; fraction of DEX transactions.
+        cfg.dexTxPercent =
+            parseOptionalParamOrDefault<uint32_t>(map, "dextxpercent", 0);
 
-        uint32_t numItems = isCreate ? nAccounts : nTxs;
-        std::string itemType = isCreate ? "accounts" : "txs";
-
-        if (batchSize > 100)
+        if (cfg.maxGeneratedFeeRate)
         {
-            batchSize = 100;
-            retStr = "Setting batch size to its limit of 100.";
+            auto baseFee = mApp.getLedgerManager().getLastTxFee();
+            if (baseFee > *cfg.maxGeneratedFeeRate)
+            {
+                retStr = "maxfeerate is smaller than minimum base fee, load "
+                         "generation skipped.";
+                return;
+            }
         }
 
-        mApp.generateLoad(mode, nAccounts, offset, nTxs, txRate, batchSize,
-                          spikeInterval, spikeSize);
+        uint32_t numItems = isCreate ? cfg.nAccounts : cfg.nTxs;
+        std::string itemType = isCreate ? "accounts" : "txs";
 
         retStr +=
             fmt::format(FMT_STRING(" Generating load: {:d} {:s}, {:d} tx/s"),
-                        numItems, itemType, txRate);
+                        numItems, itemType, cfg.txRate);
+        mApp.generateLoad(cfg);
     }
     else
     {
@@ -1015,7 +1113,7 @@ CommandHandler::testTx(std::string const& params, std::string& retStr)
             txFrame = fromAccount.tx({payment(toAccount, paymentAmount)});
         }
 
-        auto status = mApp.getHerder().recvTransaction(txFrame);
+        auto status = mApp.getHerder().recvTransaction(txFrame, true);
         root["status"] = TX_STATUS_STRING[static_cast<int>(status)];
         if (status == TransactionQueue::AddResult::ADD_STATUS_ERROR)
         {

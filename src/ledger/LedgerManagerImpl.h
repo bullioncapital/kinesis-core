@@ -6,7 +6,9 @@
 #include "util/asio.h"
 
 #include "history/HistoryManager.h"
+#include "ledger/LedgerCloseMetaFrame.h"
 #include "ledger/LedgerManager.h"
+#include "ledger/NetworkConfig.h"
 #include "main/PersistentState.h"
 #include "transactions/TransactionFrame.h"
 #include "util/XDRStream.h"
@@ -38,8 +40,6 @@ class BasicWork;
 
 class LedgerManagerImpl : public LedgerManager
 {
-    LedgerHeaderHistoryEntry mLastClosedLedger;
-
   protected:
     Application& mApp;
     std::unique_ptr<XDROutputFileStream> mMetaStream;
@@ -48,6 +48,9 @@ class LedgerManagerImpl : public LedgerManager
     std::filesystem::path mMetaDebugPath;
 
   private:
+    LedgerHeaderHistoryEntry mLastClosedLedger;
+    std::optional<SorobanNetworkConfig> mSorobanNetworkConfig;
+
     medida::Timer& mTransactionApply;
     medida::Histogram& mTransactionCount;
     medida::Histogram& mOperationCount;
@@ -62,30 +65,34 @@ class LedgerManagerImpl : public LedgerManager
     std::unique_ptr<VirtualClock::time_point> mStartCatchup;
     medida::Timer& mCatchupDuration;
 
-    std::unique_ptr<LedgerCloseMeta> mNextMetaToEmit;
+    std::unique_ptr<LedgerCloseMetaFrame> mNextMetaToEmit;
 
-    void
-    processFeesSeqNums(std::vector<TransactionFrameBasePtr>& txs,
-                       AbstractLedgerTxn& ltxOuter, int64_t baseFee,
-                       std::unique_ptr<LedgerCloseMeta> const& ledgerCloseMeta);
+    void processFeesSeqNums(
+        std::vector<TransactionFrameBasePtr> const& txs,
+        AbstractLedgerTxn& ltxOuter, TxSetFrame const& txSet,
+        std::unique_ptr<LedgerCloseMetaFrame> const& ledgerCloseMeta);
 
-    void
-    applyTransactions(std::vector<TransactionFrameBasePtr>& txs,
-                      AbstractLedgerTxn& ltx, TransactionResultSet& txResultSet,
-                      std::unique_ptr<LedgerCloseMeta> const& ledgerCloseMeta,
-                      int64 curBaseFee);
+    void applyTransactions(
+        TxSetFrame const& txSet,
+        std::vector<TransactionFrameBasePtr> const& txs, AbstractLedgerTxn& ltx,
+        TransactionResultSet& txResultSet,
+        std::unique_ptr<LedgerCloseMetaFrame> const& ledgerCloseMeta);
 
     void ledgerClosed(AbstractLedgerTxn& ltx);
 
     void storeCurrentLedger(LedgerHeader const& header, bool storeHeader);
-    void prefetchTransactionData(std::vector<TransactionFrameBasePtr>& txs);
-    void prefetchTxSourceIds(std::vector<TransactionFrameBasePtr>& txs);
+    void
+    prefetchTransactionData(std::vector<TransactionFrameBasePtr> const& txs);
+    void prefetchTxSourceIds(std::vector<TransactionFrameBasePtr> const& txs);
     void closeLedgerIf(LedgerCloseData const& ledgerData);
 
     State mState;
     void setState(State s);
 
     void emitNextMeta();
+
+    SorobanNetworkConfig&
+    getSorobanNetworkConfigInternal(AbstractLedgerTxn& ltx);
 
   protected:
     virtual void transferLedgerEntriesToBucketList(AbstractLedgerTxn& ltx,
@@ -94,6 +101,11 @@ class LedgerManagerImpl : public LedgerManager
 
     void advanceLedgerPointers(LedgerHeader const& header,
                                bool debugLog = true);
+    // Reloads the network configuration from the ledger.
+    // This needs to be called after the protocol upgrades or once
+    // during the catchups/test setup etc.
+    // This call is read-only and hence `ltx` can be read-only.
+    void maybeUpdateNetworkConfig(bool upgradeHappened, AbstractLedgerTxn& ltx);
     void logTxApplyMetrics(AbstractLedgerTxn& ltx, size_t numTxs,
                            size_t numOps);
 
@@ -108,11 +120,22 @@ class LedgerManagerImpl : public LedgerManager
 
     uint32_t getLastMaxTxSetSize() const override;
     uint32_t getLastMaxTxSetSizeOps() const override;
+    Resource maxLedgerResources(bool isSoroban,
+                                AbstractLedgerTxn& ltxOuter) override;
     int64_t getLastMinBalance(uint32_t ownerCount) const override;
     uint32_t getLastReserve() const override;
     uint32_t getLastTxFee() const override;
     uint32_t getTxPercentageFee() const override;
     uint32_t getLastClosedLedgerNum() const override;
+    SorobanNetworkConfig const&
+    getSorobanNetworkConfig(AbstractLedgerTxn& ltx) override;
+
+#ifdef BUILD_TESTS
+    void setSorobanNetworkConfig(SorobanNetworkConfig const& config) override;
+    SorobanNetworkConfig&
+    getMutableSorobanNetworkConfig(AbstractLedgerTxn& ltx) override;
+#endif
+
     uint64_t secondsSinceLastLedgerClose() const override;
     uint64_t getMaxTxFee() const override;
     void syncMetrics() override;

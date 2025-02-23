@@ -4,6 +4,7 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include "herder/SurgePricingUtils.h"
 #include "ledger/LedgerManager.h"
 #include "transactions/TransactionFrame.h"
 #include "util/UnorderedMap.h"
@@ -11,44 +12,93 @@
 
 namespace stellar
 {
-class QueueLimiterTxMap;
+
+class SingleTxStack : public TxStack
+{
+  public:
+    SingleTxStack(TransactionFrameBasePtr tx) : mTx(tx)
+    {
+    }
+
+    TransactionFrameBasePtr
+    getTopTx() const override
+    {
+        releaseAssert(mTx);
+        return mTx;
+    }
+
+    void
+    popTopTx() override
+    {
+        releaseAssert(mTx);
+        mTx = nullptr;
+    }
+
+    bool
+    empty() const override
+    {
+        return mTx == nullptr;
+    }
+
+    Resource
+    getResources() const override
+    {
+        releaseAssert(mTx);
+        return Resource(mTx->getResources());
+    }
+
+  private:
+    TransactionFrameBasePtr mTx;
+};
+
 class TxQueueLimiter
 {
-    // size of the transaction queue, in operations
-    size_t mQueueSizeOps{0};
     // number of ledgers we can pool in memory
     uint32 const mPoolLedgerMultiplier;
     LedgerManager& mLedgerManager;
-    // minimum fee needed for a transaction
-    // stored as a pair (fee bid, nb operations)
-    std::pair<int64, uint32> mMinFeeNeeded;
+
+    UnorderedMap<TransactionFrameBasePtr, TxStackPtr> mStackForTx;
 
     // all known transactions
-    std::unique_ptr<QueueLimiterTxMap> mTxs;
-    TransactionFrameBasePtr getWorstTransaction();
+    std::unique_ptr<SurgePricingPriorityQueue> mTxs;
+
+    // When non-nullopt, limit the number dex operations by this value
+    std::optional<Resource> mMaxDexOperations;
+
+    // Stores the maximum bid among the transactions evicted from every tx lane.
+    // Bids are stored as ratios (fee_bid / num_ops).
+    std::vector<std::pair<int64, uint32_t>> mLaneEvictedFeeBid;
+
+    // Configuration of SurgePricingPriorityQueue with the per-lane operation
+    // limits.
+    std::shared_ptr<SurgePricingLaneConfig> mSurgePricingLaneConfig;
+
+    // Quick lookup of relevant account IDs, needed temporary to maintain
+    // 1-tx-per-account invariance. When tx stacks are removed, we can remove
+    // this logic as well.
+    std::optional<std::unordered_set<AccountID>> mEnforceSingleAccounts;
+    Application& mApp;
+    bool const mIsSoroban;
 
   public:
-    TxQueueLimiter(uint32 multiplier, LedgerManager& lm);
+    TxQueueLimiter(uint32 multiplier, Application& app, bool isSoroban);
     ~TxQueueLimiter();
-
-    size_t
-    size() const
-    {
-        return mQueueSizeOps;
-    }
-    size_t maxQueueSizeOps() const;
 
     void addTransaction(TransactionFrameBasePtr const& tx);
     void removeTransaction(TransactionFrameBasePtr const& tx);
+#ifdef BUILD_TESTS
+    size_t size() const;
+#endif
+    Resource maxScaledLedgerResources(bool isSoroban,
+                                      AbstractLedgerTxn& ltxOuter) const;
 
-    // evict the worst transactions until there
-    // is enough capacity to insert ops operations
-    // by calling `evict` - note that evict must call `removeTransaction`
-    // as to make space
-    // returns false if it ran out of transactions before
-    // reaching its goal
-    bool evictTransactions(
-        size_t ops, std::function<void(TransactionFrameBasePtr const&)> evict);
+    // Evict `txsToEvict` from the limiter by calling `evict`.
+    // `txsToEvict` should be provided by the `canAddTx` call.
+    // Note that evict must call `removeTransaction` as to make space.
+    void evictTransactions(
+        std::vector<std::pair<TxStackPtr, bool>> const& txsToEvict,
+        TransactionFrameBase const& txToFit,
+        std::function<void(TransactionFrameBasePtr const&)> evict);
 
     // oldTx is set when performing a replace by fee
     // return
@@ -57,17 +107,23 @@ class TxQueueLimiter
     //    second=0 if caller needs to wait
     //    second=minimum fee needed for tx to pass the next round of
     //    validation
-    std::pair<bool, int64> canAddTx(TransactionFrameBasePtr const& tx,
-                                    TransactionFrameBasePtr const& oldTx) const;
+    // `txsToEvict` will contain transactions that need to be evicted in order
+    // to fit the new transactions. It should be passed to `evictTransactions`
+    // to perform the actual eviction.
+    std::pair<bool, int64>
+    canAddTx(TransactionFrameBasePtr const& tx,
+             TransactionFrameBasePtr const& oldTx,
+             std::vector<std::pair<TxStackPtr, bool>>& txsToEvict,
+             AbstractLedgerTxn& ltxOuter);
+    std::pair<bool, int64>
+    canAddTx(TransactionFrameBasePtr const& tx,
+             TransactionFrameBasePtr const& oldTx,
+             std::vector<std::pair<TxStackPtr, bool>>& txsToEvict);
 
-    void reset();
+    // Resets the state related to evictions (maximum evicted bid).
+    void resetEvictionState();
 
-    // txs must have strictly more base fee bid than this
-    std::pair<int64, uint32> getMinFeeNeeded() const;
-
-    void resetMinFeeNeeded();
+    // Resets the internal transaction container and the eviction state.
+    void reset(AbstractLedgerTxn& ltxOuter);
 };
-
-bool lessThanXored(TransactionFrameBasePtr const& l,
-                   TransactionFrameBasePtr const& r, size_t seed);
 }

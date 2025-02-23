@@ -1,21 +1,68 @@
-# Setup Development Environment
+# Development Environment Setup
 
-- Download & install vscode
-- Open code in remote container
-- Install vscode extensions inside remote container: (1) C++ Extension Pack (2) CodeLLDB
+The Kinesis changes of the fork are enabled using _KINESIS C++ macro and makefile flag in the fork of stellar-core.
 
-## Configure you environment
+## 1. With Dev Container
 
-If it is your first time checking out code you need to run `vscode-configure.sh` in remote container terminal.
+### a. Prerequisites
+- [Download & install vscode](https://code.visualstudio.com/download)
+- Open the kinesis-core project in vscode and click on "Reopen in Container" when asked. 
+![image](https://user-images.githubusercontent.com/29750/203445568-939211f6-126f-4150-8b7e-d2b3360effff.png)
 
-## Debugging
+`Troubleshooting note` : If the devcontainer is not booting up with package errors, try using a different mirror to download the packages : Run `wget -qO - mirrors.ubuntu.com/mirrors.txt` on terminal, pick one of the mirrors and update `APT_MIRROR` build argument in [devcontainer.json](.devcontainer/devcontainer.json) with your mirror and then rebuild container.
 
-1. Start from unit test identify section
-2. Update `.vscode/launch.json`
+- Install vscode extensions inside the remote container once it is opened, install the following extensions if not installed on their own:
+    * [C++ Extension Pack](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools-extension-pack)
+    * [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+
+### b. Configure your environment
+
+If it is your first time checking out this repository then, before doing anything, you need to run `vscode-configure.sh` in the remote container terminal within VSCode. You can enable or disable CXXFLAGS (for example _KINESIS feature flag) in `vscode-configure.sh` as required. 
+
+### c. Debugging
+
+1. Start stepping through the unit test identify section in project root->test folder
+2. Update the `.vscode/launch.json` file with accurate values if necessary. ie: compiler and debugger paths.
 3. Set breakpoints
 4. Hit `F5`
 
-## Build Docker Image
+## 2. Without dev container 
+Follow steps from [INSTALL.md](INSTALL.md) for steps specific to your OS
+
+
+## Run Tests
+
+### 1. Using Docker 
+Use the following command to run tests inside docker 
+
+```bash
+export TAG=kinesis-core:local
+docker build  --build-arg NPROC=$(nproc) -t $TAG . -f docker/Dockerfile.kinesis --target buildstage
+docker run --rm -it --entrypoint bash -v $PWD/_output/:/output $TAG
+# in the container
+./runTests.sh /output/testReport.xml
+```
+Note: The default location of test report is src folder of the container itself, unless the output path is provided as argument.
+
+### 2. Using Devcontainer
+Inside the dev container terminal,
+```bash 
+#build the source code 
+make -j $(nproc)
+
+# run tests
+./runTests.sh
+```
+Note: The default name of the report is `test-result.xml` and location of test report is src folder, unless a path with name is provided as argument.
+
+To generate the html from the report, just run following inside devcontainer
+```bash
+#XML_TESTS_REPORT = filename of the report (default filename = test-result)
+xunit-viewer -r <XML_TESTS_REPORT>.xml -o <XML_TESTS_REPORT>.html
+```
+The html report provides the passed and failed catch2 unit test cases.
+
+## Building a Docker Image
 
 Use the following command to build a local docker image with debug symbol and test suites:
 
@@ -24,22 +71,8 @@ export TAG=kinesis-core:local
 docker build --build-arg NPROC=$(nproc) -t $TAG . -f docker/Dockerfile.kinesis
 ```
 
-Build for release:
+Building for release:
 ```bash
 export TAG=kinesis-core:local
 docker build --build-arg NPROC=$(nproc) --build-arg BUILD=release -t $TAG . -f docker/Dockerfile.kinesis
 ```
-
-## Run Tests
-
-Use the following command to run test inside docker built in previous section.
-
-```bash
-export TAG=kinesis-core:local
-docker build  --build-arg NPROC=$(nproc) -t $TAG . -f docker/Dockerfile.kinesis --target buildstage
-docker run --rm -it --entrypoint bash -v $PWD/_output/:/output $TAG
-# in the container
-./runTests.sh testReport.xml
-```
-
-You can also execute `./runTests.sh` from VSCode devcontainer, BUT make sure you first build the source code using `make -j $(nproc)`.

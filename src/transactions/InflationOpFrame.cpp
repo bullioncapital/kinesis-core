@@ -32,7 +32,7 @@ InflationOpFrame::InflationOpFrame(Operation const& op, OperationResult& res,
 #ifdef _KINESIS
 
 bool
-InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
+InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx, Hash const& sorobanBasePrngSeed)
 {
     auto header = ltx.loadHeader();
     auto& lh = header.current();
@@ -61,7 +61,8 @@ InflationOpFrame::doApply(Application& app, AbstractLedgerTxn& ltx)
     int64 toDoleThisWinner = amountToDole;
     int64 leftAfterDole = amountToDole;
     auto winner = stellar::loadAccount(ltx, feeDestination);
-    if (winner) {
+    if (winner)
+    {
         leftAfterDole -= toDoleThisWinner;
         addBalance(header, winner, toDoleThisWinner);
         payouts.emplace_back(feeDestination, toDoleThisWinner);
@@ -163,8 +164,6 @@ InflationOpFrame::doApply(AbstractLedgerTxn& ltx)
 
     return true;
 }
-
-
 
 bool
 InflationOpFrame::doCheckValid(uint32_t ledgerVersion)

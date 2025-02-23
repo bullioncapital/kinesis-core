@@ -25,15 +25,71 @@
 #include "overlay/OverlayManager.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
+#include "util/XDRCereal.h"
+#include "util/xdrquery/XDRQuery.h"
 #include "work/WorkScheduler.h"
 
+#include <charconv>
 #include <filesystem>
 #include <lib/http/HttpClient.h>
 #include <locale>
+#include <map>
 #include <optional>
+#include <regex>
 
 namespace stellar
 {
+namespace
+{
+void
+writeLedgerAggregationTable(
+    std::ofstream& ofs,
+    std::optional<xdrquery::XDRFieldExtractor> const& groupByExtractor,
+    std::map<std::vector<xdrquery::ResultType>, xdrquery::XDRAccumulator> const&
+        accumulators)
+{
+    std::vector<std::string> keyFields;
+    if (groupByExtractor)
+    {
+        keyFields = groupByExtractor->getFieldNames();
+        for (auto const& keyField : keyFields)
+        {
+            ofs << keyField << ",";
+        }
+    }
+    if (!accumulators.empty())
+    {
+        auto const& [_, accumulator] = *accumulators.begin();
+        for (auto const& acc : accumulator.getAccumulators())
+        {
+            ofs << acc->getName() << ",";
+        }
+    }
+    ofs << std::endl;
+
+    for (auto const& [key, accumulator] : accumulators)
+    {
+        if (!key.empty())
+        {
+            for (size_t i = 0; i < key.size(); ++i)
+            {
+                if (key[i])
+                {
+                    ofs << xdrquery::resultToString(*key[i]);
+                }
+                ofs << ",";
+            }
+        }
+        for (auto const& acc : accumulator.getAccumulators())
+        {
+            ofs << std::visit([](auto&& v) { return fmt::to_string(v); },
+                              acc->getValue())
+                << ",";
+        }
+        ofs << std::endl;
+    }
+}
+} // namespace
 
 const std::string MINIMAL_DB_NAME = "minimal.db";
 
@@ -318,12 +374,65 @@ httpCommand(std::string const& command, unsigned short port)
     int code = http_request("127.0.0.1", path.str(), port, ret);
     if (code == 200)
     {
-        LOG_INFO(DEFAULT_LOG, "{}", ret);
+        std::cout << ret << std::endl;
     }
     else
     {
         LOG_INFO(DEFAULT_LOG, "http failed({}) port: {} command: {}", code,
                  port, command);
+    }
+}
+
+void
+setAuthenticatedLedgerHashPair(Application::pointer app,
+                               LedgerNumHashPair& authPair,
+                               uint32_t startLedger, std::string startHash)
+{
+    auto const& lm = app->getLedgerManager();
+    auto const& hm = app->getHistoryManager();
+
+    auto tryCheckpoint = [&](uint32_t seq, Hash h) {
+        if (hm.isLastLedgerInCheckpoint(seq))
+        {
+            LOG_INFO(DEFAULT_LOG,
+                     "Found authenticated checkpoint hash {} for ledger {}",
+                     hexAbbrev(h), seq);
+            authPair.first = seq;
+            authPair.second = std::make_optional<Hash>(h);
+            return true;
+        }
+        else if (authPair.first != seq)
+        {
+            authPair.first = seq;
+            LOG_INFO(DEFAULT_LOG,
+                     "Ledger {} is not a checkpoint boundary, waiting.", seq);
+        }
+        return false;
+    };
+
+    if (startLedger != 0 && !startHash.empty())
+    {
+        Hash h = hexToBin256(startHash);
+        if (tryCheckpoint(startLedger, h))
+        {
+            return;
+        }
+    }
+
+    if (lm.isSynced())
+    {
+        auto const& lhe = lm.getLastClosedLedgerHeader();
+        tryCheckpoint(lhe.header.ledgerSeq, lhe.hash);
+    }
+    else
+    {
+        auto lcd = app->getCatchupManager().maybeGetLargestBufferedLedger();
+        if (lcd)
+        {
+            uint32_t seq = lcd->getLedgerSeq() - 1;
+            Hash hash = lcd->getTxSet()->previousLedgerHash();
+            tryCheckpoint(seq, hash);
+        }
     }
 }
 
@@ -436,6 +545,104 @@ mergeBucketList(Config cfg, std::string const& outputDir)
     }
 }
 
+int
+dumpLedger(Config cfg, std::string const& outputFile,
+           std::optional<std::string> filterQuery,
+           std::optional<uint32_t> lastModifiedLedgerCount,
+           std::optional<uint64_t> limit, std::optional<std::string> groupBy,
+           std::optional<std::string> aggregate)
+{
+    if (groupBy && !aggregate)
+    {
+        LOG_FATAL(DEFAULT_LOG, "--group-by without --agg is not allowed.");
+    }
+
+    VirtualClock clock;
+    cfg.setNoListen();
+    Application::pointer app = Application::create(clock, cfg, false);
+    app->getLedgerManager().loadLastKnownLedger(nullptr);
+    auto& lm = app->getLedgerManager();
+    HistoryArchiveState has = lm.getLastClosedLedgerHAS();
+    std::optional<uint32_t> minLedger;
+    if (lastModifiedLedgerCount)
+    {
+        uint32_t lclNum = lm.getLastClosedLedgerNum();
+        if (lclNum >= *lastModifiedLedgerCount)
+        {
+            minLedger = lclNum - *lastModifiedLedgerCount;
+        }
+        else
+        {
+            minLedger = 0;
+        }
+    }
+    std::optional<xdrquery::XDRMatcher> matcher;
+    if (filterQuery)
+    {
+        matcher.emplace(*filterQuery);
+    }
+
+    std::optional<xdrquery::XDRFieldExtractor> groupByExtractor;
+    if (groupBy)
+    {
+        groupByExtractor.emplace(*groupBy);
+    }
+
+    std::map<std::vector<xdrquery::ResultType>, xdrquery::XDRAccumulator>
+        accumulators;
+
+    std::ofstream ofs(outputFile);
+
+    auto& bm = app->getBucketManager();
+    uint64_t entryCount = 0;
+    try
+    {
+        bm.visitLedgerEntries(
+            has, minLedger,
+            [&](LedgerEntry const& entry) {
+                return !matcher || matcher->matchXDR(entry);
+            },
+            [&](LedgerEntry const& entry) {
+                if (aggregate)
+                {
+                    std::vector<xdrquery::ResultType> key;
+                    if (groupByExtractor)
+                    {
+                        key = groupByExtractor->extractFields(entry);
+                    }
+                    auto it = accumulators.find(key);
+                    if (it == accumulators.end())
+                    {
+                        it = accumulators
+                                 .emplace(key,
+                                          xdrquery::XDRAccumulator(*aggregate))
+                                 .first;
+                    }
+                    it->second.addEntry(entry);
+                }
+                else
+                {
+                    ofs << xdr_to_string(entry, "entry", true) << std::endl;
+                }
+                ++entryCount;
+                return !limit || entryCount < *limit;
+            });
+    }
+    catch (xdrquery::XDRQueryError& e)
+    {
+        LOG_ERROR(DEFAULT_LOG, "Filter query error: {}", e.what());
+    }
+
+    if (aggregate)
+    {
+        writeLedgerAggregationTable(ofs, groupByExtractor, accumulators);
+    }
+
+    LOG_INFO(DEFAULT_LOG, "Finished running query, processed {} entries.",
+             entryCount);
+    return 0;
+}
+
 void
 setForceSCPFlag()
 {
@@ -461,13 +668,57 @@ initializeDatabase(Config cfg)
 }
 
 void
-showOfflineInfo(Config cfg)
+showOfflineInfo(Config cfg, bool verbose)
 {
     // needs real time to display proper stats
     VirtualClock clock(VirtualClock::REAL_TIME);
     cfg.setNoListen();
     Application::pointer app = Application::create(clock, cfg, false);
-    app->reportInfo();
+    app->reportInfo(verbose);
+}
+
+void
+closeLedgersOffline(Config cfg, bool verbose, size_t nLedgers)
+{
+    VirtualClock clock(VirtualClock::REAL_TIME);
+    cfg.setNoListen();
+    cfg.AUTOMATIC_MAINTENANCE_PERIOD = std::chrono::seconds(0);
+    cfg.AUTOMATIC_SELF_CHECK_PERIOD = std::chrono::seconds(0);
+    Application::pointer app = Application::create(clock, cfg, false);
+    app->start();
+    size_t lclSeq = app->getLedgerManager().getLastClosedLedgerNum();
+    size_t targetSeq = lclSeq + nLedgers;
+    while (!app->isStopping() && lclSeq < targetSeq)
+    {
+        auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+        uint32_t nextSeq = lcl.header.ledgerSeq + 1;
+        auto txset = TxSetFrame::makeEmpty(lcl);
+        auto sv = app->getHerder().makeStellarValue(
+            txset->getContentsHash(),
+            VirtualClock::to_time_t(clock.system_now()), {}, cfg.NODE_SEED);
+        LedgerCloseData lcd{nextSeq, txset, sv};
+        LOG_INFO(DEFAULT_LOG, "Closing empty ledger {} offline", nextSeq);
+        ;
+        app->getLedgerManager().closeLedger(lcd);
+        do
+        {
+            lclSeq = app->getLedgerManager().getLastClosedLedgerNum();
+            clock.crank(false);
+        } while (
+            !app->isStopping() &&
+            (lclSeq < nextSeq || !app->getWorkScheduler().allChildrenDone()));
+    }
+    if (nLedgers > 0)
+    {
+        LOG_WARNING(DEFAULT_LOG,
+                    "Closed {} empty ledgers offline and published {} history "
+                    "checkpoints",
+                    nLedgers,
+                    app->getHistoryManager().getPublishSuccessCount());
+        LOG_WARNING(DEFAULT_LOG,
+                    "Database and history archive are no longer in "
+                    "consensus with any other validators");
+    }
 }
 
 #ifdef BUILD_TESTS
@@ -479,7 +730,7 @@ loadXdr(Config cfg, std::string const& bucketFile)
     Application::pointer app = Application::create(clock, cfg, false);
 
     uint256 zero;
-    Bucket bucket(bucketFile, zero);
+    Bucket bucket(bucketFile, zero, nullptr);
     bucket.apply(*app);
 }
 
@@ -518,8 +769,8 @@ reportLastHistoryCheckpoint(Config cfg, std::string const& outputFile)
         if (filename == "-")
         {
             LOG_INFO(DEFAULT_LOG, "*");
-            LOG_INFO(DEFAULT_LOG, "* Last history checkpoint {}",
-                     state.toString());
+            LOG_INFO(DEFAULT_LOG, "* Last history checkpoint");
+            std::cout << state.toString() << std::endl;
             LOG_INFO(DEFAULT_LOG, "*");
         }
         else
@@ -577,7 +828,8 @@ writeCatchupInfo(Json::Value const& catchupInfo, std::string const& outputFile)
     if (filename == "-")
     {
         LOG_INFO(DEFAULT_LOG, "*");
-        LOG_INFO(DEFAULT_LOG, "* Catchup info: {}", content);
+        LOG_INFO(DEFAULT_LOG, "* Catchup info:");
+        std::cout << content << std::endl;
         LOG_INFO(DEFAULT_LOG, "*");
     }
     else
@@ -662,7 +914,7 @@ catchup(Application::pointer app, CatchupConfiguration cc,
     }
     LOG_INFO(DEFAULT_LOG, "*");
 
-    catchupInfo = app->getJsonInfo();
+    catchupInfo = app->getJsonInfo(true);
     return synced ? 0 : 3;
 }
 
@@ -702,4 +954,22 @@ minimalDBForInMemoryMode(Config const& cfg)
     return fmt::format(FMT_STRING("sqlite3://{}"),
                        minimalDbPath(cfg).generic_string());
 }
+
+// Returns the major release version extracted from the git tag _if_ this is a
+// release-tagged version of stellar core (one that looks like vNN.X.Y or
+// vNN.X.YrcZ or vNN.X.YHOTZ). If its version has some other name structure
+// structure, return std::nullopt.
+std::optional<uint32_t>
+getStellarCoreMajorReleaseVersion(std::string const& vstr)
+{
+    std::regex re("^v([0-9]+)\\.[0-9]+\\.[0-9]+(rc[0-9]+|HOT[0-9]+)?$");
+    std::smatch match;
+    if (std::regex_match(vstr, match, re))
+    {
+        uint32_t vers = stoi(match.str(1));
+        return std::make_optional<uint32_t>(vers);
+    }
+    return std::nullopt;
+}
+
 }

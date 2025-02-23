@@ -8,10 +8,12 @@
 #include "ledger/LedgerTxn.h"
 #include "util/RandomEvictionCache.h"
 #include <list>
+#include <optional>
 #ifdef USE_POSTGRES
 #include <iomanip>
 #include <libpq-fe.h>
 #include <limits>
+#include <optional>
 #include <sstream>
 #endif
 
@@ -20,8 +22,9 @@ namespace stellar
 
 // Precondition: The keys associated with entries are unique and constitute a
 // subset of keys
+template <typename KeySetT>
 UnorderedMap<LedgerKey, std::shared_ptr<LedgerEntry const>>
-populateLoadedEntries(UnorderedSet<LedgerKey> const& keys,
+populateLoadedEntries(KeySetT const& keys,
                       std::vector<LedgerEntry> const& entries);
 
 class EntryIterator::AbstractImpl
@@ -69,6 +72,13 @@ class BulkLedgerEntryChangeAccumulator
     std::vector<EntryIterator> mTrustLinesToDelete;
     std::vector<EntryIterator> mLiquidityPoolToUpsert;
     std::vector<EntryIterator> mLiquidityPoolToDelete;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    std::vector<EntryIterator> mContractDataToUpsert;
+    std::vector<EntryIterator> mContractDataToDelete;
+    std::vector<EntryIterator> mContractCodeToUpsert;
+    std::vector<EntryIterator> mContractCodeToDelete;
+    std::vector<EntryIterator> mConfigSettingsToUpsert;
+#endif
 
   public:
     std::vector<EntryIterator>&
@@ -143,7 +153,39 @@ class BulkLedgerEntryChangeAccumulator
         return mLiquidityPoolToDelete;
     }
 
-    void accumulate(EntryIterator const& iter);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    std::vector<EntryIterator>&
+    getConfigSettingsToUpsert()
+    {
+        return mConfigSettingsToUpsert;
+    }
+
+    std::vector<EntryIterator>&
+    getContractDataToUpsert()
+    {
+        return mContractDataToUpsert;
+    }
+
+    std::vector<EntryIterator>&
+    getContractDataToDelete()
+    {
+        return mContractDataToDelete;
+    }
+
+    std::vector<EntryIterator>&
+    getContractCodeToUpsert()
+    {
+        return mContractCodeToUpsert;
+    }
+
+    std::vector<EntryIterator>&
+    getContractCodeToDelete()
+    {
+        return mContractCodeToDelete;
+    }
+#endif
+
+    bool accumulate(EntryIterator const& iter, bool bucketListDBEnabled);
 };
 
 // Many functions in LedgerTxn::Impl provide a basic exception safety
@@ -345,6 +387,7 @@ class LedgerTxn::Impl
     void throwIfChild() const;
     void throwIfSealed() const;
     void throwIfNotExactConsistency() const;
+    void throwIfErasingConfig(InternalLedgerKey const& key) const;
 
     // getDeltaVotes has the basic exception safety guarantee. If it throws an
     // exception, then
@@ -397,6 +440,11 @@ class LedgerTxn::Impl
     std::pair<std::shared_ptr<InternalLedgerEntry const>, EntryMap::iterator>
     getNewestVersionEntryMap(InternalLedgerKey const& key);
 
+    // Common logic for create and restore code paths. Input correctness
+    // checking should be done before calling this function
+    LedgerTxnEntry createRestoreCommon(LedgerTxn& self,
+                                       InternalLedgerEntry const& entry);
+
   public:
     // Constructor has the strong exception safety guarantee
     Impl(LedgerTxn& self, AbstractLedgerTxnParent& parent,
@@ -415,6 +463,15 @@ class LedgerTxn::Impl
     //   modified
     // - the entry cache may be, but is not guaranteed to be, cleared.
     LedgerTxnEntry create(LedgerTxn& self, InternalLedgerEntry const& entry);
+
+    // restore has the basic exception safety guarantee. If it throws an
+    // exception, then
+    // - the prepared statement cache may be, but is not guaranteed to be,
+    //   modified
+    // - the entry cache may be, but is not guaranteed to be, cleared.
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    LedgerTxnEntry restore(LedgerTxn& self, InternalLedgerEntry const& entry);
+#endif
 
     // deactivate has the strong exception safety guarantee
     void deactivate(InternalLedgerKey const& key);
@@ -509,7 +566,7 @@ class LedgerTxn::Impl
     //   modified
     // - the entry cache may be, but is not guaranteed to be, cleared.
     std::shared_ptr<InternalLedgerEntry const>
-    getNewestVersion(InternalLedgerKey const& key) const;
+    getNewestVersion(InternalLedgerKey const& key, bool loadExpiredEntry) const;
 
     // load has the basic exception safety guarantee. If it throws an exception,
     // then
@@ -575,7 +632,8 @@ class LedgerTxn::Impl
     //   modified
     // - the entry cache may be, but is not guaranteed to be, cleared.
     ConstLedgerTxnEntry loadWithoutRecord(LedgerTxn& self,
-                                          InternalLedgerKey const& key);
+                                          InternalLedgerKey const& key,
+                                          bool loadExpiredEntry);
 
     void rollback() noexcept;
     void rollbackChild() noexcept;
@@ -662,7 +720,20 @@ class LedgerTxnRoot::Impl
         LoadType type;
     };
 
-    typedef RandomEvictionCache<LedgerKey, CacheEntry> EntryCache;
+    // RandomEvictionCache, but override get to account for expiration behavior
+    class EntryCache : public RandomEvictionCache<LedgerKey, CacheEntry>
+    {
+      public:
+        // Load entry from cache. If expirationCutoff is not empty, only returns
+        // an entry if its expirationLedger > expirationCutoff
+        CacheEntry get(LedgerKey const& k,
+                       std::optional<uint32_t> expirationCutoff);
+
+        using RandomEvictionCache<LedgerKey, CacheEntry>::RandomEvictionCache;
+
+      private:
+        using RandomEvictionCache<LedgerKey, CacheEntry>::get;
+    };
 
     typedef AssetPair BestOffersKey;
 
@@ -679,7 +750,7 @@ class LedgerTxnRoot::Impl
     static size_t const MIN_BEST_OFFERS_BATCH_SIZE;
     size_t const mMaxBestOffersBatchSize;
 
-    Database& mDatabase;
+    Application& mApp;
     std::unique_ptr<LedgerHeader> mHeader;
     mutable EntryCache mEntryCache;
     mutable BestOffers mBestOffers;
@@ -724,6 +795,14 @@ class LedgerTxnRoot::Impl
     loadClaimableBalance(LedgerKey const& key) const;
     std::shared_ptr<LedgerEntry const>
     loadLiquidityPool(LedgerKey const& key) const;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    std::shared_ptr<LedgerEntry const>
+    loadContractData(LedgerKey const& key) const;
+    std::shared_ptr<LedgerEntry const>
+    loadContractCode(LedgerKey const& key) const;
+    std::shared_ptr<LedgerEntry const>
+    loadConfigSetting(LedgerKey const& key) const;
+#endif
 
     void bulkApply(BulkLedgerEntryChangeAccumulator& bleca,
                    size_t bufferThreshold, LedgerTxnConsistency cons);
@@ -745,6 +824,15 @@ class LedgerTxnRoot::Impl
     void bulkUpsertLiquidityPool(std::vector<EntryIterator> const& entries);
     void bulkDeleteLiquidityPool(std::vector<EntryIterator> const& entries,
                                  LedgerTxnConsistency cons);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    void bulkUpsertContractData(std::vector<EntryIterator> const& entries);
+    void bulkDeleteContractData(std::vector<EntryIterator> const& entries,
+                                LedgerTxnConsistency cons);
+    void bulkUpsertContractCode(std::vector<EntryIterator> const& entries);
+    void bulkDeleteContractCode(std::vector<EntryIterator> const& entries,
+                                LedgerTxnConsistency cons);
+    void bulkUpsertConfigSettings(std::vector<EntryIterator> const& entries);
+#endif
 
     static std::string tableFromLedgerEntryType(LedgerEntryType let);
 
@@ -762,7 +850,7 @@ class LedgerTxnRoot::Impl
     //    database for the keyset that it has entries for. It's a precise
     //    image of a subset of the database.
     std::shared_ptr<InternalLedgerEntry const>
-    getFromEntryCache(LedgerKey const& key) const;
+    getFromEntryCache(LedgerKey const& key, bool loadExpiredEntry) const;
     void putInEntryCache(LedgerKey const& key,
                          std::shared_ptr<LedgerEntry const> const& entry,
                          LoadType type) const;
@@ -782,6 +870,14 @@ class LedgerTxnRoot::Impl
     bulkLoadClaimableBalance(UnorderedSet<LedgerKey> const& keys) const;
     UnorderedMap<LedgerKey, std::shared_ptr<LedgerEntry const>>
     bulkLoadLiquidityPool(UnorderedSet<LedgerKey> const& keys) const;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    UnorderedMap<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    bulkLoadContractData(UnorderedSet<LedgerKey> const& keys) const;
+    UnorderedMap<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    bulkLoadContractCode(UnorderedSet<LedgerKey> const& keys) const;
+    UnorderedMap<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    bulkLoadConfigSettings(UnorderedSet<LedgerKey> const& keys) const;
+#endif
 
     std::deque<LedgerEntry>::const_iterator
     loadNextBestOffersIntoCache(BestOffersEntryPtr cached, Asset const& buying,
@@ -794,7 +890,7 @@ class LedgerTxnRoot::Impl
 
   public:
     // Constructor has the strong exception safety guarantee
-    Impl(Database& db, size_t entryCacheSize, size_t prefetchBatchSize
+    Impl(Application& app, size_t entryCacheSize, size_t prefetchBatchSize
 #ifdef BEST_OFFER_DEBUGGING
          ,
          bool bestOfferDebuggingEnabled
@@ -818,12 +914,17 @@ class LedgerTxnRoot::Impl
 
     // dropAccounts, dropData, dropOffers, and dropTrustLines have no exception
     // safety guarantees.
-    void dropAccounts();
-    void dropData();
-    void dropOffers();
-    void dropTrustLines();
-    void dropClaimableBalances();
-    void dropLiquidityPools();
+    void dropAccounts(bool rebuild);
+    void dropData(bool rebuild);
+    void dropOffers(bool rebuild);
+    void dropTrustLines(bool rebuild);
+    void dropClaimableBalances(bool rebuild);
+    void dropLiquidityPools(bool rebuild);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    void dropContractData(bool rebuild);
+    void dropContractCode(bool rebuild);
+    void dropConfigSettings(bool rebuild);
+#endif
 
 #ifdef BUILD_TESTS
     void resetForFuzzer();
@@ -878,7 +979,7 @@ class LedgerTxnRoot::Impl
     //   modified
     // - the entry cache may be, but is not guaranteed to be, cleared.
     std::shared_ptr<InternalLedgerEntry const>
-    getNewestVersion(InternalLedgerKey const& key) const;
+    getNewestVersion(InternalLedgerKey const& key, bool loadExpiredEntry) const;
 
     void rollbackChild() noexcept;
 

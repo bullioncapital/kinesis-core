@@ -62,7 +62,8 @@ class InMemoryLedgerTxnRoot : public AbstractLedgerTxnParent
     getInflationWinners(size_t maxWinners, int64_t minBalance) override;
 
     std::shared_ptr<InternalLedgerEntry const>
-    getNewestVersion(InternalLedgerKey const& key) const override;
+    getNewestVersion(InternalLedgerKey const& key,
+                     bool loadExpiredEntry) const override;
 
     uint64_t countObjects(LedgerEntryType let) const override;
     uint64_t countObjects(LedgerEntryType let,
@@ -70,12 +71,17 @@ class InMemoryLedgerTxnRoot : public AbstractLedgerTxnParent
 
     void deleteObjectsModifiedOnOrAfterLedger(uint32_t ledger) const override;
 
-    void dropAccounts() override;
-    void dropData() override;
-    void dropOffers() override;
-    void dropTrustLines() override;
-    void dropClaimableBalances() override;
-    void dropLiquidityPools() override;
+    void dropAccounts(bool rebuild) override;
+    void dropData(bool rebuild) override;
+    void dropOffers(bool rebuild) override;
+    void dropTrustLines(bool rebuild) override;
+    void dropClaimableBalances(bool rebuild) override;
+    void dropLiquidityPools(bool rebuild) override;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    void dropContractData(bool rebuild) override;
+    void dropContractCode(bool rebuild) override;
+    void dropConfigSettings(bool rebuild) override;
+#endif
     double getPrefetchHitRate() const override;
     uint32_t prefetch(UnorderedSet<LedgerKey> const& keys) override;
     void prepareNewObjects(size_t s) override;

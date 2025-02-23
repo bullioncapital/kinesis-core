@@ -15,6 +15,7 @@
 #include "util/ProtocolVersion.h"
 #include "util/XDROperators.h"
 #include "util/types.h"
+#include "xdr/Stellar-ledger-entries.h"
 #include <Tracy.hpp>
 
 namespace stellar
@@ -83,6 +84,20 @@ prepareAccountEntryExtensionV2(AccountEntry& ae)
     return extV1.ext.v2();
 }
 
+AccountEntryExtensionV3&
+prepareAccountEntryExtensionV3(AccountEntry& ae)
+{
+    auto& extV2 = prepareAccountEntryExtensionV2(ae);
+    if (extV2.ext.v() == 0)
+    {
+        extV2.ext.v(3);
+        auto& extV3 = extV2.ext.v3();
+        extV3.seqLedger = 0;
+        extV3.seqTime = 0;
+    }
+    return extV2.ext.v3();
+}
+
 TrustLineEntry::_ext_t::_v1_t&
 prepareTrustLineEntryExtensionV1(TrustLineEntry& tl)
 {
@@ -137,6 +152,17 @@ getAccountEntryExtensionV2(AccountEntry& ae)
         throw std::runtime_error("expected AccountEntry extension V2");
     }
     return ae.ext.v1().ext.v2();
+}
+
+AccountEntryExtensionV3 const&
+getAccountEntryExtensionV3(AccountEntry const& ae)
+{
+    if (ae.ext.v() != 1 || ae.ext.v1().ext.v() != 2 ||
+        ae.ext.v1().ext.v2().ext.v() != 3)
+    {
+        throw std::runtime_error("expected AccountEntry extension V3");
+    }
+    return ae.ext.v1().ext.v2().ext.v3();
 }
 
 TrustLineEntryExtensionV2&
@@ -246,6 +272,38 @@ poolShareTrustLineKey(AccountID const& accountID, PoolID const& poolID)
     return key;
 }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+LedgerKey
+configSettingKey(ConfigSettingID const& configSettingID)
+{
+    LedgerKey key(CONFIG_SETTING);
+    key.configSetting().configSettingID = configSettingID;
+    return key;
+}
+
+LedgerKey
+contractDataKey(SCAddress const& contract, SCVal const& dataKey,
+                ContractDataDurability durability,
+                ContractEntryBodyType bodyType)
+{
+    LedgerKey key(CONTRACT_DATA);
+    key.contractData().contract = contract;
+    key.contractData().key = dataKey;
+    key.contractData().durability = durability;
+    key.contractData().bodyType = bodyType;
+    return key;
+}
+
+LedgerKey
+contractCodeKey(Hash const& hash, ContractEntryBodyType bodyType)
+{
+    LedgerKey key(CONTRACT_CODE);
+    key.contractCode().hash = hash;
+    key.contractCode().bodyType = bodyType;
+    return key;
+}
+#endif
+
 InternalLedgerKey
 sponsorshipKey(AccountID const& sponsoredID)
 {
@@ -256,6 +314,12 @@ InternalLedgerKey
 sponsorshipCounterKey(AccountID const& sponsoringID)
 {
     return InternalLedgerKey::makeSponsorshipCounterKey(sponsoringID);
+}
+
+InternalLedgerKey
+maxSeqNumToApplyKey(AccountID const& sourceAccount)
+{
+    return InternalLedgerKey::makeMaxSeqNumToApplyKey(sourceAccount);
 }
 
 LedgerTxnEntry
@@ -269,7 +333,8 @@ ConstLedgerTxnEntry
 loadAccountWithoutRecord(AbstractLedgerTxn& ltx, AccountID const& accountID)
 {
     ZoneScoped;
-    return ltx.loadWithoutRecord(accountKey(accountID));
+    return ltx.loadWithoutRecord(accountKey(accountID),
+                                 /*loadExpiredEntry=*/false);
 }
 
 LedgerTxnEntry
@@ -348,6 +413,12 @@ loadSponsorshipCounter(AbstractLedgerTxn& ltx, AccountID const& sponsoringID)
 }
 
 LedgerTxnEntry
+loadMaxSeqNumToApply(AbstractLedgerTxn& ltx, AccountID const& sourceAccount)
+{
+    return ltx.load(maxSeqNumToApplyKey(sourceAccount));
+}
+
+LedgerTxnEntry
 loadPoolShareTrustLine(AbstractLedgerTxn& ltx, AccountID const& accountID,
                        PoolID const& poolID)
 {
@@ -361,6 +432,27 @@ loadLiquidityPool(AbstractLedgerTxn& ltx, PoolID const& poolID)
     ZoneScoped;
     return ltx.load(liquidityPoolKey(poolID));
 }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+ConstLedgerTxnEntry
+loadContractData(AbstractLedgerTxn& ltx, SCAddress const& contract,
+                 SCVal const& dataKey, ContractDataDurability type,
+                 bool loadExpiredEntry)
+{
+    ZoneScoped;
+    return ltx.loadWithoutRecord(
+        contractDataKey(contract, dataKey, type, DATA_ENTRY), loadExpiredEntry);
+}
+
+ConstLedgerTxnEntry
+loadContractCode(AbstractLedgerTxn& ltx, Hash const& hash,
+                 bool loadExpiredEntry)
+{
+    ZoneScoped;
+    return ltx.loadWithoutRecord(contractCodeKey(hash, DATA_ENTRY),
+                                 loadExpiredEntry);
+}
+#endif
 
 static void
 acquireOrReleaseLiabilities(AbstractLedgerTxn& ltx,
@@ -1187,6 +1279,13 @@ hasAccountEntryExtV2(AccountEntry const& ae)
 }
 
 bool
+hasAccountEntryExtV3(AccountEntry const& ae)
+{
+    return ae.ext.v() == 1 && ae.ext.v1().ext.v() == 2 &&
+           ae.ext.v1().ext.v2().ext.v() == 3;
+}
+
+bool
 hasTrustLineEntryExtV2(TrustLineEntry const& tl)
 {
     return tl.ext.v() == 1 && tl.ext.v1().ext.v() == 2;
@@ -1309,8 +1408,10 @@ prefetchForRevokeFromPoolShareTrustLines(
     {
         // prefetching shouldn't affect the protocol, so use loadWithoutRecord
         // to not touch lastModified
-        auto pool = ltx.loadWithoutRecord(liquidityPoolKey(
-            trustLine.current().data.trustLine().asset.liquidityPoolID()));
+        auto pool = ltx.loadWithoutRecord(
+            liquidityPoolKey(
+                trustLine.current().data.trustLine().asset.liquidityPoolID()),
+            /*loadExpiredEntry=*/false);
 
         auto const& params =
             pool.current().data.liquidityPool().body.constantProduct().params;
@@ -1713,6 +1814,85 @@ getPoolWithdrawalAmount(int64_t amountPoolShares, int64_t totalPoolShares,
                             ROUND_DOWN);
 }
 
+void
+maybeUpdateAccountOnLedgerSeqUpdate(LedgerTxnHeader const& header,
+                                    LedgerTxnEntry& account)
+{
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_19))
+    {
+        auto& v3 =
+            prepareAccountEntryExtensionV3(account.current().data.account());
+        v3.seqLedger = header.current().ledgerSeq;
+        v3.seqTime = header.current().scpValue.closeTime;
+    }
+}
+#ifdef _KINESIS
+
+// kinesis implementation
+int64_t
+getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
+          std::optional<int64_t> baseFee)
+{
+    int64_t effectiveBaseFee = header.baseFee;
+
+    if (baseFee)
+    {
+        effectiveBaseFee = std::max(effectiveBaseFee, *baseFee);
+    }
+    effectiveBaseFee =
+        effectiveBaseFee * std::max<int64_t>(1, tx.getNumOperations());
+    // apply base percentage fee
+    // affect: create_account and payment ops
+    int64_t accumulatedBasePercentageFee = 0;
+    double basePercentageFeeRate =
+        (double)header.basePercentageFee / (double)BASIS_POINTS_TO_PERCENT;
+
+    int64_t totalAmount = 0;
+
+    for (auto const& op : tx.getRawOperations())
+    {
+        switch (op.body.type())
+        {
+        case CREATE_ACCOUNT:
+        {
+            totalAmount += op.body.createAccountOp().startingBalance;
+        }
+        break;
+        case PAYMENT:
+        {
+            int8_t assetType = op.body.paymentOp().asset.type(); // 0 is native
+            if (assetType == 0)
+            {
+                totalAmount += op.body.paymentOp().amount;
+            }
+        }
+        break;
+        default:
+            continue;
+        }
+    }
+
+    accumulatedBasePercentageFee +=
+        (int64_t)(totalAmount * basePercentageFeeRate);
+    int64_t totalFee = effectiveBaseFee + accumulatedBasePercentageFee;
+    int64_t headerMaxFee = (int64_t)header.maxFee;
+    totalFee = totalFee > headerMaxFee ? headerMaxFee : totalFee;
+    return totalFee;
+}
+#else
+int64_t
+getMinFee(TransactionFrameBase const& tx, LedgerHeader const& header,
+          std::optional<int64_t> baseFee)
+{
+    int64_t effectiveBaseFee = header.baseFee;
+    if (baseFee)
+    {
+        effectiveBaseFee = std::max(effectiveBaseFee, *baseFee);
+    }
+    return effectiveBaseFee * std::max<int64_t>(1, tx.getNumOperations());
+}
+#endif
 namespace detail
 {
 struct MuxChecker

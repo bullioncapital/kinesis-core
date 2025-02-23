@@ -9,6 +9,7 @@
 #include "ledger/LedgerTxnHeader.h"
 #include "util/UnorderedMap.h"
 #include "util/UnorderedSet.h"
+#include "util/types.h"
 #include "xdr/Stellar-ledger.h"
 #include <functional>
 #include <ledger/LedgerHashUtils.h>
@@ -118,9 +119,9 @@
 //    access this entry in this LedgerTxn." See below for the
 //    concurrency-control issues this is designed to trap.
 //
-//  - Entries are made-active by calling load() or create(), each of which
-//    returns a LedgerTxnEntry which is a handle that can be used to get at
-//    the underlying LedgerEntry. References to the underlying
+//  - Entries are made-active by calling load(), create(), or restore(), each
+//    of which returns a LedgerTxnEntry which is a handle that can be used to
+//    get at the underlying LedgerEntry. References to the underlying
 //    LedgerEntries should generally not be retained anywhere, because the
 //    LedgerTxnEntry handles may be "deactivated", and access to a
 //    deactivated entry is a _logic error_ in the client that this
@@ -267,6 +268,7 @@ enum class TransactionMode
     READ_WRITE_WITH_SQL_TXN
 };
 
+class Application;
 class Database;
 struct InflationVotes;
 struct LedgerEntry;
@@ -432,7 +434,8 @@ class AbstractLedgerTxnParent
     // invoking getNewestVersion on its parent. Returns nullptr if the key does
     // not exist or if the corresponding LedgerEntry has been erased.
     virtual std::shared_ptr<InternalLedgerEntry const>
-    getNewestVersion(InternalLedgerKey const& key) const = 0;
+    getNewestVersion(InternalLedgerKey const& key,
+                     bool loadExpiredEntry) const = 0;
 
     // Return the count of the number of ledger objects of type `let`. Will
     // throw when called on anything other than a (real or stub) root LedgerTxn.
@@ -451,28 +454,40 @@ class AbstractLedgerTxnParent
 
     // Delete all account ledger entries in the database. Will throw when called
     // on anything other than a (real or stub) root LedgerTxn.
-    virtual void dropAccounts() = 0;
+    virtual void dropAccounts(bool rebuild) = 0;
 
     // Delete all account-data ledger entries. Will throw when called on
     // anything other than a (real or stub) root LedgerTxn.
-    virtual void dropData() = 0;
+    virtual void dropData(bool rebuild) = 0;
 
     // Delete all offer ledger entries. Will throw when called on anything other
     // than a (real or stub) root LedgerTxn.
-    virtual void dropOffers() = 0;
+    virtual void dropOffers(bool rebuild) = 0;
 
     // Delete all trustline ledger entries. Will throw when called on anything
     // other than a (real or stub) root LedgerTxn.
-    virtual void dropTrustLines() = 0;
+    virtual void dropTrustLines(bool rebuild) = 0;
 
     // Delete all claimable balance ledger entries. Will throw when called on
     // anything other than a (real or stub) root LedgerTxn.
-    virtual void dropClaimableBalances() = 0;
+    virtual void dropClaimableBalances(bool rebuild) = 0;
 
     // Delete all liquidity pool ledger entries. Will throw when called on
     // anything other than a (real or stub) root LedgerTxn.
-    virtual void dropLiquidityPools() = 0;
+    virtual void dropLiquidityPools(bool rebuild) = 0;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    // Delete all contract data ledger entries. Will throw when called on
+    // anything other than a (real or stub) root LedgerTxn.
+    virtual void dropContractData(bool rebuild) = 0;
 
+    // Delete all contract code ledger entries. Will throw when called on
+    // anything other than a (real or stub) root LedgerTxn.
+    virtual void dropContractCode(bool rebuild) = 0;
+
+    // Delete all config setting ledger entries. Will throw when called on
+    // anything other than a (real or stub) root LedgerTxn.
+    virtual void dropConfigSettings(bool rebuild) = 0;
+#endif
     // Return the current cache hit rate for prefetched ledger entries, as a
     // fraction from 0.0 to 1.0. Will throw when called on anything other than a
     // (real or stub) root LedgerTxn.
@@ -526,10 +541,10 @@ class AbstractLedgerTxn : public AbstractLedgerTxnParent
     virtual void commit() noexcept = 0;
     virtual void rollback() noexcept = 0;
 
-    // loadHeader, create, erase, load, and loadWithoutRecord provide the main
-    // interface to interact with data stored in the AbstractLedgerTxn. These
-    // functions only allow one instance of a particular data to be active at a
-    // time.
+    // loadHeader, create, restore, erase, load, and loadWithoutRecord provide
+    // the main interface to interact with data stored in the AbstractLedgerTxn.
+    // These functions only allow one instance of a particular data to be active
+    // at a time.
     // - loadHeader
     //     Loads the current LedgerHeader. Throws if there is already an active
     //     LedgerTxnHeader.
@@ -537,6 +552,11 @@ class AbstractLedgerTxn : public AbstractLedgerTxnParent
     //     Creates a new LedgerTxnEntry from entry. Throws if the key
     //     associated with this entry is already associated with an entry in
     //     this AbstractLedgerTxn or any parent.
+    // - restore
+    //     Creates a new LedgerTxnEntry from expired entry. Throws if the key
+    //     associated with this entry is already associated with an entry in
+    //     this AbstractLedgerTxn or any parent or if the expired entry being
+    //     restored does not exist
     // - erase
     //     Erases the existing entry associated with key. Throws if the key is
     //     not already associated with an entry in this AbstractLedgerTxn or
@@ -557,10 +577,15 @@ class AbstractLedgerTxn : public AbstractLedgerTxnParent
     // the AbstractLedgerTxn has a child.
     virtual LedgerTxnHeader loadHeader() = 0;
     virtual LedgerTxnEntry create(InternalLedgerEntry const& entry) = 0;
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    virtual LedgerTxnEntry restore(InternalLedgerEntry const& entry) = 0;
+#endif
+
     virtual void erase(InternalLedgerKey const& key) = 0;
     virtual LedgerTxnEntry load(InternalLedgerKey const& key) = 0;
-    virtual ConstLedgerTxnEntry
-    loadWithoutRecord(InternalLedgerKey const& key) = 0;
+    virtual ConstLedgerTxnEntry loadWithoutRecord(InternalLedgerKey const& key,
+                                                  bool loadExpiredEntry) = 0;
 
     // Somewhat unsafe, non-recommended access methods: for use only during
     // bulk-loading as in catchup from buckets. These methods set an entry
@@ -691,6 +716,10 @@ class LedgerTxn : public AbstractLedgerTxn
 
     LedgerTxnEntry create(InternalLedgerEntry const& entry) override;
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    LedgerTxnEntry restore(InternalLedgerEntry const& entry) override;
+#endif
+
     void erase(InternalLedgerKey const& key) override;
 
     UnorderedMap<LedgerKey, LedgerEntry> getAllOffers() override;
@@ -728,7 +757,8 @@ class LedgerTxn : public AbstractLedgerTxn
                        std::vector<LedgerKey>& deadEntries) override;
 
     std::shared_ptr<InternalLedgerEntry const>
-    getNewestVersion(InternalLedgerKey const& key) const override;
+    getNewestVersion(InternalLedgerKey const& key,
+                     bool loadExpiredEntry) const override;
 
     LedgerTxnEntry load(InternalLedgerKey const& key) override;
 
@@ -751,8 +781,8 @@ class LedgerTxn : public AbstractLedgerTxn
     loadPoolShareTrustLinesByAccountAndAsset(AccountID const& account,
                                              Asset const& asset) override;
 
-    ConstLedgerTxnEntry
-    loadWithoutRecord(InternalLedgerKey const& key) override;
+    ConstLedgerTxnEntry loadWithoutRecord(InternalLedgerKey const& key,
+                                          bool loadExpiredEntry) override;
 
     void rollback() noexcept override;
 
@@ -764,12 +794,17 @@ class LedgerTxn : public AbstractLedgerTxn
     uint64_t countObjects(LedgerEntryType let,
                           LedgerRange const& ledgers) const override;
     void deleteObjectsModifiedOnOrAfterLedger(uint32_t ledger) const override;
-    void dropAccounts() override;
-    void dropData() override;
-    void dropOffers() override;
-    void dropTrustLines() override;
-    void dropClaimableBalances() override;
-    void dropLiquidityPools() override;
+    void dropAccounts(bool rebuild) override;
+    void dropData(bool rebuild) override;
+    void dropOffers(bool rebuild) override;
+    void dropTrustLines(bool rebuild) override;
+    void dropClaimableBalances(bool rebuild) override;
+    void dropLiquidityPools(bool rebuild) override;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    void dropContractData(bool rebuild) override;
+    void dropContractCode(bool rebuild) override;
+    void dropConfigSettings(bool rebuild) override;
+#endif
     double getPrefetchHitRate() const override;
     uint32_t prefetch(UnorderedSet<LedgerKey> const& keys) override;
     void prepareNewObjects(size_t s) override;
@@ -801,7 +836,7 @@ class LedgerTxnRoot : public AbstractLedgerTxnParent
     std::unique_ptr<Impl> const mImpl;
 
   public:
-    explicit LedgerTxnRoot(Database& db, size_t entryCacheSize,
+    explicit LedgerTxnRoot(Application& app, size_t entryCacheSize,
                            size_t prefetchBatchSize
 #ifdef BEST_OFFER_DEBUGGING
                            ,
@@ -822,12 +857,17 @@ class LedgerTxnRoot : public AbstractLedgerTxnParent
 
     void deleteObjectsModifiedOnOrAfterLedger(uint32_t ledger) const override;
 
-    void dropAccounts() override;
-    void dropData() override;
-    void dropOffers() override;
-    void dropTrustLines() override;
-    void dropClaimableBalances() override;
-    void dropLiquidityPools() override;
+    void dropAccounts(bool rebuild) override;
+    void dropData(bool rebuild) override;
+    void dropOffers(bool rebuild) override;
+    void dropTrustLines(bool rebuild) override;
+    void dropClaimableBalances(bool rebuild) override;
+    void dropLiquidityPools(bool rebuild) override;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    void dropContractData(bool rebuild) override;
+    void dropContractCode(bool rebuild) override;
+    void dropConfigSettings(bool rebuild) override;
+#endif
 
 #ifdef BUILD_TESTS
     void resetForFuzzer() override;
@@ -855,7 +895,8 @@ class LedgerTxnRoot : public AbstractLedgerTxnParent
     getInflationWinners(size_t maxWinners, int64_t minBalance) override;
 
     std::shared_ptr<InternalLedgerEntry const>
-    getNewestVersion(InternalLedgerKey const& key) const override;
+    getNewestVersion(InternalLedgerKey const& key,
+                     bool loadExpiredEntry) const override;
 
     void rollbackChild() noexcept override;
 
