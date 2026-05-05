@@ -11,11 +11,11 @@
 // first to include <windows.h> -- so we try to include it before everything
 // else.
 #include "util/asio.h"
-#include "bucket/BucketTests.h"
 #include "bucket/Bucket.h"
 #include "bucket/BucketInputIterator.h"
 #include "bucket/BucketManager.h"
 #include "bucket/BucketOutputIterator.h"
+#include "bucket/test/BucketTestUtils.h"
 #include "ledger/LedgerTxn.h"
 #include "ledger/test/LedgerTestUtils.h"
 #include "lib/catch.hpp"
@@ -30,9 +30,7 @@
 #include "xdrpp/autocheck.h"
 
 using namespace stellar;
-
-namespace BucketTests
-{
+using namespace BucketTestUtils;
 
 static std::ifstream::pos_type
 fileSize(std::string const& name)
@@ -44,34 +42,7 @@ fileSize(std::string const& name)
     return in.tellg();
 }
 
-uint32_t
-getAppLedgerVersion(Application& app)
-{
-    auto const& lcl = app.getLedgerManager().getLastClosedLedgerHeader();
-    return lcl.header.ledgerVersion;
-}
-
-uint32_t
-getAppLedgerVersion(Application::pointer app)
-{
-    return getAppLedgerVersion(*app);
-}
-
-void
-for_versions_with_differing_bucket_logic(
-    Config const& cfg, std::function<void(Config const&)> const& f)
-{
-    for_versions(
-        {static_cast<uint32_t>(
-             Bucket::FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY) -
-             1,
-         static_cast<uint32_t>(
-             Bucket::FIRST_PROTOCOL_SUPPORTING_INITENTRY_AND_METAENTRY),
-         static_cast<uint32_t>(Bucket::FIRST_PROTOCOL_SHADOWS_REMOVED)},
-        cfg, f);
-}
-
-void
+static void
 for_versions_with_differing_initentry_logic(
     Config const& cfg, std::function<void(Config const&)> const& f)
 {
@@ -84,60 +55,22 @@ for_versions_with_differing_initentry_logic(
         cfg, f);
 }
 
-EntryCounts::EntryCounts(std::shared_ptr<Bucket> bucket)
-{
-    BucketInputIterator iter(bucket);
-    if (iter.seenMetadata())
-    {
-        ++nMeta;
-    }
-    while (iter)
-    {
-        switch ((*iter).type())
-        {
-        case INITENTRY:
-            ++nInit;
-            break;
-        case LIVEENTRY:
-            ++nLive;
-            break;
-        case DEADENTRY:
-            ++nDead;
-            break;
-        case METAENTRY:
-            // This should never happen: only the first record can be METAENTRY
-            // and it is counted above.
-            abort();
-        }
-        ++iter;
-    }
-}
-
-size_t
-countEntries(std::shared_ptr<Bucket> bucket)
-{
-    EntryCounts e(bucket);
-    return e.sum();
-}
-}
-
-using namespace BucketTests;
-
-TEST_CASE("file backed buckets", "[bucket][bucketbench]")
+TEST_CASE_VERSIONS("file backed buckets", "[bucket][bucketbench]")
 {
     VirtualClock clock;
     Config const& cfg = getTestConfig();
     for_versions_with_differing_bucket_logic(cfg, [&](Config const& cfg) {
         Application::pointer app = createTestApplication(clock, cfg);
 
-        autocheck::generator<LedgerKey> deadGen;
         CLOG_DEBUG(Bucket, "Generating 10000 random ledger entries");
-        std::vector<LedgerEntry> live(9000);
-        std::vector<LedgerKey> dead(1000);
-        for (auto& e : live)
-            e = LedgerTestUtils::generateValidLedgerEntry(3);
-        for (auto& e : dead)
-            e = deadGen(3);
+        auto live = LedgerTestUtils::generateValidUniqueLedgerEntries(9000);
+        auto dead = LedgerTestUtils::generateValidLedgerEntryKeysWithExclusions(
+            {
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            },
+            1000);
         CLOG_DEBUG(Bucket, "Hashing entries");
         std::shared_ptr<Bucket> b1 = Bucket::fresh(
             app->getBucketManager(), getAppLedgerVersion(app), {}, live, dead,
@@ -148,10 +81,14 @@ TEST_CASE("file backed buckets", "[bucket][bucketbench]")
             CLOG_DEBUG(Bucket,
                        "Merging 10000 new ledger entries into {} entry bucket",
                        (i * 10000));
-            for (auto& e : live)
-                e = LedgerTestUtils::generateValidLedgerEntry(3);
-            for (auto& e : dead)
-                e = deadGen(3);
+            live = LedgerTestUtils::generateValidUniqueLedgerEntries(9000);
+            dead = LedgerTestUtils::generateValidLedgerEntryKeysWithExclusions(
+                {
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    CONFIG_SETTING
+#endif
+                },
+                1000);
             {
                 b1 = Bucket::merge(
                     app->getBucketManager(),
@@ -167,12 +104,12 @@ TEST_CASE("file backed buckets", "[bucket][bucketbench]")
                     /*doFsync=*/true);
             }
         }
-        auto sz = static_cast<size_t>(fileSize(b1->getFilename()));
+        auto sz = static_cast<size_t>(fileSize(b1->getFilename().string()));
         CLOG_DEBUG(Bucket, "Spill file size: {}", sz);
     });
 }
 
-TEST_CASE("merging bucket entries", "[bucket]")
+TEST_CASE_VERSIONS("merging bucket entries", "[bucket]")
 {
     VirtualClock clock;
     Config const& cfg = getTestConfig();
@@ -214,6 +151,20 @@ TEST_CASE("merging bucket entries", "[bucket]")
                     liveEntry.data.liquidityPool() =
                         LedgerTestUtils::generateValidLiquidityPoolEntry(10);
                     break;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                case CONFIG_SETTING:
+                    liveEntry.data.configSetting() =
+                        LedgerTestUtils::generateValidConfigSettingEntry(10);
+                    break;
+                case CONTRACT_DATA:
+                    liveEntry.data.contractData() =
+                        LedgerTestUtils::generateValidContractDataEntry(10);
+                    break;
+                case CONTRACT_CODE:
+                    liveEntry.data.contractCode() =
+                        LedgerTestUtils::generateValidContractCodeEntry(10);
+                    break;
+#endif
                 default:
                     abort();
                 }
@@ -241,15 +192,24 @@ TEST_CASE("merging bucket entries", "[bucket]")
         checkDeadAnnihilatesLive(DATA);
         checkDeadAnnihilatesLive(CLAIMABLE_BALANCE);
         checkDeadAnnihilatesLive(LIQUIDITY_POOL);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        checkDeadAnnihilatesLive(CONFIG_SETTING);
+        checkDeadAnnihilatesLive(CONTRACT_DATA);
+        checkDeadAnnihilatesLive(CONTRACT_CODE);
+#endif
 
         SECTION("random dead entries annihilates live entries")
         {
-            std::vector<LedgerEntry> live(100);
+            std::vector<LedgerEntry> live =
+                LedgerTestUtils::generateValidUniqueLedgerEntries(100);
             std::vector<LedgerKey> dead;
             for (auto& e : live)
             {
-                e = LedgerTestUtils::generateValidLedgerEntry(10);
-                if (rand_flip())
+                if (rand_flip()
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    && e.data.type() != CONFIG_SETTING
+#endif
+                )
                 {
                     dead.push_back(LedgerEntryKey(e));
                 }
@@ -276,12 +236,9 @@ TEST_CASE("merging bucket entries", "[bucket]")
 
         SECTION("random live entries overwrite live entries in any order")
         {
-            std::vector<LedgerEntry> live(100);
+            std::vector<LedgerEntry> live =
+                LedgerTestUtils::generateValidUniqueLedgerEntries(100);
             std::vector<LedgerKey> dead;
-            for (auto& e : live)
-            {
-                e = LedgerTestUtils::generateValidLedgerEntry(10);
-            }
             std::shared_ptr<Bucket> b1 = Bucket::fresh(
                 app->getBucketManager(), getAppLedgerVersion(app), {}, live,
                 dead, /*countMergeEvents=*/true, clock.getIOContext(),
@@ -309,7 +266,12 @@ TEST_CASE("merging bucket entries", "[bucket]")
             {
                 if (rand_flip())
                 {
-                    e = LedgerTestUtils::generateValidLedgerEntry(10);
+                    e = LedgerTestUtils::generateValidLedgerEntryWithExclusions(
+                        {
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                            CONFIG_SETTING
+#endif
+                        });
                     ++liveCount;
                 }
             }
@@ -325,6 +287,222 @@ TEST_CASE("merging bucket entries", "[bucket]")
                               /*doFsync=*/true);
             CHECK(countEntries(b3) == liveCount);
         }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        SECTION("EXPIRATION_EXTENSION merges with DATA_ENTRY")
+        {
+            std::vector<LedgerEntry> entries =
+                LedgerTestUtils::generateValidUniqueLedgerEntriesWithTypes(
+                    {CONTRACT_CODE, CONTRACT_DATA}, 100);
+
+            std::vector<LedgerEntry> newExpirationEntries;
+            std::set<LedgerKey> newExpirationKeys;
+
+            uint32_t originalExpiration = 10;
+            uint32_t newExpiration = 20;
+
+            for (auto& entry : entries)
+            {
+                if (entry.data.type() == CONTRACT_CODE)
+                {
+                    entry.data.contractCode().body.bodyType(DATA_ENTRY);
+                    entry.data.contractCode().expirationLedgerSeq =
+                        originalExpiration;
+                }
+                else
+                {
+                    entry.data.contractData().body.bodyType(DATA_ENTRY);
+                    entry.data.contractData().expirationLedgerSeq =
+                        originalExpiration;
+                }
+
+                if (rand_flip())
+                {
+                    newExpirationKeys.emplace(LedgerEntryKey(entry));
+                    newExpirationEntries.push_back(entry);
+
+                    auto& newEntry = newExpirationEntries.back();
+                    if (newEntry.data.type() == CONTRACT_CODE)
+                    {
+                        newEntry.data.contractCode().body.bodyType(
+                            EXPIRATION_EXTENSION);
+                        newEntry.data.contractCode().expirationLedgerSeq =
+                            newExpiration;
+                    }
+                    else
+                    {
+                        newEntry.data.contractData().body.bodyType(
+                            EXPIRATION_EXTENSION);
+                        newEntry.data.contractData().expirationLedgerSeq =
+                            newExpiration;
+                    }
+                }
+            }
+
+            auto checkMerge = [&](auto mergeResult) {
+                CHECK(countEntries(mergeResult) == entries.size());
+                for (BucketInputIterator in(mergeResult); in; ++in)
+                {
+                    auto const& e = (*in).liveEntry();
+                    auto expectedExpiration =
+                        newExpirationKeys.find(LedgerEntryKey(e)) ==
+                                newExpirationKeys.end()
+                            ? originalExpiration
+                            : newExpiration;
+                    if (e.data.type() == CONTRACT_CODE)
+                    {
+                        REQUIRE(e.data.contractCode().body.bodyType() ==
+                                DATA_ENTRY);
+                        REQUIRE(e.data.contractCode().expirationLedgerSeq ==
+                                expectedExpiration);
+                    }
+                    else
+                    {
+                        REQUIRE(e.data.contractData().body.bodyType() ==
+                                DATA_ENTRY);
+                        REQUIRE(e.data.contractData().expirationLedgerSeq ==
+                                expectedExpiration);
+                    }
+                }
+            };
+
+            auto bOriginal =
+                Bucket::fresh(bm, vers, {}, entries, {},
+                              /*countMergeEvents=*/true, clock.getIOContext(),
+                              /*doFsync=*/true);
+
+            auto bNew =
+                Bucket::fresh(bm, vers, {}, newExpirationEntries, {},
+                              /*countMergeEvents=*/true, clock.getIOContext(),
+                              /*doFsync=*/true);
+
+            auto bMerge =
+                Bucket::merge(bm, vers, bOriginal, bNew, /*shadows=*/{},
+                              /*keepDeadEntries=*/true,
+                              /*countMergeEvents=*/true, clock.getIOContext(),
+                              /*doFsync=*/true);
+
+            checkMerge(bMerge);
+
+            // Check that new DATA_ENTRY overwrites old EXPIRATION_EXTENSION
+            for (auto& entry : entries)
+            {
+                if (entry.data.type() == CONTRACT_CODE)
+                {
+                    entry.data.contractCode().body.bodyType(
+                        EXPIRATION_EXTENSION);
+                    entry.data.contractCode().expirationLedgerSeq = 0;
+                }
+                else
+                {
+                    entry.data.contractData().body.bodyType(
+                        EXPIRATION_EXTENSION);
+                    entry.data.contractData().expirationLedgerSeq = 0;
+                }
+            }
+
+            auto bOld =
+                Bucket::fresh(bm, vers, {}, entries, {},
+                              /*countMergeEvents=*/true, clock.getIOContext(),
+                              /*doFsync=*/true);
+
+            auto bMerge2 =
+                Bucket::merge(bm, vers, bOld, bMerge, /*shadows=*/{},
+                              /*keepDeadEntries=*/true,
+                              /*countMergeEvents=*/true, clock.getIOContext(),
+                              /*doFsync=*/true);
+
+            checkMerge(bMerge2);
+        }
+
+        SECTION(
+            "new EXPIRATION_EXTENSION overwrites older EXPIRATION_EXTENSION")
+        {
+            std::vector<LedgerEntry> entries =
+                LedgerTestUtils::generateValidUniqueLedgerEntriesWithTypes(
+                    {CONTRACT_CODE, CONTRACT_DATA}, 100);
+
+            std::vector<LedgerEntry> newExpirationEntries;
+            std::set<LedgerKey> newExpirationKeys;
+
+            uint32_t originalExpiration = 10;
+            uint32_t newExpiration = 20;
+
+            for (auto& entry : entries)
+            {
+                if (entry.data.type() == CONTRACT_CODE)
+                {
+                    entry.data.contractCode().body.bodyType(
+                        EXPIRATION_EXTENSION);
+                    entry.data.contractCode().expirationLedgerSeq =
+                        originalExpiration;
+                }
+                else
+                {
+                    entry.data.contractData().body.bodyType(
+                        EXPIRATION_EXTENSION);
+                    entry.data.contractData().expirationLedgerSeq =
+                        originalExpiration;
+                }
+
+                if (rand_flip())
+                {
+                    newExpirationKeys.emplace(LedgerEntryKey(entry));
+                    newExpirationEntries.push_back(entry);
+
+                    if (entry.data.type() == CONTRACT_CODE)
+                    {
+                        newExpirationEntries.back()
+                            .data.contractCode()
+                            .expirationLedgerSeq = newExpiration;
+                    }
+                    else
+                    {
+                        newExpirationEntries.back()
+                            .data.contractData()
+                            .expirationLedgerSeq = newExpiration;
+                    }
+                }
+            }
+
+            auto bOriginal =
+                Bucket::fresh(bm, vers, {}, entries, {},
+                              /*countMergeEvents=*/true, clock.getIOContext(),
+                              /*doFsync=*/true);
+
+            auto bNew =
+                Bucket::fresh(bm, vers, {}, newExpirationEntries, {},
+                              /*countMergeEvents=*/true, clock.getIOContext(),
+                              /*doFsync=*/true);
+
+            auto bMerge =
+                Bucket::merge(bm, vers, bOriginal, bNew, /*shadows=*/{},
+                              /*keepDeadEntries=*/true,
+                              /*countMergeEvents=*/true, clock.getIOContext(),
+                              /*doFsync=*/true);
+
+            CHECK(countEntries(bMerge) == entries.size());
+            for (BucketInputIterator in(bMerge); in; ++in)
+            {
+                auto const& e = (*in).liveEntry();
+                auto expectedExpiration =
+                    newExpirationKeys.find(LedgerEntryKey(e)) ==
+                            newExpirationKeys.end()
+                        ? originalExpiration
+                        : newExpiration;
+                if (e.data.type() == CONTRACT_CODE)
+                {
+                    REQUIRE(e.data.contractCode().expirationLedgerSeq ==
+                            expectedExpiration);
+                }
+                else
+                {
+                    REQUIRE(e.data.contractData().expirationLedgerSeq ==
+                            expectedExpiration);
+                }
+            }
+        }
+#endif
     });
 }
 
@@ -508,7 +686,8 @@ TEST_CASE("bucket output iterator rejects wrong-version entries",
     REQUIRE_THROWS_AS(out.put(metaEntry), std::runtime_error);
 }
 
-TEST_CASE("merging bucket entries with initentry", "[bucket][initentry]")
+TEST_CASE_VERSIONS("merging bucket entries with initentry",
+                   "[bucket][initentry]")
 {
     VirtualClock clock;
     Config const& cfg = getTestConfig();
@@ -696,8 +875,8 @@ TEST_CASE("merging bucket entries with initentry", "[bucket][initentry]")
     });
 }
 
-TEST_CASE("merging bucket entries with initentry with shadows",
-          "[bucket][initentry]")
+TEST_CASE_VERSIONS("merging bucket entries with initentry with shadows",
+                   "[bucket][initentry]")
 {
     VirtualClock clock;
     Config const& cfg = getTestConfig();
@@ -965,7 +1144,7 @@ TEST_CASE("merging bucket entries with initentry with shadows",
     });
 }
 
-TEST_CASE("bucket apply", "[bucket]")
+TEST_CASE_VERSIONS("bucket apply", "[bucket]")
 {
     VirtualClock clock;
     Config cfg(getTestConfig());

@@ -16,6 +16,10 @@
 #include <spdlog/spdlog.h>
 #endif
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+#include "rust/RustBridge.h"
+#endif
+
 namespace stellar
 {
 
@@ -33,6 +37,7 @@ bool Logging::mInitialized = false;
 bool Logging::mColor = false;
 std::string Logging::mLastPattern;
 std::string Logging::mLastFilenamePattern;
+bool Logging::mLogToConsole = true;
 #endif
 
 // Right now this is hard-coded to log messages at least as important as INFO
@@ -90,13 +95,16 @@ Logging::init(bool truncate)
         using namespace spdlog::sinks;
         using std::make_shared;
         using std::shared_ptr;
+        std::vector<shared_ptr<sink>> sinks;
 
-        auto console = (mColor ? static_cast<shared_ptr<sink>>(
-                                     make_shared<stderr_color_sink_mt>())
-                               : static_cast<shared_ptr<sink>>(
-                                     make_shared<stderr_sink_mt>()));
-
-        std::vector<shared_ptr<sink>> sinks{console};
+        if (mLogToConsole)
+        {
+            auto console = (mColor ? static_cast<shared_ptr<sink>>(
+                                         make_shared<stderr_color_sink_mt>())
+                                   : static_cast<shared_ptr<sink>>(
+                                         make_shared<stderr_sink_mt>()));
+            sinks.emplace_back(console);
+        }
 
         if (!mLastFilenamePattern.empty())
         {
@@ -177,14 +185,19 @@ Logging::init(bool truncate)
         {
             mLastPattern = "%Y-%m-%dT%H:%M:%S.%e [%^%n %l%$] %v";
         }
+        auto maxLevel = mGlobalLogLevel;
         spdlog::set_pattern(mLastPattern);
         spdlog::set_level(convert_loglevel(mGlobalLogLevel));
         for (auto const& pair : mPartitionLogLevels)
         {
+            maxLevel = std::max(maxLevel, pair.second);
             spdlog::get(pair.first)->set_level(convert_loglevel(pair.second));
         }
         spdlog::flush_every(std::chrono::seconds(1));
         spdlog::flush_on(spdlog::level::err);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        rust_bridge::init_logging(maxLevel);
+#endif
         mInitialized = true;
     }
 #endif
@@ -223,6 +236,17 @@ Logging::setFmt(std::string const& peerID, bool timestamps)
 }
 
 void
+Logging::setLoggingToConsole(bool console)
+{
+#if defined(USE_SPDLOG)
+    std::lock_guard<std::recursive_mutex> guard(mLogMutex);
+    mLogToConsole = console;
+    deinit();
+    init();
+#endif
+}
+
+void
 Logging::setLoggingToFile(std::string const& filename)
 {
 #if defined(USE_SPDLOG)
@@ -238,6 +262,7 @@ Logging::setLoggingToFile(std::string const& filename)
         // Could not initialize logging to file, fallback on
         // console-only logging and throw
         mLastFilenamePattern.clear();
+        mLogToConsole = true;
         deinit();
         init();
         throw;
@@ -350,25 +375,25 @@ Logging::getStringFromLL(LogLevel level)
 bool
 Logging::logDebug(std::string const& partition)
 {
-    std::lock_guard<std::recursive_mutex> guard(mLogMutex);
-    auto it = mPartitionLogLevels.find(partition);
-    if (it != mPartitionLogLevels.end())
-    {
-        return it->second >= LogLevel::LVL_DEBUG;
-    }
-    return mGlobalLogLevel >= LogLevel::LVL_DEBUG;
+    return isLogLevelAtLeast(partition, LogLevel::LVL_DEBUG);
 }
 
 bool
 Logging::logTrace(std::string const& partition)
 {
+    return isLogLevelAtLeast(partition, LogLevel::LVL_TRACE);
+}
+
+bool
+Logging::isLogLevelAtLeast(std::string const& partition, LogLevel level)
+{
     std::lock_guard<std::recursive_mutex> guard(mLogMutex);
     auto it = mPartitionLogLevels.find(partition);
     if (it != mPartitionLogLevels.end())
     {
-        return it->second >= LogLevel::LVL_TRACE;
+        return it->second >= level;
     }
-    return mGlobalLogLevel >= LogLevel::LVL_TRACE;
+    return mGlobalLogLevel >= level;
 }
 
 void
@@ -410,4 +435,24 @@ std::recursive_mutex Logging::mLogMutex;
 #include "util/LogPartitions.def"
 #undef LOG_PARTITION
 #endif
+
+void
+Logging::logAtPartitionAndLevel(std::string const& partition, LogLevel level,
+                                std::string const& msg)
+{
+#if defined(USE_SPDLOG)
+    auto lev = convert_loglevel(level);
+#define LOG_PARTITION(name) \
+    if (partition == #name) \
+    { \
+        LOG_CHECK(Logging::get##name##LogPtr(), lev, lg->log(lev, msg)); \
+        return; \
+    }
+#include "util/LogPartitions.def"
+#undef LOG_PARTITION
+    LOG_CHECK(spdlog::default_logger(), lev, lg->log(lev, msg));
+#else
+    CoutLogger logger(level) << msg;
+#endif
+}
 }

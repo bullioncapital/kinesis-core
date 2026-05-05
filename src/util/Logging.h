@@ -4,7 +4,9 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include "xdrpp/types.h"
 #include <array>
+#include <filesystem>
 #include <iostream>
 #include <map>
 
@@ -124,7 +126,7 @@ typedef void* LogPtr;
 namespace stellar
 {
 
-enum class LogLevel
+enum class LogLevel : uint8_t
 {
     LVL_FATAL = 0,
     LVL_ERROR = 1,
@@ -165,6 +167,7 @@ class Logging
     static bool mColor;
     static std::string mLastPattern;
     static std::string mLastFilenamePattern;
+    static bool mLogToConsole;
 #define LOG_PARTITION(name) static LogPtr name##LogPtr;
 #include "util/LogPartitions.def"
 #undef LOG_PARTITION
@@ -175,6 +178,7 @@ class Logging
     static void deinit();
     static void setFmt(std::string const& peerID, bool timestamps = true);
     static void setLoggingToFile(std::string const& filename);
+    static void setLoggingToConsole(bool console);
     static void setLoggingColor(bool color);
     static void setLogLevel(LogLevel level, const char* partition);
     static LogLevel getLLfromString(std::string const& levelName);
@@ -182,6 +186,9 @@ class Logging
     static std::string getStringFromLL(LogLevel level);
     static bool logDebug(std::string const& partition);
     static bool logTrace(std::string const& partition);
+    static bool isLogLevelAtLeast(std::string const& partition, LogLevel level);
+    static void logAtPartitionAndLevel(std::string const& partition,
+                                       LogLevel level, std::string const& msg);
     static void rotate();
     static std::string normalizePartition(std::string const& partition);
 
@@ -193,4 +200,22 @@ class Logging
 #undef LOG_PARTITION
 #endif
 };
+
+// custom formatters that can be used by fmt::format
+
+template <typename T>
+inline typename std::enable_if<xdr::xdr_traits<T>::is_enum, std::string>::type
+format_as(T const& u)
+{
+    return std::string(xdr::xdr_traits<T>::enum_name(u));
+}
+}
+
+namespace std::filesystem
+{
+inline std::string
+format_as(path const& p)
+{
+    return p.string();
+}
 }

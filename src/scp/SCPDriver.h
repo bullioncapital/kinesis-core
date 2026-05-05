@@ -172,6 +172,7 @@ class SCPDriver
     virtual void setupTimer(uint64 slotIndex, int timerID,
                             std::chrono::milliseconds timeout,
                             std::function<void()> cb) = 0;
+    virtual void stopTimer(uint64 slotIndex, int timerID) = 0;
 
     // `computeTimeout` computes a timeout given a round number
     // it should be sufficiently large such that nodes in a
@@ -237,6 +238,15 @@ class SCPDriver
     ballotDidHearFromQuorum(uint64 slotIndex, SCPBallot const& ballot)
     {
     }
+
+#ifdef BUILD_TESTS
+    std::function<uint64(NodeID const&)> mPriorityLookupForTesting;
+    void
+    setPriorityLookup(std::function<uint64(NodeID const&)> const& f)
+    {
+        mPriorityLookupForTesting = f;
+    }
+#endif
 
   private:
     uint64

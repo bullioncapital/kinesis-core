@@ -10,20 +10,28 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 
 #include "medida/timer_context.h"
+
+namespace medida
+{
+class Meter;
+}
 
 namespace stellar
 {
 
 class Application;
+class BasicWork;
 class BucketList;
+class Config;
 class TmpDirManager;
+struct HistoryArchiveState;
+struct InflationWinner;
 struct LedgerHeader;
 struct MergeKey;
-struct HistoryArchiveState;
-class BasicWork;
 
 // A fine-grained merge-operation-counter structure for tracking various
 // events during merges. These are not medida counters because we do not
@@ -101,10 +109,13 @@ class BucketManager : NonMovableOrCopyable
     }
     virtual void initialize() = 0;
     virtual void dropAll() = 0;
+    virtual std::string bucketIndexFilename(Hash const& hash) const = 0;
     virtual std::string const& getTmpDir() = 0;
     virtual TmpDirManager& getTmpDirManager() = 0;
     virtual std::string const& getBucketDir() const = 0;
     virtual BucketList& getBucketList() = 0;
+    virtual bool renameBucketDirFile(std::filesystem::path const& src,
+                                     std::filesystem::path const& dst) = 0;
 
     virtual medida::Timer& getMergeTimer() = 0;
 
@@ -126,8 +137,8 @@ class BucketManager : NonMovableOrCopyable
     // worker threads. Very carefully.
     virtual std::shared_ptr<Bucket>
     adoptFileAsBucket(std::string const& filename, uint256 const& hash,
-                      size_t nObjects, size_t nBytes,
-                      MergeKey* mergeKey = nullptr) = 0;
+                      size_t nObjects, size_t nBytes, MergeKey* mergeKey,
+                      std::unique_ptr<BucketIndex const> index) = 0;
 
     // Companion method to `adoptFileAsBucket` also called from the
     // `BucketOutputIterator::getBucket` merge-completion path. This method
@@ -136,6 +147,10 @@ class BucketManager : NonMovableOrCopyable
     // `FutureBucket` associated with the in-progress merge, allowing the merge
     // inputs to be GC'ed.
     virtual void noteEmptyMergeOutput(MergeKey const& mergeKey) = 0;
+
+    // Returns a bucket by hash if it exists and is currently managed by the
+    // bucket list.
+    virtual std::shared_ptr<Bucket> getBucketIfExists(uint256 const& hash) = 0;
 
     // Return a bucket by hash if we have it, else return nullptr.
     virtual std::shared_ptr<Bucket> getBucketByHash(uint256 const& hash) = 0;
@@ -182,6 +197,33 @@ class BucketManager : NonMovableOrCopyable
     // state of the bucket list.
     virtual void snapshotLedger(LedgerHeader& currentHeader) = 0;
 
+    // Sets index for bucket b if b is not already indexed and if BucketManager
+    // is not shutting down. In most cases, there should only be a single index
+    // for each bucket. However, during startup there are race conditions where
+    // a bucket may be indexed twice. If there is an index race, set index with
+    // this function, otherwise use Bucket::setIndex().
+    virtual void maybeSetIndex(std::shared_ptr<Bucket> b,
+                               std::unique_ptr<BucketIndex const>&& index) = 0;
+
+    // Look up a ledger entry from the BucketList. Returns nullopt if the LE is
+    // dead / nonexistent.
+    virtual std::shared_ptr<LedgerEntry>
+    getLedgerEntry(LedgerKey const& k) const = 0;
+
+    // Loads LedgerEntry for all keys.
+    virtual std::vector<LedgerEntry>
+    loadKeys(std::set<LedgerKey, LedgerEntryIdCmp> const& keys) const = 0;
+
+    virtual std::vector<LedgerEntry>
+    loadPoolShareTrustLinesByAccountAndAsset(AccountID const& accountID,
+                                             Asset const& asset) const = 0;
+
+    virtual std::vector<InflationWinner>
+    loadInflationWinners(size_t maxWinners, int64_t minBalance) const = 0;
+
+    virtual medida::Meter& getBloomMissMeter() const = 0;
+    virtual medida::Meter& getBloomLookupMeter() const = 0;
+
 #ifdef BUILD_TESTS
     // Install a fake/assumed ledger version and bucket list hash to use in next
     // call to addBatch and snapshotLedger. This interface exists only for
@@ -195,17 +237,20 @@ class BucketManager : NonMovableOrCopyable
     virtual std::set<Hash> getBucketHashesInBucketDirForTesting() const = 0;
 #endif
 
+    // Return the set of buckets referenced by the BucketList
+    virtual std::set<Hash> getBucketListReferencedBuckets() const = 0;
+
     // Return the set of buckets referenced by the BucketList, LCL HAS,
     // and publish queue.
-    virtual std::set<Hash> getReferencedBuckets() const = 0;
+    virtual std::set<Hash> getAllReferencedBuckets() const = 0;
 
     // Check for missing bucket files that would prevent `assumeState` from
     // succeeding
     virtual std::vector<std::string>
     checkForMissingBucketsFiles(HistoryArchiveState const& has) = 0;
 
-    // Restart from a saved state: find and attach all buckets in `has`, set
-    // current BL. Pass `maxProtocolVersion` to any restarted merges.
+    // Assume state from `has` in BucketList: find and attach all buckets in
+    // `has`, set current BL. Note: Does not restart merging
     virtual void assumeState(HistoryArchiveState const& has,
                              uint32_t maxProtocolVersion) = 0;
 
@@ -230,9 +275,33 @@ class BucketManager : NonMovableOrCopyable
     virtual std::shared_ptr<Bucket>
     mergeBuckets(HistoryArchiveState const& has) = 0;
 
+    // Visits all the active ledger entries or subset thereof.
+    //
+    // The order in which the entries are visited is not defined, but roughly
+    // goes from more fresh entries to the older ones.
+    //
+    // This accepts two visitors. `filterEntry` has to return `true`
+    // if the ledger entry can *potentially* be accepted. The passed entry isn't
+    // necessarily fresh or even alive. `acceptEntry` will only get the fresh
+    // alive entries that have passed the filter. If it returns `false` the
+    // iteration will immediately finish.
+    //
+    // When `minLedger` is specified, only entries that have been modified at
+    // `minLedger` or later are visited.
+    //
+    // When `filterEntry` and `acceptEntry` always return `true`, this is
+    // equivalent to iterating over `loadCompleteLedgerState`, so the same
+    // memory/runtime implications apply.
+    virtual void visitLedgerEntries(
+        HistoryArchiveState const& has, std::optional<int64_t> minLedger,
+        std::function<bool(LedgerEntry const&)> const& filterEntry,
+        std::function<bool(LedgerEntry const&)> const& acceptEntry) = 0;
+
     // Schedule a Work class that verifies the hashes of all referenced buckets
     // on background threads.
     virtual std::shared_ptr<BasicWork>
     scheduleVerifyReferencedBucketsWork() = 0;
+
+    virtual Config const& getConfig() const = 0;
 };
 }

@@ -697,6 +697,7 @@ Some notable fields in `info` are:
 The `peers` command returns information on the peers the instance is connected to.
 
 This list is the result of both inbound connections from other peers and outbound connections from this node to other peers.
+If `compact=false`, then it also returns some extra metrics on each peer such as the number of dropped messages.
 
 `$ stellar-core http-command 'peers'`
 
@@ -712,8 +713,7 @@ This list is the result of both inbound connections from other peers and outboun
                   "flood" : 500,
                   "reading" : 600
                },
-               "peer_capacity" : 100,
-               "state" : "enabled"
+               "peer_capacity" : 100
             },
            "id" : "sdf1",
            "olver" : 5,
@@ -729,8 +729,7 @@ This list is the result of both inbound connections from other peers and outboun
                 "flood" : 500,
                 "reading" : 600
              },
-             "peer_capacity" : 100,
-             "state" : "enabled"
+             "peer_capacity" : 100
           },
           "id" : "sdf2",
           "olver" : 5,
@@ -744,8 +743,7 @@ This list is the result of both inbound connections from other peers and outboun
                 "flood" : 500,
                 "reading" : 600
              },
-             "peer_capacity" : 100,
-             "state" : "enabled"
+             "peer_capacity" : 100
           },
           "id" : "sdf3",
           "olver" : 5,
@@ -1063,6 +1061,7 @@ The network settings are:
   * the maximum number of operations that can be included in a given ledger close
   * the cost (fee) associated with processing operations
   * the base reserve used to calculate the lumen balance needed to store things in the ledger
+  * generalized network settings stored in ConfigSettingEntries.
 
 When the network time is later than the `upgradetime` specified in
 the upgrade settings, the validator will vote to update the network

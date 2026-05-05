@@ -23,15 +23,15 @@
 #include "transactions/SignatureUtils.h"
 #include "transactions/SponsorshipUtils.h"
 #include "transactions/TransactionBridge.h"
+#include "transactions/TransactionMetaFrame.h"
 #include "transactions/TransactionUtils.h"
-#include "util/Algorithm.h"
 #include "util/Decoder.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
 #include "util/ProtocolVersion.h"
 #include "util/XDROperators.h"
 #include "util/XDRStream.h"
-#include "util/XDRCereal.h"
+#include "xdr/Stellar-ledger.h"
 #include "xdrpp/marshal.h"
 #include "xdrpp/printer.h"
 #include <Tracy.hpp>
@@ -53,6 +53,25 @@ TransactionFrame::TransactionFrame(Hash const& networkID,
                                    TransactionEnvelope const& envelope)
     : mEnvelope(envelope), mNetworkID(networkID)
 {
+    // Create operation frames with dummy results. Currently the proper results
+    // are initialized in `TransactionFrame::resetResults` and eventually the
+    // operation frames should be decoupled from the results completely and
+    // created just once.
+    auto& ops = mEnvelope.type() == ENVELOPE_TYPE_TX_V0
+                    ? mEnvelope.v0().tx.operations
+                    : mEnvelope.v1().tx.operations;
+    getResult().result.code(txFAILED);
+    getResult().result.results().resize(static_cast<uint32_t>(ops.size()));
+
+    for (size_t i = 0; i < ops.size(); i++)
+    {
+        mOperations.push_back(
+            makeOperation(ops[i], getResult().result.results()[i], i));
+    }
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    // Initialize the fee to 0, callers will compute the fee appropriately
+    mSorobanResourceFee = std::make_optional<FeePair>();
+#endif
 }
 
 Hash const&
@@ -101,6 +120,26 @@ TransactionFrame::clearCached()
     mFullHash = zero;
 }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+void
+TransactionFrame::pushContractEvents(xdr::xvector<ContractEvent>&& evts)
+{
+    mEvents = evts;
+}
+
+void
+TransactionFrame::pushDiagnosticEvents(xdr::xvector<DiagnosticEvent>&& evts)
+{
+    mDiagnosticEvents = evts;
+}
+
+void
+TransactionFrame::setReturnValue(SCVal&& returnValue)
+{
+    mReturnValue = returnValue;
+}
+#endif
+
 TransactionEnvelope const&
 TransactionFrame::getEnvelope() const
 {
@@ -146,6 +185,26 @@ TransactionFrame::getNumOperations() const
                : static_cast<uint32_t>(mEnvelope.v1().tx.operations.size());
 }
 
+Resource
+TransactionFrame::getResources() const
+{
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    if (isSoroban())
+    {
+        auto r = sorobanResources();
+        int64_t txSize = xdr::xdr_size(mEnvelope.v1().tx);
+        int64_t const opCount = 1;
+
+        return Resource({opCount, r.instructions, txSize, r.readBytes,
+                         r.writeBytes,
+                         static_cast<int64_t>(r.footprint.readOnly.size()),
+                         static_cast<int64_t>(r.footprint.readWrite.size())});
+    }
+#endif
+
+    return Resource(getNumOperations());
+}
+
 std::vector<Operation> const&
 TransactionFrame::getRawOperations() const
 {
@@ -155,95 +214,73 @@ TransactionFrame::getRawOperations() const
 }
 
 int64_t
-TransactionFrame::getFeeBid() const
+TransactionFrame::getFullFee() const
 {
-    auto feeBid = mEnvelope.type() == ENVELOPE_TYPE_TX_V0 ? mEnvelope.v0().tx.fee
-                                                   : mEnvelope.v1().tx.fee;
-    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getFeeBid() - feeBid: {}", feeBid);
+    auto feeBid = mEnvelope.type() == ENVELOPE_TYPE_TX_V0
+                      ? mEnvelope.v0().tx.fee
+                      : mEnvelope.v1().tx.fee;
     return feeBid;
 }
 
-
-#ifdef _KINESIS
-
-// kinesis implementation
 int64_t
-TransactionFrame::getMinFee(LedgerHeader const& header) const
+TransactionFrame::getFeeBid() const
 {
-    auto baseFee =
-        ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
-
-    // apply base percentage fee
-    // affect: create_account and payment ops
-    int64_t accumulatedBasePercentageFee = 0;
-    double basePercentageFeeRate =
-        (double)header.basePercentageFee / (double)BASIS_POINTS_TO_PERCENT;
-
-    int64_t totalAmount = 0;
-    for (auto& op : mOperations)
+    int64_t feeBid = getFullFee();
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    if (!isSoroban())
     {
-        auto operation = op->getOperation();
-        auto operationType = operation.body.type();
-        if (operationType == CREATE_ACCOUNT)
-        {
-            totalAmount += operation.body.createAccountOp().startingBalance;
-        }
-        else if (operationType == PAYMENT)
-        {
-            int8_t assetType =
-                operation.body.paymentOp().asset.type(); // 0 is native
-            if (assetType == 0)
-            {
-                totalAmount += operation.body.paymentOp().amount;
-            }
-        }
+        return feeBid;
     }
-
-    accumulatedBasePercentageFee +=
-        (int64_t)(totalAmount * basePercentageFeeRate);
-    int64_t totalFee = baseFee + accumulatedBasePercentageFee;
-    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::getMinFee() - header.baseFee: {}, baseFee: {}, amount: {}, totalFee: {}",
-       header.baseFee, baseFee, totalAmount, totalFee
-    );
-    int64_t headerMaxFee=(int64_t)header.maxFee;
-    totalFee=totalFee>headerMaxFee?headerMaxFee:totalFee;
-    return totalFee;
-}
+    // We rely here on the Soroban fee being computed at
+    // this point.
+    releaseAssertOrThrow(mSorobanResourceFee);
+    if (feeBid < mSorobanResourceFee->non_refundable_fee)
+    {
+        return 0;
+    }
+    feeBid -= mSorobanResourceFee->non_refundable_fee;
+    int64_t declaredRefundableFee = sorobanRefundableFee();
+    if (feeBid < declaredRefundableFee)
+    {
+        return 0;
+    }
+    return feeBid - declaredRefundableFee;
 #else
-// original function implementation
-int64_t
-TransactionFrame::getMinFee(LedgerHeader const& header) const
-{
-    return ((int64_t)header.baseFee) * std::max<int64_t>(1, getNumOperations());
-}
+    return feeBid;
 #endif
+}
 
 int64_t
-TransactionFrame::getFee(LedgerHeader const& header, int64_t baseFee,
-                         bool applying) const
+TransactionFrame::getFee(LedgerHeader const& header,
+                         std::optional<int64_t> baseFee, bool applying) const
 {
+    if (!baseFee)
+    {
+        return getFullFee();
+    }
     if (protocolVersionStartsFrom(header.ledgerVersion,
                                   ProtocolVersion::V_11) ||
         !applying)
     {
-       int64_t adjustedFee =
-            baseFee * std::max<int64_t>(1, getNumOperations());
+        int64_t feeBid = getFeeBid();
+        int64_t flatFee = getFullFee() - feeBid;
+        int64_t adjustedFee =
+            *baseFee * std::max<int64_t>(1, getNumOperations());
 
         if (applying)
         {
-            return std::min<int64_t>(getFeeBid(), adjustedFee);
+            return flatFee + std::min<int64_t>(getFeeBid(), adjustedFee);
         }
         else
         {
-            return adjustedFee;
+            return flatFee + adjustedFee;
         }
     }
     else
     {
-        return getFeeBid();
+        return getFullFee();
     }
 }
-
 
 void
 TransactionFrame::addSignature(SecretKey const& secretKey)
@@ -288,6 +325,32 @@ TransactionFrame::checkSignatureNoAccount(SignatureChecker& signatureChecker,
     return signatureChecker.checkSignature(signers, 0);
 }
 
+bool
+TransactionFrame::checkExtraSigners(SignatureChecker& signatureChecker)
+{
+    ZoneScoped;
+    if (extraSignersExist())
+    {
+        auto const& extraSigners = mEnvelope.v1().tx.cond.v2().extraSigners;
+        std::vector<Signer> signers;
+
+        std::transform(extraSigners.begin(), extraSigners.end(),
+                       std::back_inserter(signers),
+                       [](SignerKey const& k) { return Signer(k, 1); });
+
+        // Sanity check for the int32 cast below
+        static_assert(decltype(PreconditionsV2::extraSigners)::max_size() <=
+                      INT32_MAX);
+
+        // We want to verify that there is a signature for each extraSigner, so
+        // we assign a weight of 1 to each key, and set the neededWeight to the
+        // number of extraSigners
+        return signatureChecker.checkSignature(
+            signers, static_cast<int32_t>(signers.size()));
+    }
+    return true;
+}
+
 LedgerTxnEntry
 TransactionFrame::loadSourceAccount(AbstractLedgerTxn& ltx,
                                     LedgerTxnHeader const& header)
@@ -300,7 +363,8 @@ TransactionFrame::loadSourceAccount(AbstractLedgerTxn& ltx,
         // this is buggy caching that existed in old versions of the protocol
         if (res)
         {
-            auto newest = ltx.getNewestVersion(LedgerEntryKey(res.current()));
+            auto newest = ltx.getNewestVersion(LedgerEntryKey(res.current()),
+                                               /*loadExpiredEntry=*/false);
             mCachedAccount = newest;
         }
         else
@@ -333,7 +397,8 @@ TransactionFrame::loadAccount(AbstractLedgerTxn& ltx,
             res = ltx.create(*mCachedAccount);
         }
 
-        auto newest = ltx.getNewestVersion(LedgerEntryKey(res.current()));
+        auto newest = ltx.getNewestVersion(LedgerEntryKey(res.current()),
+                                           /*loadExpiredEntry=*/false);
         mCachedAccount = newest;
         return res;
     }
@@ -342,6 +407,34 @@ TransactionFrame::loadAccount(AbstractLedgerTxn& ltx,
         return stellar::loadAccount(ltx, accountID);
     }
 }
+
+bool
+TransactionFrame::hasDexOperations() const
+{
+    for (auto const& op : mOperations)
+    {
+        if (op->isDexOperation())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+TransactionFrame::isSoroban() const
+{
+    return !mOperations.empty() && mOperations[0]->isSoroban();
+}
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+SorobanResources const&
+TransactionFrame::sorobanResources() const
+{
+    releaseAssertOrThrow(isSoroban());
+    return mEnvelope.v1().tx.ext.sorobanData().resources;
+}
+#endif
 
 std::shared_ptr<OperationFrame>
 TransactionFrame::makeOperation(Operation const& op, OperationResult& res,
@@ -352,8 +445,8 @@ TransactionFrame::makeOperation(Operation const& op, OperationResult& res,
 }
 
 void
-TransactionFrame::resetResults(LedgerHeader const& header, int64_t baseFee,
-                               bool applying)
+TransactionFrame::resetResults(LedgerHeader const& header,
+                               std::optional<int64_t> baseFee, bool applying)
 {
     auto& ops = mEnvelope.type() == ENVELOPE_TYPE_TX_V0
                     ? mEnvelope.v0().tx.operations
@@ -374,26 +467,376 @@ TransactionFrame::resetResults(LedgerHeader const& header, int64_t baseFee,
 
     // feeCharged is updated accordingly to represent the cost of the
     // transaction regardless of the failure modes.
-    auto feeCharged = getFee(header, baseFee, applying);
-    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::resetResults() Fee charged: {}, ops: {}, baseFee: {}, applying: {}",
-        feeCharged, ops.size(), baseFee, applying
-    );
-    getResult().feeCharged = feeCharged;
+    getResult().feeCharged = getFee(header, baseFee, applying);
 }
+
+std::optional<TimeBounds const> const
+TransactionFrame::getTimeBounds() const
+{
+    if (mEnvelope.type() == ENVELOPE_TYPE_TX_V0)
+    {
+        return mEnvelope.v0().tx.timeBounds ? std::optional<TimeBounds const>(
+                                                  *mEnvelope.v0().tx.timeBounds)
+                                            : std::optional<TimeBounds const>();
+    }
+    else
+    {
+        auto const& cond = mEnvelope.v1().tx.cond;
+        switch (cond.type())
+        {
+        case PRECOND_NONE:
+        {
+            return std::optional<TimeBounds const>();
+        }
+        case PRECOND_TIME:
+        {
+            return std::optional<TimeBounds const>(cond.timeBounds());
+        }
+        case PRECOND_V2:
+        {
+            return cond.v2().timeBounds
+                       ? std::optional<TimeBounds const>(*cond.v2().timeBounds)
+                       : std::optional<TimeBounds const>();
+        }
+        default:
+            throw std::runtime_error("unknown condition type");
+        }
+    }
+}
+
+std::optional<LedgerBounds const> const
+TransactionFrame::getLedgerBounds() const
+{
+    if (mEnvelope.type() == ENVELOPE_TYPE_TX)
+    {
+        auto const& cond = mEnvelope.v1().tx.cond;
+        if (cond.type() == PRECOND_V2 && cond.v2().ledgerBounds)
+        {
+            return std::optional<LedgerBounds const>(*cond.v2().ledgerBounds);
+        }
+    }
+
+    return std::optional<LedgerBounds const>();
+}
+
+Duration
+TransactionFrame::getMinSeqAge() const
+{
+    if (mEnvelope.type() == ENVELOPE_TYPE_TX)
+    {
+        auto& cond = mEnvelope.v1().tx.cond;
+        return cond.type() == PRECOND_V2 ? cond.v2().minSeqAge : 0;
+    }
+
+    return 0;
+}
+
+uint32
+TransactionFrame::getMinSeqLedgerGap() const
+{
+    if (mEnvelope.type() == ENVELOPE_TYPE_TX)
+    {
+        auto& cond = mEnvelope.v1().tx.cond;
+        return cond.type() == PRECOND_V2 ? cond.v2().minSeqLedgerGap : 0;
+    }
+
+    return 0;
+}
+
+std::optional<SequenceNumber const> const
+TransactionFrame::getMinSeqNum() const
+{
+    if (mEnvelope.type() == ENVELOPE_TYPE_TX)
+    {
+        auto& cond = mEnvelope.v1().tx.cond;
+        if (cond.type() == PRECOND_V2 && cond.v2().minSeqNum)
+        {
+            return std::optional<SequenceNumber const>(*cond.v2().minSeqNum);
+        }
+    }
+
+    return std::optional<SequenceNumber const>();
+}
+
+bool
+TransactionFrame::extraSignersExist() const
+{
+    return mEnvelope.type() == ENVELOPE_TYPE_TX &&
+           mEnvelope.v1().tx.cond.type() == PRECOND_V2 &&
+           !mEnvelope.v1().tx.cond.v2().extraSigners.empty();
+}
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+bool
+TransactionFrame::validateSorobanOpsConsistency() const
+{
+    bool hasSorobanOp = mOperations[0]->isSoroban();
+    for (auto const& op : mOperations)
+    {
+        bool isSorobanOp = op->isSoroban();
+        // Mixing Soroban ops with non-Soroban ops is not allowed.
+        if (isSorobanOp != hasSorobanOp)
+        {
+            return false;
+        }
+    }
+    // Only one operation is allowed per Soroban transaction.
+    if (hasSorobanOp && mOperations.size() != 1)
+    {
+        return false;
+    }
+    return true;
+}
+
+bool
+TransactionFrame::validateSorobanResources(SorobanNetworkConfig const& config,
+                                           uint32_t protocolVersion) const
+{
+    auto const& resources = sorobanResources();
+    auto const& readEntries = resources.footprint.readOnly;
+    auto const& writeEntries = resources.footprint.readWrite;
+    if (resources.instructions > config.txMaxInstructions())
+    {
+        return false;
+    }
+    if (resources.readBytes > config.txMaxReadBytes())
+    {
+        return false;
+    }
+    if (resources.writeBytes > config.txMaxWriteBytes())
+    {
+        return false;
+    }
+    if (resources.extendedMetaDataSizeBytes >
+        config.txMaxExtendedMetaDataSizeBytes())
+    {
+        return false;
+    }
+    if (readEntries.size() + writeEntries.size() >
+            config.txMaxReadLedgerEntries() ||
+        writeEntries.size() > config.txMaxWriteLedgerEntries())
+    {
+        return false;
+    }
+    auto footprintKeyIsValid = [&](LedgerKey const& key) -> bool {
+        if (isSorobanExtEntry(key))
+        {
+            return false;
+        }
+
+        switch (key.type())
+        {
+        case ACCOUNT:
+        case CONTRACT_DATA:
+        case CONTRACT_CODE:
+            break;
+        case TRUSTLINE:
+        {
+            auto const& tl = key.trustLine();
+            if (!isAssetValid(tl.asset, protocolVersion) ||
+                (tl.asset.type() == ASSET_TYPE_NATIVE) ||
+                isIssuer(tl.accountID, tl.asset))
+            {
+                return false;
+            }
+            break;
+        }
+        case OFFER:
+        case DATA:
+        case CLAIMABLE_BALANCE:
+        case LIQUIDITY_POOL:
+        case CONFIG_SETTING:
+            return false;
+        default:
+            throw std::runtime_error("unknown ledger key type");
+        }
+
+        if (xdr::xdr_size(key) > config.maxContractDataKeySizeBytes())
+        {
+            return false;
+        }
+
+        return true;
+    };
+    for (auto const& lk : readEntries)
+    {
+        if (!footprintKeyIsValid(lk))
+        {
+            return false;
+        }
+    }
+    for (auto const& lk : writeEntries)
+    {
+        if (!footprintKeyIsValid(lk))
+        {
+            return false;
+        }
+    }
+    auto txSize = xdr::xdr_size(mEnvelope.v1().tx);
+    if (txSize > config.txMaxSizeBytes())
+    {
+        return false;
+    }
+    return true;
+}
+
+void
+TransactionFrame::refundSorobanFee(AbstractLedgerTxn& ltxOuter)
+{
+    if (mFeeRefund == 0)
+    {
+        return;
+    }
+
+    LedgerTxn ltx(ltxOuter);
+    auto header = ltx.loadHeader();
+    auto sourceAccount = loadSourceAccount(ltx, header);
+    if (!sourceAccount)
+    {
+        throw std::runtime_error("Unexpected database state");
+    }
+
+    auto& acc = sourceAccount.current().data.account();
+
+    stellar::addBalance(acc.balance, mFeeRefund);
+    header.current().feePool -= mFeeRefund;
+    ltx.commit();
+}
+
+FeePair
+TransactionFrame::computeSorobanResourceFee(
+    uint32_t protocolVersion, SorobanNetworkConfig const& sorobanConfig,
+    Config const& cfg, bool useConsumedRefundableResources) const
+{
+    CxxTransactionResources cxxResources;
+    auto const& txResources = sorobanResources();
+    cxxResources.instructions = txResources.instructions;
+
+    cxxResources.read_entries =
+        static_cast<uint32>(txResources.footprint.readOnly.size() +
+                            txResources.footprint.readWrite.size());
+    cxxResources.write_entries =
+        static_cast<uint32>(txResources.footprint.readWrite.size());
+
+    cxxResources.read_bytes = txResources.readBytes;
+    cxxResources.write_bytes = txResources.writeBytes;
+
+    cxxResources.transaction_size_bytes =
+        static_cast<uint32>(xdr::xdr_size(mEnvelope));
+
+    cxxResources.metadata_size_bytes = txResources.extendedMetaDataSizeBytes;
+
+    if (useConsumedRefundableResources)
+    {
+        // It is possible that consumed metadata size is higher than the
+        // declared size (in such a case the transaction will fail). We
+        // still don't want to overcharge the fees though.
+        if (cxxResources.metadata_size_bytes > mConsumedSorobanMetadataSize)
+        {
+            cxxResources.metadata_size_bytes = mConsumedSorobanMetadataSize;
+        }
+    }
+
+    // This may throw, but only in case of the Core version misconfiguration.
+    return rust_bridge::compute_transaction_resource_fee(
+        cfg.CURRENT_LEDGER_PROTOCOL_VERSION, protocolVersion, cxxResources,
+        sorobanConfig.rustBridgeFeeConfiguration());
+}
+
+int64
+TransactionFrame::sorobanRefundableFee() const
+{
+    if (mEnvelope.type() != ENVELOPE_TYPE_TX || mEnvelope.v1().tx.ext.v() != 1)
+    {
+        return 0;
+    }
+    return mEnvelope.v1().tx.ext.sorobanData().refundableFee;
+}
+
+void
+TransactionFrame::maybeComputeSorobanResourceFee(
+    uint32_t protocolVersion, SorobanNetworkConfig const& sorobanConfig,
+    Config const& cfg)
+{
+    // NB: We recompute the resource fee on-demand in case if the fees change
+    // between the ledger where the transaction has been accepted and the ledger
+    // where it is being applied.
+    if (!isSoroban())
+    {
+        return;
+    }
+    // At this point the frame might not have been validated yet, so
+    // the resources might not be present or Soroban might not be supported
+    // at all. Hence just set the resource fees to 0 and rely on validation
+    // checks to not use this.
+    if (protocolVersionIsBefore(protocolVersion, SOROBAN_PROTOCOL_VERSION) ||
+        mEnvelope.type() != ENVELOPE_TYPE_TX || mEnvelope.v1().tx.ext.v() != 1)
+    {
+        mSorobanResourceFee = std::make_optional<FeePair>();
+        return;
+    }
+    // We always use the declared resource value for the resource fee
+    // computation. The refunds are performed as a separate operation that
+    // doesn't involve modifying any transaction fees.
+    mSorobanResourceFee = std::make_optional<FeePair>(
+        computeSorobanResourceFee(protocolVersion, sorobanConfig, cfg,
+                                  /* useConsumedRefundableResources */ false));
+}
+
+void
+TransactionFrame::consumeRefundableSorobanResources(uint32_t metadataSizeBytes,
+                                                    int64_t rentFee)
+{
+    mConsumedSorobanMetadataSize += metadataSizeBytes;
+    mConsumedRentFee += rentFee;
+}
+
+bool
+TransactionFrame::computeSorobanFeeRefund(
+    uint32_t protocolVersion, SorobanNetworkConfig const& sorobanConfig,
+    Config const& cfg)
+{
+    mFeeRefund = sorobanRefundableFee();
+    if (mFeeRefund < mConsumedRentFee)
+    {
+        return false;
+    }
+    mFeeRefund -= mConsumedRentFee;
+
+    FeePair consumedFee =
+        computeSorobanResourceFee(protocolVersion, sorobanConfig, cfg,
+                                  /* useConsumedRefundableResources */ true);
+    if (mFeeRefund < consumedFee.refundable_fee)
+    {
+        return false;
+    }
+    mFeeRefund -= consumedFee.refundable_fee;
+    return true;
+}
+#endif
 
 bool
 TransactionFrame::isTooEarly(LedgerTxnHeader const& header,
                              uint64_t lowerBoundCloseTimeOffset) const
 {
-    auto const& tb = mEnvelope.type() == ENVELOPE_TYPE_TX_V0
-                         ? mEnvelope.v0().tx.timeBounds
-                         : mEnvelope.v1().tx.timeBounds;
+    auto const tb = getTimeBounds();
     if (tb)
     {
         uint64 closeTime = header.current().scpValue.closeTime;
-        return tb->minTime &&
-               (tb->minTime > (closeTime + lowerBoundCloseTimeOffset));
+        if (tb->minTime &&
+            (tb->minTime > (closeTime + lowerBoundCloseTimeOffset)))
+        {
+            return true;
+        }
     }
+
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_19))
+    {
+        auto const lb = getLedgerBounds();
+        return lb && lb->minLedger > header.current().ledgerSeq;
+    }
+
     return false;
 }
 
@@ -401,31 +844,85 @@ bool
 TransactionFrame::isTooLate(LedgerTxnHeader const& header,
                             uint64_t upperBoundCloseTimeOffset) const
 {
-    auto const& tb = mEnvelope.type() == ENVELOPE_TYPE_TX_V0
-                         ? mEnvelope.v0().tx.timeBounds
-                         : mEnvelope.v1().tx.timeBounds;
+    auto const tb = getTimeBounds();
     if (tb)
     {
         // Prior to consensus, we can pass in an upper bound estimate on when we
         // expect the ledger to close so we don't accept transactions that will
         // expire by the time they are applied
         uint64 closeTime = header.current().scpValue.closeTime;
-        return tb->maxTime &&
-               (tb->maxTime < (closeTime + upperBoundCloseTimeOffset));
+        if (tb->maxTime &&
+            (tb->maxTime < (closeTime + upperBoundCloseTimeOffset)))
+        {
+            return true;
+        }
+    }
+
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_19))
+    {
+        auto const lb = getLedgerBounds();
+        return lb && lb->maxLedger != 0 &&
+               lb->maxLedger <= header.current().ledgerSeq;
     }
     return false;
 }
 
 bool
-TransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx, bool chargeFee,
+TransactionFrame::isTooEarlyForAccount(LedgerTxnHeader const& header,
+                                       LedgerTxnEntry const& sourceAccount,
+                                       uint64_t lowerBoundCloseTimeOffset) const
+{
+    if (protocolVersionIsBefore(header.current().ledgerVersion,
+                                ProtocolVersion::V_19))
+    {
+        return false;
+    }
+
+    auto accountEntry = [&]() -> AccountEntry const& {
+        return sourceAccount.current().data.account();
+    };
+
+    auto accSeqTime = hasAccountEntryExtV3(accountEntry())
+                          ? getAccountEntryExtensionV3(accountEntry()).seqTime
+                          : 0;
+    auto minSeqAge = getMinSeqAge();
+
+    auto lowerBoundCloseTime =
+        header.current().scpValue.closeTime + lowerBoundCloseTimeOffset;
+    if (minSeqAge > lowerBoundCloseTime ||
+        lowerBoundCloseTime - minSeqAge < accSeqTime)
+    {
+        return true;
+    }
+
+    auto accSeqLedger =
+        hasAccountEntryExtV3(accountEntry())
+            ? getAccountEntryExtensionV3(accountEntry()).seqLedger
+            : 0;
+    auto minSeqLedgerGap = getMinSeqLedgerGap();
+
+    auto ledgerSeq = header.current().ledgerSeq;
+    if (minSeqLedgerGap > ledgerSeq ||
+        ledgerSeq - minSeqLedgerGap < accSeqLedger)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+bool
+TransactionFrame::commonValidPreSeqNum(Application& app, AbstractLedgerTxn& ltx,
+                                       bool chargeFee,
                                        uint64_t lowerBoundCloseTimeOffset,
                                        uint64_t upperBoundCloseTimeOffset)
 {
     ZoneScoped;
     // this function does validations that are independent of the account state
     //    (stay true regardless of other side effects)
-    auto header = ltx.loadHeader();
-    uint32_t ledgerVersion = header.current().ledgerVersion;
+
+    uint32_t ledgerVersion = ltx.loadHeader().current().ledgerVersion;
     if ((protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_13) &&
          (mEnvelope.type() == ENVELOPE_TYPE_TX ||
           hasMuxedAccount(mEnvelope))) ||
@@ -436,12 +933,102 @@ TransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx, bool chargeFee,
         return false;
     }
 
+    if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_19) &&
+        mEnvelope.type() == ENVELOPE_TYPE_TX &&
+        mEnvelope.v1().tx.cond.type() == PRECOND_V2)
+    {
+        getResult().result.code(txNOT_SUPPORTED);
+        return false;
+    }
+
+    if (extraSignersExist())
+    {
+        auto const& extraSigners = mEnvelope.v1().tx.cond.v2().extraSigners;
+
+        static_assert(decltype(PreconditionsV2::extraSigners)::max_size() == 2);
+        if (extraSigners.size() == 2 && extraSigners[0] == extraSigners[1])
+        {
+            getResult().result.code(txMALFORMED);
+            return false;
+        }
+
+        for (auto const& signer : extraSigners)
+        {
+            if (signer.type() == SIGNER_KEY_TYPE_ED25519_SIGNED_PAYLOAD &&
+                signer.ed25519SignedPayload().payload.empty())
+            {
+                getResult().result.code(txMALFORMED);
+                return false;
+            }
+        }
+    }
+
     if (getNumOperations() == 0)
     {
         getResult().result.code(txMISSING_OPERATION);
         return false;
     }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    if (!validateSorobanOpsConsistency())
+    {
+        getResult().result.code(txMALFORMED);
+        return false;
+    }
+    if (isSoroban())
+    {
+        if (protocolVersionIsBefore(ledgerVersion, SOROBAN_PROTOCOL_VERSION))
+        {
+            getResult().result.code(txMALFORMED);
+            return false;
+        }
+        if (mEnvelope.type() != ENVELOPE_TYPE_TX ||
+            mEnvelope.v1().tx.ext.v() != 1)
+        {
+            getResult().result.code(txMALFORMED);
+            return false;
+        }
+        auto const& sorobanConfig =
+            app.getLedgerManager().getSorobanNetworkConfig(ltx);
+        if (!validateSorobanResources(sorobanConfig, ledgerVersion))
+        {
+            getResult().result.code(txSOROBAN_RESOURCE_LIMIT_EXCEEDED);
+            return false;
+        }
+
+        auto const& sorobanData = mEnvelope.v1().tx.ext.sorobanData();
+        // Refundable fee shouldn't exceed tx-specified refundable fee.
+        // NB: Overall Soroban resource fee is verified as a part of
+        // the fee bid validation.
+        if (sorobanData.refundableFee < mSorobanResourceFee->refundable_fee)
+        {
+            getResult().result.code(txINSUFFICIENT_FEE);
+            return false;
+        }
+
+        // check for duplicates
+        UnorderedSet<LedgerKey> set;
+        auto checkDuplicates =
+            [&](xdr::xvector<stellar::LedgerKey> const& keys) -> bool {
+            for (auto const& lk : keys)
+            {
+                if (!set.emplace(lk).second)
+                {
+                    getResult().result.code(txMALFORMED);
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        if (!checkDuplicates(sorobanData.resources.footprint.readOnly) ||
+            !checkDuplicates(sorobanData.resources.footprint.readWrite))
+        {
+            return false;
+        }
+    }
+#endif
+    auto header = ltx.loadHeader();
     if (isTooEarly(header, lowerBoundCloseTimeOffset))
     {
         getResult().result.code(txTOO_EARLY);
@@ -453,7 +1040,7 @@ TransactionFrame::commonValidPreSeqNum(AbstractLedgerTxn& ltx, bool chargeFee,
         return false;
     }
 
-    if (chargeFee && getFeeBid() < getMinFee(header.current()))
+    if (chargeFee && getFeeBid() < getMinFee(*this, header.current()))
     {
         getResult().result.code(txINSUFFICIENT_FEE);
         return false;
@@ -487,6 +1074,8 @@ TransactionFrame::processSeqNum(AbstractLedgerTxn& ltx)
             throw std::runtime_error("unexpected sequence number");
         }
         sourceAccount.current().data.account().seqNum = getSeqNum();
+
+        maybeUpdateAccountOnLedgerSeqUpdate(header, sourceAccount);
     }
 }
 
@@ -550,12 +1139,32 @@ TransactionFrame::processSignatures(ValidationType cv,
 bool
 TransactionFrame::isBadSeq(LedgerTxnHeader const& header, int64_t seqNum) const
 {
-    return seqNum == INT64_MAX || seqNum + 1 != getSeqNum() ||
-           getSeqNum() == getStartingSequenceNumber(header);
+    if (getSeqNum() == getStartingSequenceNumber(header))
+    {
+        return true;
+    }
+
+    // If seqNum == INT64_MAX, seqNum >= getSeqNum() is guaranteed to be true
+    // because SequenceNumber is int64, so isBadSeq will always return true in
+    // that case.
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_19))
+    {
+        // Check if we need to relax sequence number checking
+        auto minSeqNum = getMinSeqNum();
+        if (minSeqNum)
+        {
+            return seqNum < *minSeqNum || seqNum >= getSeqNum();
+        }
+    }
+
+    // If we get here, we need to do the strict seqnum check
+    return seqNum == INT64_MAX || seqNum + 1 != getSeqNum();
 }
 
 TransactionFrame::ValidationType
-TransactionFrame::commonValid(SignatureChecker& signatureChecker,
+TransactionFrame::commonValid(Application& app,
+                              SignatureChecker& signatureChecker,
                               AbstractLedgerTxn& ltxOuter,
                               SequenceNumber current, bool applying,
                               bool chargeFee,
@@ -573,7 +1182,7 @@ TransactionFrame::commonValid(SignatureChecker& signatureChecker,
             "Applying transaction with non-current closeTime");
     }
 
-    if (!commonValidPreSeqNum(ltx, chargeFee, lowerBoundCloseTimeOffset,
+    if (!commonValidPreSeqNum(app, ltx, chargeFee, lowerBoundCloseTimeOffset,
                               upperBoundCloseTimeOffset))
     {
         return res;
@@ -601,9 +1210,23 @@ TransactionFrame::commonValid(SignatureChecker& signatureChecker,
 
     res = ValidationType::kInvalidUpdateSeqNum;
 
+    if (isTooEarlyForAccount(header, sourceAccount, lowerBoundCloseTimeOffset))
+    {
+        getResult().result.code(txBAD_MIN_SEQ_AGE_OR_GAP);
+        return res;
+    }
+
     if (!checkSignature(
             signatureChecker, sourceAccount,
             sourceAccount.current().data.account().thresholds[THRESHOLD_LOW]))
+    {
+        getResult().result.code(txBAD_AUTH);
+        return res;
+    }
+
+    if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                  ProtocolVersion::V_19) &&
+        !checkExtraSigners(signatureChecker))
     {
         getResult().result.code(txBAD_AUTH);
         return res;
@@ -631,12 +1254,11 @@ TransactionFrame::commonValid(SignatureChecker& signatureChecker,
 }
 
 void
-TransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx, int64_t baseFee)
+TransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx,
+                                   std::optional<int64_t> baseFee)
 {
     ZoneScoped;
     mCachedAccount.reset();
-
-    CLOG_DEBUG(Tx, "**Kinesis** TransactionFrame::processFeeSeqNum() - baseFee: {}", baseFee);
 
     auto header = ltx.loadHeader();
     resetResults(header.current(), baseFee, true);
@@ -646,6 +1268,7 @@ TransactionFrame::processFeeSeqNum(AbstractLedgerTxn& ltx, int64_t baseFee)
     {
         throw std::runtime_error("Unexpected database state");
     }
+
     auto& acc = sourceAccount.current().data.account();
 
     int64_t& fee = getResult().feeCharged;
@@ -721,30 +1344,40 @@ TransactionFrame::removeAccountSigner(AbstractLedgerTxn& ltxOuter,
 }
 
 bool
-TransactionFrame::checkValid(AbstractLedgerTxn& ltxOuter,
-                             SequenceNumber current, bool chargeFee,
-                             uint64_t lowerBoundCloseTimeOffset,
-                             uint64_t upperBoundCloseTimeOffset)
+TransactionFrame::checkValidWithOptionallyChargedFee(
+    Application& app, AbstractLedgerTxn& ltxOuter, SequenceNumber current,
+    bool chargeFee, uint64_t lowerBoundCloseTimeOffset,
+    uint64_t upperBoundCloseTimeOffset)
 {
     ZoneScoped;
     mCachedAccount.reset();
 
     LedgerTxn ltx(ltxOuter);
-    int64_t minBaseFee = chargeFee ? ltx.loadHeader().current().baseFee : 0;
+    int64_t minBaseFee = ltx.loadHeader().current().baseFee;
+    if (!chargeFee)
+    {
+        minBaseFee = 0;
+    }
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    maybeComputeSorobanResourceFee(
+        ltx.loadHeader().current().ledgerVersion,
+        app.getLedgerManager().getSorobanNetworkConfig(ltx), app.getConfig());
+
+#endif
     resetResults(ltx.loadHeader().current(), minBaseFee, false);
 
     SignatureChecker signatureChecker{ltx.loadHeader().current().ledgerVersion,
                                       getContentsHash(),
                                       getSignatures(mEnvelope)};
     bool res =
-        commonValid(signatureChecker, ltx, current, false, chargeFee,
+        commonValid(app, signatureChecker, ltx, current, false, chargeFee,
                     lowerBoundCloseTimeOffset,
                     upperBoundCloseTimeOffset) == ValidationType::kMaybeValid;
     if (res)
     {
         for (auto& op : mOperations)
         {
-            if (!op->checkValid(signatureChecker, ltx, false))
+            if (!op->checkValid(app, signatureChecker, ltx, false))
             {
                 // it's OK to just fast fail here and not try to call
                 // checkValid on all operations as the resulting object
@@ -764,13 +1397,14 @@ TransactionFrame::checkValid(AbstractLedgerTxn& ltxOuter,
 }
 
 bool
-TransactionFrame::checkValid(AbstractLedgerTxn& ltxOuter,
+TransactionFrame::checkValid(Application& app, AbstractLedgerTxn& ltxOuter,
                              SequenceNumber current,
                              uint64_t lowerBoundCloseTimeOffset,
                              uint64_t upperBoundCloseTimeOffset)
 {
-    return checkValid(ltxOuter, current, true, lowerBoundCloseTimeOffset,
-                      upperBoundCloseTimeOffset);
+    return checkValidWithOptionallyChargedFee(app, ltxOuter, current, true,
+                                              lowerBoundCloseTimeOffset,
+                                              upperBoundCloseTimeOffset);
 }
 
 void
@@ -796,23 +1430,26 @@ TransactionFrame::insertKeysForTxApply(UnorderedSet<LedgerKey>& keys) const
 void
 TransactionFrame::markResultFailed()
 {
-    // Changing "code" normally causes the XDR structure to be destructed, then
-    // a different XDR structure is constructed. However, txFAILED and txSUCCESS
-    // have the same underlying field number so this does not occur.
+    // Changing "code" normally causes the XDR structure to be destructed,
+    // then a different XDR structure is constructed. However, txFAILED and
+    // txSUCCESS have the same underlying field number so this does not
+    // occur.
     getResult().result.code(txFAILED);
 }
 
 bool
-TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx)
+TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
+                        Hash const& sorobanBasePrngSeed)
 {
-    TransactionMeta tm(2);
-    return apply(app, ltx, tm);
+    TransactionMetaFrame tm(ltx.loadHeader().current().ledgerVersion);
+    return apply(app, ltx, tm, sorobanBasePrngSeed);
 }
 
 bool
 TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                                   Application& app, AbstractLedgerTxn& ltx,
-                                  TransactionMeta& outerMeta)
+                                  TransactionMetaFrame& outerMeta,
+                                  Hash const& sorobanBasePrngSeed)
 {
     ZoneScoped;
     auto& internalErrorCounter = app.getMetrics().NewCounter(
@@ -822,25 +1459,39 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
     {
         bool success = true;
 
-        TransactionMeta newMeta(2);
-        newMeta.v2().operations.reserve(getNumOperations());
+        xdr::xvector<OperationMeta> operationMetas;
+        operationMetas.reserve(getNumOperations());
 
         // shield outer scope of any side effects with LedgerTxn
         LedgerTxn ltxTx(ltx);
         uint32_t ledgerVersion = ltxTx.loadHeader().current().ledgerVersion;
-        // We do not want to increase the internal-error metric count for older
-        // ledger versions. The minimum ledger version for which we start
-        // internal-error counting is defined in the app config.
+        // We do not want to increase the internal-error metric count for
+        // older ledger versions. The minimum ledger version for which we
+        // start internal-error counting is defined in the app config.
         reportInternalErrOnException =
             ledgerVersion >=
             app.getConfig().LEDGER_PROTOCOL_MIN_VERSION_INTERNAL_ERROR_REPORT;
         auto& opTimer =
             app.getMetrics().NewTimer({"ledger", "operation", "apply"});
+
+        uint64_t opNum{0};
         for (auto& op : mOperations)
         {
             auto time = opTimer.TimeScope();
             LedgerTxn ltxOp(ltxTx);
-            bool txRes = op->apply(app, signatureChecker, ltxOp);
+
+            Hash subSeed = sorobanBasePrngSeed;
+            // If op can use the seed, we need to compute a sub-seed for it.
+            if (op->isSoroban())
+            {
+                SHA256 subSeedSha;
+                subSeedSha.add(sorobanBasePrngSeed);
+                subSeedSha.add(xdr::xdr_to_opaque(opNum));
+                subSeed = subSeedSha.finish();
+            }
+            ++opNum;
+
+            bool txRes = op->apply(app, signatureChecker, ltxOp, subSeed);
 
             if (!txRes)
             {
@@ -851,9 +1502,10 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                 app.getInvariantManager().checkOnOperationApply(
                     op->getOperation(), op->getResult(), ltxOp.getDelta());
 
-                // The operation meta will be empty if the transaction doesn't
-                // succeed so we may as well not do any work in that case
-                newMeta.v2().operations.emplace_back(ltxOp.getChanges());
+                // The operation meta will be empty if the transaction
+                // doesn't succeed so we may as well not do any work in that
+                // case
+                operationMetas.emplace_back(ltxOp.getChanges());
             }
 
             if (txRes ||
@@ -863,23 +1515,36 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
             }
         }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        if (isSoroban())
+        {
+            success = success &&
+                      computeSorobanFeeRefund(
+                          ledgerVersion,
+                          app.getLedgerManager().getSorobanNetworkConfig(ltx),
+                          app.getConfig());
+        }
+#endif
+
         if (success)
         {
+            LedgerEntryChanges changesAfter;
+
             if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_10))
             {
                 if (!signatureChecker.checkAllSignaturesUsed())
                 {
                     getResult().result.code(txBAD_AUTH_EXTRA);
-                    // this should never happen: malformed transaction should
-                    // not be accepted by nodes
+                    // this should never happen: malformed transaction
+                    // should not be accepted by nodes
                     return false;
                 }
 
-                // if an error occurred, it is responsibility of account's owner
-                // to remove that signer
+                // if an error occurred, it is responsibility of account's
+                // owner to remove that signer
                 LedgerTxn ltxAfter(ltxTx);
                 removeOneTimeSignerFromAllSourceAccounts(ltxAfter);
-                newMeta.v2().txChangesAfter = ltxAfter.getChanges();
+                changesAfter = ltxAfter.getChanges();
                 ltxAfter.commit();
             }
             else if (protocolVersionStartsFrom(ledgerVersion,
@@ -892,19 +1557,35 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
 
             ltxTx.commit();
             // commit -> propagate the meta to the outer scope
-            std::swap(outerMeta.v2().operations, newMeta.v2().operations);
-            std::swap(outerMeta.v2().txChangesAfter,
-                      newMeta.v2().txChangesAfter);
+            outerMeta.pushOperationMetas(std::move(operationMetas));
+            outerMeta.pushTxChangesAfter(std::move(changesAfter));
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+            if (!isSoroban() && !mEvents.empty())
+            {
+                throw std::runtime_error("unexpected events size");
+            }
+
+            outerMeta.pushContractEvents(std::move(mEvents));
+            outerMeta.pushDiagnosticEvents(std::move(mDiagnosticEvents));
+            outerMeta.setReturnValue(std::move(mReturnValue));
+#endif
         }
         else
         {
             markResultFailed();
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+            // If transaction fails, we don't charge for any
+            // refundable resources.
+            mFeeRefund = sorobanRefundableFee();
+            outerMeta.pushDiagnosticEvents(std::move(mDiagnosticEvents));
+#endif
         }
         return success;
     }
-    catch (InvariantDoesNotHold&)
+    catch (InvariantDoesNotHold& e)
     {
-        printErrorAndAbort("Invariant failure while applying operations");
+        printErrorAndAbort("Invariant failure while applying operations: ",
+                           e.what());
     }
     catch (std::bad_alloc& e)
     {
@@ -955,37 +1636,38 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
     // This is only reachable if an exception is thrown
     getResult().result.code(txINTERNAL_ERROR);
 
-    // We only increase the internal-error metric count if the ledger is a newer
-    // version.
+    // We only increase the internal-error metric count if the ledger is a
+    // newer version.
     if (reportInternalErrOnException)
     {
         internalErrorCounter.inc();
     }
 
     // operations and txChangesAfter should already be empty at this point
-    outerMeta.v2().operations.clear();
-    outerMeta.v2().txChangesAfter.clear();
+    outerMeta.clearOperationMetas();
+    outerMeta.clearTxChangesAfter();
     return false;
 }
 
 bool
 TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
-                        TransactionMeta& meta, bool chargeFee)
+                        TransactionMetaFrame& meta, bool chargeFee,
+                        Hash const& sorobanBasePrngSeed)
 {
     ZoneScoped;
     try
     {
         mCachedAccount.reset();
-        SignatureChecker signatureChecker{
-            ltx.loadHeader().current().ledgerVersion, getContentsHash(),
-            getSignatures(mEnvelope)};
+        uint32_t ledgerVersion = ltx.loadHeader().current().ledgerVersion;
+        SignatureChecker signatureChecker{ledgerVersion, getContentsHash(),
+                                          getSignatures(mEnvelope)};
 
         LedgerTxn ltxTx(ltx);
-        // when applying, a failure during tx validation means that
-        // we'll skip trying to apply operations but we'll still
-        // process the sequence number if needed
+        //  when applying, a failure during tx validation means that
+        //  we'll skip trying to apply operations but we'll still
+        //  process the sequence number if needed
         auto cv =
-            commonValid(signatureChecker, ltxTx, 0, true, chargeFee, 0, 0);
+            commonValid(app, signatureChecker, ltxTx, 0, true, chargeFee, 0, 0);
         if (cv >= ValidationType::kInvalidUpdateSeqNum)
         {
             processSeqNum(ltxTx);
@@ -993,18 +1675,21 @@ TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
 
         bool signaturesValid = processSignatures(cv, signatureChecker, ltxTx);
 
-        auto changes = ltxTx.getChanges();
-        std::move(changes.begin(), changes.end(),
-                  std::back_inserter(meta.v2().txChangesBefore));
+        meta.pushTxChangesBefore(ltxTx.getChanges());
         ltxTx.commit();
 
-        bool valid = signaturesValid && cv == ValidationType::kMaybeValid;
+        bool ok = signaturesValid && cv == ValidationType::kMaybeValid;
         try
         {
-            // This should only throw if the logging during exception handling
-            // for applyOperations throws. In that case, we may not have the
-            // correct TransactionResult so we must crash.
-            return valid && applyOperations(signatureChecker, app, ltx, meta);
+            // This should only throw if the logging during exception
+            // handling for applyOperations throws. In that case, we may not
+            // have the correct TransactionResult so we must crash.
+            if (ok)
+            {
+                ok = applyOperations(signatureChecker, app, ltx, meta,
+                                     sorobanBasePrngSeed);
+            }
+            return ok;
         }
         catch (std::exception& e)
         {
@@ -1031,9 +1716,29 @@ TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
 
 bool
 TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
-                        TransactionMeta& meta)
+                        TransactionMetaFrame& meta,
+                        Hash const& sorobanBasePrngSeed)
 {
-    return apply(app, ltx, meta, true);
+    return apply(app, ltx, meta, true, sorobanBasePrngSeed);
+}
+
+void
+TransactionFrame::processPostApply(Application& app,
+                                   AbstractLedgerTxn& ltxOuter,
+                                   TransactionMetaFrame& meta)
+{
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    if (!isSoroban())
+    {
+        return;
+    }
+    // Process Soroban resource fee refund (this is independent of the
+    // transaction success).
+    LedgerTxn ltx(ltxOuter);
+    refundSorobanFee(ltx);
+    meta.pushTxChangesAfter(ltx.getChanges());
+    ltx.commit();
+#endif
 }
 
 StellarMessage

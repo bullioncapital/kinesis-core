@@ -5,6 +5,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "history/HistoryArchive.h"
+#include "ledger/LedgerRange.h"
 #include "main/Application.h"
 #include <optional>
 
@@ -23,7 +24,14 @@ void initializeDatabase(Config cfg);
 void httpCommand(std::string const& command, unsigned short port);
 int selfCheck(Config cfg);
 int mergeBucketList(Config cfg, std::string const& outputDir);
-void showOfflineInfo(Config cfg);
+int dumpLedger(Config cfg, std::string const& outputFile,
+               std::optional<std::string> filterQuery,
+               std::optional<uint32_t> lastModifiedLedgerCount,
+               std::optional<uint64_t> limit,
+               std::optional<std::string> groupBy,
+               std::optional<std::string> aggregate);
+void showOfflineInfo(Config cfg, bool verbose);
+void closeLedgersOffline(Config cfg, bool verbose, size_t nLedgers);
 int reportLastHistoryCheckpoint(Config cfg, std::string const& outputFile);
 #ifdef BUILD_TESTS
 void loadXdr(Config cfg, std::string const& bucketFile);
@@ -44,4 +52,10 @@ bool applyBucketsForLCL(Application& app,
 int publish(Application::pointer app);
 std::string minimalDBForInMemoryMode(Config const& cfg);
 bool canRebuildInMemoryLedgerFromBuckets(uint32_t startAtLedger, uint32_t lcl);
+void setAuthenticatedLedgerHashPair(Application::pointer app,
+                                    LedgerNumHashPair& authPair,
+                                    uint32_t startLedger,
+                                    std::string startHash);
+std::optional<uint32_t>
+getStellarCoreMajorReleaseVersion(std::string const& vstr);
 }

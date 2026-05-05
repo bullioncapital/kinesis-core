@@ -54,6 +54,14 @@ class SurveyManager;
 class OverlayManager
 {
   public:
+    struct AdjustedFlowControlConfig
+    {
+        uint32_t mTotal;
+        uint32_t mBatchSize;
+    };
+
+    static int constexpr MIN_INBOUND_FACTOR = 3;
+
     static std::unique_ptr<OverlayManager> create(Application& app);
 
     // Drop all PeerRecords from the Database
@@ -66,8 +74,11 @@ class OverlayManager
 
     // Send a given message to all peers, via the FloodGate.
     // returns true if message was sent to at least one peer
-    virtual bool broadcastMessage(StellarMessage const& msg,
-                                  bool force = false) = 0;
+    // When passing a transaction message,
+    // the hash of TransactionEnvelope must be passed also for pull mode.
+    virtual bool
+    broadcastMessage(StellarMessage const& msg, bool force = false,
+                     std::optional<Hash> const hash = std::nullopt) = 0;
 
     // Make a note in the FloodGate that a given peer has provided us with a
     // given broadcast message, so that it is inhibited from being resent to
@@ -107,7 +118,7 @@ class OverlayManager
     virtual Peer::pointer getConnectedPeer(PeerBareAddress const& address) = 0;
 
     // Add new pending inbound connection.
-    virtual void addInboundConnection(Peer::pointer peer) = 0;
+    virtual void maybeAddInboundConnection(Peer::pointer peer) = 0;
 
     // Add new pending outbound connection. Return true if connection was added.
     virtual bool addOutboundConnection(Peer::pointer peer) = 0;
@@ -125,6 +136,8 @@ class OverlayManager
     virtual bool acceptAuthenticatedPeer(Peer::pointer peer) = 0;
 
     virtual bool isPreferred(Peer* peer) const = 0;
+    virtual bool isPossiblyPreferred(std::string const& ip) const = 0;
+    virtual bool haveSpaceForConnection(std::string const& ip) const = 0;
 
     virtual bool isFloodMessage(StellarMessage const& msg) = 0;
 
@@ -138,6 +151,9 @@ class OverlayManager
 
     // Return the current in-memory set of pending peers.
     virtual std::vector<Peer::pointer> getPendingPeers() const = 0;
+
+    // return the counter of live inbound peers (shared with TCPPeer)
+    virtual std::shared_ptr<int> getLiveInboundPeersCounter() const = 0;
 
     // Return number of pending peers
     virtual int getPendingPeersCount() const = 0;
@@ -155,9 +171,6 @@ class OverlayManager
 
     // Return number of authenticated peers
     virtual int getAuthenticatedPeersCount() const = 0;
-
-    // Return the number of flow-contolled peers
-    virtual int64_t getFlowControlPercentage() const = 0;
 
     // Attempt to connect to a peer identified by peer address.
     virtual void connectTo(PeerBareAddress const& address) = 0;
@@ -186,11 +199,14 @@ class OverlayManager
     virtual void recordMessageMetric(StellarMessage const& stellarMsg,
                                      Peer::pointer peer) = 0;
 
-    virtual void updateFloodRecord(StellarMessage const& oldMsg,
-                                   StellarMessage const& newMsg) = 0;
+    virtual void recordTxPullLatency(Hash const& hash,
+                                     std::shared_ptr<Peer> peer) = 0;
+
+    virtual size_t getMaxAdvertSize() const = 0;
 
     virtual ~OverlayManager()
     {
     }
+    virtual AdjustedFlowControlConfig getFlowControlBytesConfig() const = 0;
 };
 }

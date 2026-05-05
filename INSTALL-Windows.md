@@ -12,11 +12,33 @@
     * Windows 10 SDK
     * C++/CLI Support
 
+# Configure Git
+
+Some functionality depends on Linux file endings, as such you need to configure git with:
+```
+[core]
+        eol = lf
+        autocrlf = input
+```
+NB: if you change this setting in an existing working folder, you need to reset it to have the proper line ending.
+This can be done with the following sequence:
+```
+git checkout-index --force --all
+git rm --cached -r .
+git reset --hard
+```
+
+## Download and install rust
+
+Easiest is to use rustup, found on [rust-lang.org](https://www.rust-lang.org/tools/install).
+
+Install the x64 MSVC toolchain (`stable-x86_64-pc-windows-msvc`), and make sure that `rustc.exe` is in your `PATH`.
+
 ## Download and install PostgreSQL
 
 Note: if you do not want to use postgres you can select `DebugNoPostgres` as the build target.
 
-Get version 9.5 from https://www.enterprisedb.com/download-postgresql-binaries
+Get version 15 from https://www.enterprisedb.com/download-postgresql-binaries
 
 The default project file defines USE_POSTGRES and links against it.
 * Pick a directory for the database
@@ -24,7 +46,7 @@ The default project file defines USE_POSTGRES and links against it.
 * Accept the default port (5432)
 * Accept `default` for the locale (not clear if anything depends on this. The `default` locale will
 presumably depend on your operating system's setting might cause inconsistencies)
-* Add `c:\Program Files\PostgreSQL\9.5\bin` to your PATH (else the binary will fail to start,
+* Add `c:\Program Files\PostgreSQL\15\lib` to your PATH (else the binary will fail to start,
     not finding `libpq.dll`)
 * If you install postgres in a different folder, you will have to update the project file in two places:
     * "additional include locations" and
@@ -40,6 +62,7 @@ presumably depend on your operating system's setting might cause inconsistencies
       * `Bison`
       * `gcc`
       * `sed`
+      * `perl`
       * `curl`
     * Add `C:\MinGW\msys\1.0\bin;C:\MinGW\bin` to the end of `%PATH%`
 * Download and install cygwin 64 bit build from https://cygwin.com/install.html
@@ -49,6 +72,7 @@ presumably depend on your operating system's setting might cause inconsistencies
         * `curl` (command line)
         * `gcc-core`
         * `sed`
+        * `perl`
     * Add `c:\cygwin64\bin` to the end of `%PATH%` (at least for Visual Studio)
 
     > Note: if you're going to use 'cp'and 'mkdir' from cygwin (tests do),
@@ -72,8 +96,8 @@ If you do not have cURL installed
 ## clang-format
 
 For making changes to the code, you should install the clang-format tool and Visual Studio extension, you can find both at http://llvm.org/builds/
-* note that the version of clang-format used currently is 8.0 (other versions may not format the same way).
-* we recommend downloading 8.0 from http://releases.llvm.org/download.html
+* note that the version of clang-format used currently is 12.0 (other versions may not format the same way).
+* we recommend downloading 12.0 from http://releases.llvm.org/download.html
 
 # Build on Windows using the Windows Subsystem for Linux
 To setup the subsystem, go to https://msdn.microsoft.com/en-us/commandline/wsl/install_guide

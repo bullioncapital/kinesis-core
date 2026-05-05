@@ -5,7 +5,15 @@
 #include "crypto/CryptoError.h"
 #include "invariant/InvariantDoesNotHold.h"
 #include "ledger/NonSociRelatedException.h"
+#include "main/ApplicationUtils.h"
 #include "main/CommandLine.h"
+#include "main/Config.h"
+#include "main/StellarCoreVersion.h"
+#include <regex>
+#include <stdexcept>
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+#include "rust/RustBridge.h"
+#endif
 #include "util/Backtrace.h"
 #include "util/FileSystemException.h"
 #include "util/Logging.h"
@@ -18,6 +26,9 @@
 #include <sodium/core.h>
 #include <system_error>
 #include <xdrpp/marshal.h>
+#ifdef USE_TRACY
+#include <TracyC.h>
+#endif
 
 namespace stellar
 {
@@ -143,6 +154,93 @@ outOfMemory()
 }
 }
 
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+// We would like this to be a static check but it seems like cxx.rs isn't going
+// to let us export static constants so we do it first thing during startup.
+//
+// The file hashes used by the C++ side are defined in a build-system-generated
+// file XDRFilesSha256.cpp. We declare this symbol here and check it against the
+// Rust hashes in checkXDRFileIdentity.
+namespace stellar
+{
+extern const std::vector<std::pair<std::filesystem::path, std::string>>
+    XDR_FILES_SHA256;
+}
+
+void
+checkXDRFileIdentity()
+{
+    using namespace stellar::rust_bridge;
+    rust::Vec<XDRFileHash> rustHashes = get_xdr_hashes().curr;
+    for (auto const& cpp : stellar::XDR_FILES_SHA256)
+    {
+        if (cpp.first.empty())
+        {
+            continue;
+        }
+        bool found = false;
+        for (auto const& rust : rustHashes)
+        {
+            std::filesystem::path rustPath(
+                std::string(rust.file.cbegin(), rust.file.cend()));
+            if (rustPath.filename() == cpp.first.filename())
+            {
+                std::string rustHash(rust.hash.begin(), rust.hash.end());
+                if (rustHash == cpp.second)
+                {
+                    found = true;
+                    break;
+                }
+                else
+                {
+                    throw std::runtime_error(fmt::format(
+                        "XDR hash mismatch: rust has {}={}, C++ has {}={}",
+                        rustPath, rustHash, cpp.first, cpp.second));
+                }
+            }
+        }
+        if (!found)
+        {
+            throw std::runtime_error(
+                fmt::format("XDR hash missing: C++ has {}={} with no "
+                            "corresponding Rust file",
+                            cpp.first, cpp.second));
+        }
+    }
+
+    if (stellar::XDR_FILES_SHA256.size() != rustHashes.size())
+    {
+        throw std::runtime_error(
+            fmt::format("Number of xdr hashes don't match between C++ and "
+                        "Rust. C++ size = {} and Rust size = {}.",
+                        stellar::XDR_FILES_SHA256.size(), rustHashes.size()));
+    }
+}
+
+void
+checkStellarCoreMajorVersionProtocolIdentity()
+{
+    auto vers =
+        stellar::getStellarCoreMajorReleaseVersion(STELLAR_CORE_VERSION);
+    if (vers)
+    {
+        if (*vers != stellar::Config::CURRENT_LEDGER_PROTOCOL_VERSION)
+        {
+            throw std::runtime_error(
+                fmt::format("stellar-core version {} has major version {} but "
+                            "CURRENT_LEDGER_PROTOCOL_VERSION is {}",
+                            STELLAR_CORE_VERSION, *vers,
+                            stellar::Config::CURRENT_LEDGER_PROTOCOL_VERSION));
+        }
+    }
+    else
+    {
+        std::cerr << "Warning: running non-release version "
+                  << STELLAR_CORE_VERSION << " of stellar-core" << std::endl;
+    }
+}
+#endif
+
 int
 main(int argc, char* const* argv)
 {
@@ -154,7 +252,15 @@ main(int argc, char* const* argv)
     // At least print a backtrace in any circumstance
     // that would call std::terminate
     std::set_terminate(printBacktraceAndAbort);
-
+#ifdef USE_TRACY
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    // The rust tracy client library is fussy about trying
+    // to own the tracy startup path.
+    rust_bridge::start_tracy();
+#else
+    ___tracy_startup_profiler();
+#endif
+#endif
     Logging::init();
     if (sodium_init() != 0)
     {
@@ -164,6 +270,17 @@ main(int argc, char* const* argv)
     shortHash::initialize();
     randHash::initialize();
     xdr::marshaling_stack_limit = 1000;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    // TODO: This should only be enabled after we tag a v20 version
+    // checkStellarCoreMajorVersionProtocolIdentity();
+    rust_bridge::check_lockfile_has_expected_dep_trees(
+        Config::CURRENT_LEDGER_PROTOCOL_VERSION);
+    checkXDRFileIdentity();
+#endif
 
-    return handleCommandLine(argc, argv);
+    int res = handleCommandLine(argc, argv);
+#ifdef USE_TRACY
+    ___tracy_shutdown_profiler();
+#endif
+    return res;
 }

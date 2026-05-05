@@ -20,6 +20,9 @@
 #include "main/StellarCoreVersion.h"
 #include "main/dumpxdr.h"
 #include "overlay/OverlayManager.h"
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+#include "rust/RustBridge.h"
+#endif
 #include "scp/QuorumSetUtils.h"
 #include "src/catchup/simulation/TxSimApplyTransactionsWork.h"
 #include "src/transactions/simulation/TxSimScaleBucketlistWork.h"
@@ -64,6 +67,7 @@ class CommandLine
         LogLevel mLogLevel{LogLevel::LVL_INFO};
         std::vector<std::string> mMetrics;
         std::string mConfigFile;
+        bool mConsoleLog{false};
 
         Config getConfig(bool logToFile = true) const;
     };
@@ -101,7 +105,8 @@ const std::vector<std::pair<std::string, bool>>
     CommandLine::ConfigOption::COMMON_OPTIONS{{"--conf", true},
                                               {"--ll", true},
                                               {"--metric", true},
-                                              {"--help", false}};
+                                              {"--help", false},
+                                              {"--console", false}};
 
 class ParserWithValidation
 {
@@ -204,6 +209,12 @@ logLevelParser(LogLevel& value)
 }
 
 clara::Opt
+consoleParser(bool& console)
+{
+    return clara::Opt{console}["--console"]("enable logging to console");
+}
+
+clara::Opt
 metricsParser(std::vector<std::string>& value)
 {
     return clara::Opt{value, "METRIC-NAME"}["--metric"](
@@ -275,6 +286,7 @@ configurationParser(CommandLine::ConfigOption& configOption)
 {
     return logLevelParser(configOption.mLogLevel) |
            metricsParser(configOption.mMetrics) |
+           consoleParser(configOption.mConsoleLog) |
            clara::Opt{configOption.mConfigFile,
                       "FILE-NAME"}["--conf"](fmt::format(
                FMT_STRING("specify a config file ('{}' for STDIN, default "
@@ -353,25 +365,83 @@ maybeEnableInMemoryMode(Config& config, bool inMemory, uint32_t startAtLedger,
 }
 
 clara::Opt
+ledgerHashParser(std::string& ledgerHash)
+{
+    return clara::Opt{ledgerHash, "HASH"}["--trusted-hash"](
+        "Hash of the ledger to catchup to");
+}
+
+clara::Opt
+forceUntrustedCatchup(bool& force)
+{
+    return clara::Opt{force}["--force-untrusted-catchup"](
+        "force unverified catchup");
+}
+
+clara::Opt
 inMemoryParser(bool& inMemory)
 {
     return clara::Opt{inMemory}["--in-memory"](
         "store working ledger in memory rather than database");
-};
+}
 
 clara::Opt
 startAtLedgerParser(uint32_t& startAtLedger)
 {
     return clara::Opt{startAtLedger, "LEDGER"}["--start-at-ledger"](
         "start in-memory run with replay from historical ledger number");
-};
+}
 
 clara::Opt
 startAtHashParser(std::string& startAtHash)
 {
     return clara::Opt{startAtHash, "HASH"}["--start-at-hash"](
         "start in-memory run with replay from historical ledger hash");
-};
+}
+
+clara::Opt
+filterQueryParser(std::optional<std::string>& filterQuery)
+{
+    return clara::Opt{[&](std::string const& arg) { filterQuery = arg; },
+                      "FILTER-QUERY"}["--filter-query"](
+        "query to filter ledger entries");
+}
+
+clara::Opt
+lastModifiedLedgerCountParser(
+    std::optional<std::uint32_t>& lastModifiedLedgerCount)
+{
+    return clara::Opt{[&](std::string const& arg) {
+                          lastModifiedLedgerCount = std::stoul(arg);
+                      },
+                      "LAST-LEDGERS"}["--last-ledgers"](
+        "filter out ledger entries that were modified more than this many "
+        "ledgers ago");
+}
+
+clara::Opt
+groupByParser(std::optional<std::string>& groupBy)
+{
+    return clara::Opt{[&](std::string const& arg) { groupBy = arg; },
+                      "GROUP-BY-EXPR"}["--group-by"](
+        "comma-separated fields to group the results by");
+}
+
+clara::Opt
+aggregateParser(std::optional<std::string>& aggregate)
+{
+    return clara::Opt{[&](std::string const& arg) { aggregate = arg; },
+                      "AGGREGATE-EXPR"}["--agg"](
+        "comma-separated aggregate expressions");
+}
+
+clara::Opt
+limitParser(std::optional<std::uint64_t>& limit)
+{
+    return clara::Opt{[&](std::string const& arg) { limit = std::stoull(arg); },
+                      "LIMIT"}["--limit"](
+        "process only this many recent ledger entries (not *most* recent)");
+}
 
 int
 runWithHelp(CommandLineArgs const& args,
@@ -418,7 +488,8 @@ runWithHelp(CommandLineArgs const& args,
 }
 
 CatchupConfiguration
-parseCatchup(std::string const& catchup, bool extraValidation)
+parseCatchup(std::string const& catchup, std::string const& hash,
+             bool extraValidation)
 {
     auto static errorMessage =
         "catchup value should be passed as <DESTINATION-LEDGER/LEDGER-COUNT>, "
@@ -436,8 +507,18 @@ parseCatchup(std::string const& catchup, bool extraValidation)
         auto mode = extraValidation
                         ? CatchupConfiguration::Mode::OFFLINE_COMPLETE
                         : CatchupConfiguration::Mode::OFFLINE_BASIC;
-        return {parseLedger(catchup.substr(0, separatorIndex)),
-                parseLedgerCount(catchup.substr(separatorIndex + 1)), mode};
+        auto ledger = parseLedger(catchup.substr(0, separatorIndex));
+        auto count = parseLedgerCount(catchup.substr(separatorIndex + 1));
+        if (hash.empty())
+        {
+            return CatchupConfiguration(ledger, count, mode);
+        }
+        else
+        {
+            return CatchupConfiguration(
+                {ledger, std::make_optional<Hash>(hexToBin256(hash))}, count,
+                mode);
+        }
     }
     catch (std::exception&)
     {
@@ -487,12 +568,20 @@ CommandLine::ConfigOption::getConfig(bool logToFile) const
 
     if (logToFile)
     {
-        if (config.LOG_FILE_PATH.size())
+        if (!config.LOG_FILE_PATH.empty())
+        {
             Logging::setLoggingToFile(config.LOG_FILE_PATH);
+        }
         if (config.LOG_COLOR)
+        {
             Logging::setLoggingColor(true);
-        Logging::setLogLevel(mLogLevel, nullptr);
+        }
     }
+
+    bool consoleLogging =
+        !logToFile || config.LOG_FILE_PATH.empty() || mConsoleLog;
+    Logging::setLoggingToConsole(consoleLogging);
+    Logging::setLogLevel(mLogLevel, nullptr);
 
     config.REPORT_METRICS = mMetrics;
     return config;
@@ -635,14 +724,14 @@ runCatchup(CommandLineArgs const& args)
     bool completeValidation = false;
     bool inMemory = false;
     bool forceBack = false;
-    uint32_t startAtLedger = 0;
-    std::string startAtHash;
+    bool forceUntrusted = false;
+    std::string hash;
     std::string stream;
 
     auto validateCatchupString = [&] {
         try
         {
-            parseCatchup(catchupString, completeValidation);
+            parseCatchup(catchupString, hash, completeValidation);
             return std::string{};
         }
         catch (std::runtime_error& e)
@@ -695,7 +784,7 @@ runCatchup(CommandLineArgs const& args)
          trustedCheckpointHashesParser(trustedCheckpointHashesFile),
          outputFileParser(outputFile), disableBucketGCParser(disableBucketGC),
          validationParser(completeValidation), inMemoryParser(inMemory),
-         startAtLedgerParser(startAtLedger), startAtHashParser(startAtHash),
+         ledgerHashParser(hash), forceUntrustedCatchup(forceUntrusted),
          metadataOutputStreamParser(stream), forceBackParser(forceBack)},
         [&] {
             auto config = configOption.getConfig();
@@ -716,8 +805,9 @@ runCatchup(CommandLineArgs const& args)
                 config.AUTOMATIC_MAINTENANCE_COUNT = MAINTENANCE_LEDGER_COUNT;
             }
 
-            maybeEnableInMemoryMode(config, inMemory, startAtLedger,
-                                    startAtHash,
+            // --start-at-ledger and --start-at-hash aren't allowed in catchup,
+            // so pass defaults values
+            maybeEnableInMemoryMode(config, inMemory, 0, "",
                                     /* persistMinimalData */ false);
             maybeSetMetadataOutputStream(config, stream);
 
@@ -733,7 +823,15 @@ runCatchup(CommandLineArgs const& args)
                 }
 
                 CatchupConfiguration cc =
-                    parseCatchup(catchupString, completeValidation);
+                    parseCatchup(catchupString, hash, completeValidation);
+
+                if (!trustedCheckpointHashesFile.empty() && !hash.empty())
+                {
+                    throw std::runtime_error(
+                        "Either --trusted-checkpoint-hashes or --trusted-hash "
+                        "should be specified, but not both");
+                }
+
                 if (!trustedCheckpointHashesFile.empty())
                 {
                     auto const& hm = app->getHistoryManager();
@@ -778,6 +876,7 @@ runCatchup(CommandLineArgs const& args)
                         ps.setState(PersistentState::kLastClosedLedger, "");
                         ps.setState(PersistentState::kHistoryArchiveState, "");
                         ps.setState(PersistentState::kLastSCPData, "");
+                        ps.setState(PersistentState::kLastSCPDataXDR, "");
                         ps.setState(PersistentState::kLedgerUpgrades, "");
                     }
 
@@ -799,6 +898,15 @@ runCatchup(CommandLineArgs const& args)
                         "Resetting ledger state to genesis before catching up");
                     app->resetLedgerState();
                     lm.startNewLedger();
+                }
+                else if (hash.empty() && !forceUntrusted)
+                {
+                    CLOG_WARNING(
+                        History,
+                        "Unsafe command: use --trusted-checkpoint-hashes or "
+                        "--trusted-hash to ensure catchup integrity. If you "
+                        "want to run untrusted catchup, use "
+                        "--force-untrusted-catchup.");
                 }
 
                 Json::Value catchupInfo;
@@ -849,44 +957,16 @@ runWriteVerifiedCheckpointHashes(CommandLineArgs const& args)
 
             auto app = Application::create(clock, cfg, false);
             app->start();
-            auto const& lm = app->getLedgerManager();
-            auto const& hm = app->getHistoryManager();
+
             auto& io = clock.getIOContext();
             asio::io_context::work mainWork(io);
             LedgerNumHashPair authPair;
-            auto tryCheckpoint = [&](uint32_t seq, Hash h) {
-                if (hm.isLastLedgerInCheckpoint(seq))
-                {
-                    LOG_INFO(
-                        DEFAULT_LOG,
-                        "Found authenticated checkpoint hash {} for ledger {}",
-                        hexAbbrev(h), seq);
-                    authPair.first = seq;
-                    authPair.second = std::make_optional<Hash>(h);
-                }
-                else if (authPair.first != seq)
-                {
-                    authPair.first = seq;
-                    LOG_INFO(DEFAULT_LOG,
-                             "Ledger {} is not a checkpoint boundary, waiting.",
-                             seq);
-                }
-            };
-
-            if (startLedger != 0 && !startHash.empty())
-            {
-                Hash h = hexToBin256(startHash);
-                tryCheckpoint(startLedger, h);
-            }
 
             while (!(io.stopped() || authPair.second))
             {
                 clock.crank();
-                if (lm.isSynced())
-                {
-                    auto const& lhe = lm.getLastClosedLedgerHeader();
-                    tryCheckpoint(lhe.header.ledgerSeq, lhe.hash);
-                }
+                setAuthenticatedLedgerHashPair(app, authPair, startLedger,
+                                               startHash);
             }
             if (authPair.second)
             {
@@ -1034,6 +1114,31 @@ runMergeBucketList(CommandLineArgs const& args)
 }
 
 int
+runDumpLedger(CommandLineArgs const& args)
+{
+    CommandLine::ConfigOption configOption;
+    std::string outputFile;
+    std::optional<std::string> filterQuery;
+    std::optional<uint32_t> lastModifiedLedgerCount;
+    std::optional<uint64_t> limit;
+    std::optional<std::string> groupBy;
+    std::optional<std::string> aggregate;
+    return runWithHelp(args,
+                       {configurationParser(configOption),
+                        outputFileParser(outputFile).required(),
+                        filterQueryParser(filterQuery),
+                        lastModifiedLedgerCountParser(lastModifiedLedgerCount),
+                        limitParser(limit), groupByParser(groupBy),
+                        aggregateParser(aggregate)},
+                       [&] {
+                           return dumpLedger(configOption.getConfig(),
+                                             outputFile, filterQuery,
+                                             lastModifiedLedgerCount, limit,
+                                             groupBy, aggregate);
+                       });
+}
+
+int
 runNewDB(CommandLineArgs const& args)
 {
     CommandLine::ConfigOption configOption;
@@ -1096,9 +1201,26 @@ runOfflineInfo(CommandLineArgs const& args)
     CommandLine::ConfigOption configOption;
 
     return runWithHelp(args, {configurationParser(configOption)}, [&] {
-        showOfflineInfo(configOption.getConfig());
+        showOfflineInfo(configOption.getConfig(), true);
         return 0;
     });
+}
+
+int
+runOfflineClose(CommandLineArgs const& args)
+{
+    CommandLine::ConfigOption configOption;
+    size_t nLedgers{0};
+
+    ParserWithValidation numLedgersParser{
+        clara::Arg(nLedgers, "NUM_LEDGERS").required(),
+        [&] { return nLedgers > 0 ? "" : "Ledger count must be non-zero"; }};
+
+    return runWithHelp(
+        args, {configurationParser(configOption), numLedgersParser}, [&] {
+            closeLedgersOffline(configOption.getConfig(), true, nLedgers);
+            return 0;
+        });
 }
 
 int
@@ -1280,6 +1402,81 @@ int
 runVersion(CommandLineArgs const&)
 {
     std::cout << STELLAR_CORE_VERSION << std::endl;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    std::cout << "rust version: " << rust_bridge::get_rustc_version().c_str()
+              << std::endl;
+
+    std::cout << "soroban-env-host: " << std::endl;
+
+    std::cout << "    curr:" << std::endl;
+    std::cout << "        package version: "
+              << rust_bridge::get_soroban_env_pkg_versions().curr.c_str()
+              << std::endl;
+
+    std::cout << "        git version: "
+              << rust_bridge::get_soroban_env_git_versions().curr.c_str()
+              << std::endl;
+
+    std::cout << "        ledger protocol version: "
+              << rust_bridge::get_soroban_env_ledger_protocol_versions().curr
+              << std::endl;
+
+    std::cout << "        pre-release version: "
+              << rust_bridge::get_soroban_env_pre_release_versions().curr
+              << std::endl;
+
+    std::cout << "        rs-stellar-xdr:" << std::endl;
+
+    std::cout
+        << "            package version: "
+        << rust_bridge::get_soroban_xdr_bindings_pkg_versions().curr.c_str()
+        << std::endl;
+    std::cout
+        << "            git version: "
+        << rust_bridge::get_soroban_xdr_bindings_git_versions().curr.c_str()
+        << std::endl;
+    std::cout << "            base XDR git version: "
+              << rust_bridge::get_soroban_xdr_bindings_base_xdr_git_versions()
+                     .curr.c_str()
+              << std::endl;
+
+    if (rust_bridge::compiled_with_soroban_prev())
+    {
+        std::cout << "    prev:" << std::endl;
+        std::cout << "        package version: "
+                  << rust_bridge::get_soroban_env_pkg_versions().prev.c_str()
+                  << std::endl;
+
+        std::cout << "        git version: "
+                  << rust_bridge::get_soroban_env_git_versions().prev.c_str()
+                  << std::endl;
+
+        std::cout
+            << "        ledger protocol version: "
+            << rust_bridge::get_soroban_env_ledger_protocol_versions().prev
+            << std::endl;
+
+        std::cout << "        pre-release version: "
+                  << rust_bridge::get_soroban_env_pre_release_versions().prev
+                  << std::endl;
+
+        std::cout << "        rs-stellar-xdr:" << std::endl;
+
+        std::cout
+            << "            package version: "
+            << rust_bridge::get_soroban_xdr_bindings_pkg_versions().prev.c_str()
+            << std::endl;
+        std::cout
+            << "            git version: "
+            << rust_bridge::get_soroban_xdr_bindings_git_versions().prev.c_str()
+            << std::endl;
+        std::cout
+            << "            base XDR git version: "
+            << rust_bridge::get_soroban_xdr_bindings_base_xdr_git_versions()
+                   .prev.c_str()
+            << std::endl;
+    }
+#endif
     return 0;
 }
 
@@ -1375,7 +1572,8 @@ runGenerateOrSimulateTxs(CommandLineArgs const& args, bool generate)
         if (!generate)
         {
             // Check if special `simulate` archive is present in the config
-            // If so, ensure we're getting historical data from it exclusively
+            // If so, ensure we're getting historical data from it
+            // exclusively
             if (found != config.HISTORY.end())
             {
                 auto simArchive = *found;
@@ -1423,8 +1621,8 @@ runGenerateOrSimulateTxs(CommandLineArgs const& args, bool generate)
         app->getWorkScheduler().executeWork<WorkSequence>(
             "download-simulate-seq", seq);
 
-        // Publish all simulated transactions to a simulated archive to avoid
-        // re-generating and signing them
+        // Publish all simulated transactions to a simulated archive to
+        // avoid re-generating and signing them
         if (generate)
         {
             publish(app);
@@ -1570,12 +1768,14 @@ runFuzz(CommandLineArgs const& args)
     std::string fileName;
     std::string outputFile;
     int processID = 0;
+    bool consoleLog = false;
     FuzzerMode fuzzerMode{FuzzerMode::OVERLAY};
     std::string fuzzerModeArg = "overlay";
 
     return runWithHelp(args,
                        {logLevelParser(logLevel), metricsParser(metrics),
-                        fileNameParser(fileName), outputFileParser(outputFile),
+                        consoleParser(consoleLog), fileNameParser(fileName),
+                        outputFileParser(outputFile),
                         processIDParser(processID),
                         fuzzerModeParser(fuzzerModeArg, fuzzerMode)},
                        [&] {
@@ -1631,6 +1831,8 @@ handleCommandLine(int argc, char* const* argv)
          {"convert-id", "displays ID in all known forms", runConvertId},
          {"diag-bucket-stats", "reports statistics on the content of a bucket",
           diagBucketStats},
+         {"dump-ledger", "dumps the current ledger state as JSON for debugging",
+          runDumpLedger},
          {"dump-xdr", "dump an XDR file, for debugging", runDumpXDR},
          {"encode-asset", "Print an encoded asset in base 64 for debugging",
           runEncodeAsset},
@@ -1647,6 +1849,9 @@ handleCommandLine(int argc, char* const* argv)
          {"new-hist", "initialize history archives", runNewHist},
          {"offline-info", "return information for an offline instance",
           runOfflineInfo},
+         {"offline-close",
+          "close a number of ledgers offline, generating checkpoints",
+          runOfflineClose},
          {"print-xdr", "pretty-print one XDR envelope, then quit", runPrintXdr},
          {"publish",
           "execute publish of all items remaining in publish queue without "

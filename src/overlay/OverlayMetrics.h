@@ -60,11 +60,20 @@ struct OverlayMetrics
     medida::Timer& mRecvSurveyRequestTimer;
     medida::Timer& mRecvSurveyResponseTimer;
 
+    medida::Timer& mRecvFloodAdvertTimer;
+    medida::Timer& mRecvFloodDemandTimer;
+
     medida::Timer& mMessageDelayInWriteQueueTimer;
     medida::Timer& mMessageDelayInAsyncWriteTimer;
 
     medida::Timer& mOutboundQueueDelaySCP;
     medida::Timer& mOutboundQueueDelayTxs;
+    medida::Timer& mOutboundQueueDelayAdvert;
+    medida::Timer& mOutboundQueueDelayDemand;
+    medida::Meter& mOutboundQueueDropSCP;
+    medida::Meter& mOutboundQueueDropTxs;
+    medida::Meter& mOutboundQueueDropAdvert;
+    medida::Meter& mOutboundQueueDropDemand;
 
     medida::Meter& mSendErrorMeter;
     medida::Meter& mSendHelloMeter;
@@ -84,10 +93,25 @@ struct OverlayMetrics
     medida::Meter& mSendSurveyRequestMeter;
     medida::Meter& mSendSurveyResponseMeter;
 
+    medida::Meter& mSendFloodAdvertMeter;
+    medida::Meter& mSendFloodDemandMeter;
+    medida::Meter& mMessagesDemanded;
+    medida::Meter& mMessagesFulfilledMeter;
+    medida::Meter& mBannedMessageUnfulfilledMeter;
+    medida::Meter& mUnknownMessageUnfulfilledMeter;
+    medida::Timer& mTxPullLatency;
+    medida::Timer& mPeerTxPullLatency;
+    medida::Timer& mAdvertQueueDelay;
+
+    medida::Meter& mDemandTimeouts;
+    medida::Meter& mPulledRelevantTxs;
+    medida::Meter& mPulledIrrelevantTxs;
+
+    medida::Meter& mAbandonedDemandMeter;
+
     medida::Meter& mMessagesBroadcast;
     medida::Counter& mPendingPeersSize;
     medida::Counter& mAuthenticatedPeersSize;
-    medida::Counter& mFlowControlPercent;
 
     medida::Meter& mUniqueFloodBytesRecv;
     medida::Meter& mDuplicateFloodBytesRecv;

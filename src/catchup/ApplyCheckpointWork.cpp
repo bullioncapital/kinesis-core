@@ -98,7 +98,7 @@ ApplyCheckpointWork::openInputFiles()
     mFilesOpen = true;
 }
 
-TxSetFramePtr
+TxSetFrameConstPtr
 ApplyCheckpointWork::getCurrentTxSet()
 {
     ZoneScoped;
@@ -124,13 +124,20 @@ ApplyCheckpointWork::getCurrentTxSet()
         {
             releaseAssert(mTxHistoryEntry.ledgerSeq == seq);
             CLOG_DEBUG(History, "Loaded txset for ledger {}", seq);
-            return std::make_shared<TxSetFrame>(mApp.getNetworkID(),
-                                                mTxHistoryEntry.txSet);
+            if (mTxHistoryEntry.ext.v() == 0)
+            {
+                return TxSetFrame::makeFromWire(mApp, mTxHistoryEntry.txSet);
+            }
+            else
+            {
+                return TxSetFrame::makeFromWire(
+                    mApp, mTxHistoryEntry.ext.generalizedTxSet());
+            }
         }
     } while (mTxIn && mTxIn.readOne(mTxHistoryEntry));
 
     CLOG_DEBUG(History, "Using empty txset for ledger {}", seq);
-    return std::make_shared<TxSetFrame>(lm.getLastClosedLedgerHeader().hash);
+    return TxSetFrame::makeEmpty(lm.getLastClosedLedgerHeader());
 }
 
 std::shared_ptr<LedgerCloseData>
@@ -209,7 +216,7 @@ ApplyCheckpointWork::getNextLedgerCloseData()
 
     auto txset = getCurrentTxSet();
     CLOG_DEBUG(History, "Ledger {} has {} transactions", header.ledgerSeq,
-               txset->sizeTx());
+               txset->sizeTxTotal());
 
     // We've verified the ledgerHeader (in the "trusted part of history"
     // sense) in CATCHUP_VERIFY phase; we now need to check that the

@@ -31,12 +31,20 @@ bucket.batch.objectsadded                | meter     | number of objects added p
 bucket.memory.shared                     | counter   | number of buckets referenced (excluding publish queue)
 bucket.merge-time.level-<X>              | timer     | time to merge two buckets on level <X>
 bucket.snap.merge                        | timer     | time to merge two buckets
+bucketlistDB.bloom.lookups               | meter     | number of bloom filter lookups
+bucketlistDB.bloom.misses                | meter     | number of bloom filter false positives
+bucketlistDB.query.loads                 | meter     | number of BucketListDB load queries
+bucketlistDB.bulk.inflationWinners       | timer     | time to load inflation winners
+bucketlistDB.bulk.poolshareTrustlines    | timer     | time to load poolshare trustlines by accountID and assetID
+bucketlistDB.bulk.prefetch               | timer     | time to prefetch
+bucketlistDB.point.<X>                   | timer     | time to load single entry of type <X>
 herder.pending-txs.age0                  | counter   | number of gen0 pending transactions
 herder.pending-txs.age1                  | counter   | number of gen1 pending transactions
 herder.pending-txs.age2                  | counter   | number of gen2 pending transactions
 herder.pending-txs.age3                  | counter   | number of gen3 pending transactions
 herder.pending-txs.banned                | counter   | number of transactions that got banned
 herder.pending-txs.delay                 | timer     | time for transactions to be included in a ledger
+herder.pending-txs.self-delay            | timer     | time for transactions submitted from this node to be included in a ledger
 history.check.failure                    | meter     | history archive status checks failed
 history.check.success                    | meter     | history archive status checks succeeded
 history.publish.failure                  | meter     | published failed
@@ -68,7 +76,6 @@ overlay.byte.write                       | meter     | number of bytes sent
 overlay.async.read                       | meter     | number of async read requests issued
 overlay.async.write                      | meter     | number of async write requests issued
 overlay.connection.authenticated         | counter   | number of authenticated peers
-overlay.flow-control.percentage          | counter   | percentage of authenticated connections that enable flow control
 overlay.connection.latency               | timer     | estimated latency between peers
 overlay.connection.pending               | counter   | number of pending connections
 overlay.delay.async-write                | timer     | time between each message's async write issue and completion
@@ -77,6 +84,18 @@ overlay.error.read                       | meter     | error while receiving a m
 overlay.error.write                      | meter     | error while sending a message
 overlay.fetch.txset                      | timer     | time to complete fetching of a txset
 overlay.fetch.qset                       | timer     | time to complete fetching of a qset
+overlay.flood.advertised                 | meter     | transactions advertised through pull mode
+overlay.flood.demanded                   | meter     | transactions demanded through pull mode
+overlay.flood.fulfilled                  | meter     | demanded transactions fulfilled through pull mode
+overlay.flood.unfulfilled-banned         | meter     | transactions we failed to fulfilled since they are banned
+overlay.flood.unfulfilled-unknown        | meter     | transactions we failed to fulfilled since they are unknown
+overlay.flood.tx-pull-latency            | timer     | time between the first demand and the first time we receive the txn
+overlay.flood.peer-tx-pull-latency       | timer     | time to pull a transaction from a peer
+overlay.demand.timeout                   | meter     | pull mode timeouts
+overlay.flood.relevant-txs               | meter     | relevant transactions pulled from peers
+overlay.flood.irrelevant-txs             | meter     | irrelevant transactions pulled from peers
+overlay.flood.advert-delay               | timer     | time each advert sits in the inbound queue
+overlay.flood.abandoned-demands          | meter     | tx hash pull demands that no peers responded
 overlay.flood.broadcast                  | meter     | message sent as broadcast per peer
 overlay.flood.duplicate_recv             | meter     | number of bytes of flooded messages that have already been received
 overlay.flood.unique_recv                | meter     | number of bytes of flooded messages that have not yet been received
@@ -84,8 +103,8 @@ overlay.inbound.attempt                  | meter     | inbound connection attemp
 overlay.inbound.drop                     | meter     | inbound connection dropped
 overlay.inbound.establish                | meter     | inbound connection established (added to pending)
 overlay.inbound.reject                   | meter     | inbound connection rejected
-overlay.outbound-queue.scp               | timer     | time SCP traffic sits in flow-controlled queues
-overlay.outbound-queue.tx                | timer     | time tx traffic sits in flow-controlled queues
+overlay.outbound-queue.<X>               | timer     | time <X> traffic sits in flow-controlled queues
+overlay.outbound-queue.drop-<X>          | meter     | number of <X> messages dropped from flow-controlled queues
 overlay.item-fetcher.next-peer           | meter     | ask for item past the first one
 overlay.memory.flood-known               | counter   | number of known flooded entries
 overlay.message.broadcast                | meter     | message broadcasted
@@ -126,4 +145,5 @@ scp.timing.first-to-self-externalize-lag | timer     | delay between first exter
 scp.timing.self-to-others-externalize-lag| timer     | delay between local node externalizing and later externalize messages from other nodes
 scp.value.invalid                        | meter     | SCP value is invalid
 scp.value.valid                          | meter     | SCP value is valid
+scp.slot.values-referenced               | histogram | number of values referenced per consensus round
 

@@ -21,7 +21,7 @@
 using namespace stellar;
 using namespace stellar::txtest;
 
-TEST_CASE("change trust", "[tx][changetrust]")
+TEST_CASE_VERSIONS("change trust", "[tx][changetrust]")
 {
     Config const& cfg = getTestConfig();
 
@@ -79,7 +79,6 @@ TEST_CASE("change trust", "[tx][changetrust]")
         }
         SECTION("edit existing")
         {
-            closeLedgerOn(*app, 2, 1, 1, 2016);
             for_all_versions(*app, [&] {
                 root.changeTrust(idr, 100);
                 // Merge gateway back into root (the trustline still exists)
@@ -294,15 +293,15 @@ TEST_CASE("change trust", "[tx][changetrust]")
                 {});
 
             LedgerTxn ltx(app->getLedgerTxnRoot());
-            TransactionMeta txm(2);
-            REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+            TransactionMetaFrame txm(ltx.loadHeader().current().ledgerVersion);
+            REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
             REQUIRE(tx->apply(*app, ltx, txm));
         });
     }
 }
 
-TEST_CASE("change trust pool share trustline",
-          "[tx][changetrust][liquiditypool]")
+TEST_CASE_VERSIONS("change trust pool share trustline",
+                   "[tx][changetrust][liquiditypool]")
 {
     Config const& cfg = getTestConfig();
 
@@ -700,8 +699,9 @@ TEST_CASE("change trust pool share trustline",
                         {acc1});
 
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(tx->apply(*app, ltx, txm));
                     REQUIRE(tx->getResultCode() == txSUCCESS);
                     ltx.commit();
@@ -729,8 +729,9 @@ TEST_CASE("change trust pool share trustline",
                         {});
 
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(!tx->apply(*app, ltx, txm));
                     REQUIRE(tx->getResultCode() == txFAILED);
 
@@ -753,8 +754,9 @@ TEST_CASE("change trust pool share trustline",
                         {acc2});
 
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(!tx->apply(*app, ltx, txm));
                     REQUIRE(tx->getResultCode() == txFAILED);
 
@@ -776,8 +778,9 @@ TEST_CASE("change trust pool share trustline",
                         {});
 
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(tx->apply(*app, ltx, txm));
                     REQUIRE(tx->getResultCode() == txSUCCESS);
                 }
@@ -797,8 +800,9 @@ TEST_CASE("change trust pool share trustline",
                         {acc2});
 
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(tx->apply(*app, ltx, txm));
                     REQUIRE(tx->getResultCode() == txSUCCESS);
                 }
@@ -824,8 +828,9 @@ TEST_CASE("change trust pool share trustline",
                         {acc1.op(changeTrust(idrUsd, 0))}, {acc1});
 
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(tx->apply(*app, ltx, txm));
                     ltx.commit();
                 };
@@ -872,8 +877,9 @@ TEST_CASE("change trust pool share trustline",
                             {acc1});
 
                         LedgerTxn ltx(app->getLedgerTxnRoot());
-                        TransactionMeta txm(2);
-                        REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                        TransactionMetaFrame txm(
+                            ltx.loadHeader().current().ledgerVersion);
+                        REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                         REQUIRE(tx->apply(*app, ltx, txm));
                         ltx.commit();
                     }

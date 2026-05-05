@@ -18,6 +18,7 @@
 #include "test/test.h"
 #include "transactions/OperationFrame.h"
 #include "transactions/SignatureChecker.h"
+#include "transactions/TransactionMetaFrame.h"
 #include "transactions/TransactionUtils.h"
 #include "util/Logging.h"
 #include "util/Math.h"
@@ -159,6 +160,20 @@ getShortKey(LedgerKey const& key)
         return getShortKey(key.claimableBalance().balanceID);
     case LIQUIDITY_POOL:
         return getShortKey(key.liquidityPool().liquidityPoolID);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    case CONFIG_SETTING:
+        return static_cast<uint8_t>(key.configSetting().configSettingID);
+    case CONTRACT_DATA:
+        switch (key.contractData().contract.type())
+        {
+        case SC_ADDRESS_TYPE_ACCOUNT:
+            return getShortKey(key.contractData().contract.accountId());
+        case SC_ADDRESS_TYPE_CONTRACT:
+            return key.contractData().contract.contractId().at(0);
+        }
+    case CONTRACT_CODE:
+        return key.contractCode().hash.at(0);
+#endif
     }
     throw std::runtime_error("Unknown key type");
 }
@@ -857,7 +872,7 @@ class FuzzTransactionFrame : public TransactionFrame
             mEnvelope.v1().signatures};
         // if any ill-formed Operations, do not attempt transaction application
         auto isInvalidOperation = [&](auto const& op) {
-            return !op->checkValid(signatureChecker, ltx, false);
+            return !op->checkValid(app, signatureChecker, ltx, false);
         };
         if (std::any_of(mOperations.begin(), mOperations.end(),
                         isInvalidOperation))
@@ -870,8 +885,8 @@ class FuzzTransactionFrame : public TransactionFrame
         // so in the future
         loadSourceAccount(ltx, ltx.loadHeader());
         processSeqNum(ltx);
-        TransactionMeta tm(2);
-        applyOperations(signatureChecker, app, ltx, tm);
+        TransactionMetaFrame tm(2);
+        applyOperations(signatureChecker, app, ltx, tm, Hash{});
         if (getResultCode() == txINTERNAL_ERROR)
         {
             throw std::runtime_error("Internal error while fuzzing");

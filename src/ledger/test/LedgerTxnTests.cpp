@@ -100,8 +100,28 @@ generateLedgerEntryWithSameKey(LedgerEntry const& leBase)
             le.data.liquidityPool().liquidityPoolID =
                 leBase.data.liquidityPool().liquidityPoolID;
             break;
-        default:
-            REQUIRE(false);
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        case CONFIG_SETTING:
+            le.data.configSetting() =
+                LedgerTestUtils::generateValidConfigSettingEntry();
+            le.data.configSetting().configSettingID(
+                leBase.data.configSetting().configSettingID());
+            break;
+        case CONTRACT_DATA:
+            le.data.contractData() =
+                LedgerTestUtils::generateValidContractDataEntry();
+            le.data.contractData().contract =
+                leBase.data.contractData().contract;
+            le.data.contractData().key = leBase.data.contractData().key;
+            le.data.contractData().durability =
+                leBase.data.contractData().durability;
+            break;
+        case CONTRACT_CODE:
+            le.data.contractCode() =
+                LedgerTestUtils::generateValidContractCodeEntry();
+            le.data.contractCode().hash = leBase.data.contractCode().hash;
+            break;
+#endif
         }
     } while (le == leBase);
     return le;
@@ -145,7 +165,11 @@ TEST_CASE("LedgerTxn commit into LedgerTxn", "[ledgertxn]")
     VirtualClock clock;
     auto app = createTestApplication(clock, getTestConfig());
 
-    LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     le1.lastModifiedLedgerSeq = 1;
     LedgerKey key = LedgerEntryKey(le1);
 
@@ -198,6 +222,7 @@ TEST_CASE("LedgerTxn commit into LedgerTxn", "[ledgertxn]")
 
         SECTION("erased in child")
         {
+            le2 = generateLedgerEntryWithSameKey(le1);
             LedgerTxn ltx1(app->getLedgerTxnRoot());
             REQUIRE(ltx1.create(le1));
 
@@ -216,7 +241,12 @@ TEST_CASE("LedgerTxn rollback into LedgerTxn", "[ledgertxn]")
         VirtualClock clock;
         auto app = createTestApplication(clock, getTestConfig(0, mode));
 
-        LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntry();
+        LedgerEntry le1 =
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
         le1.lastModifiedLedgerSeq = 1;
         LedgerKey key = LedgerEntryKey(le1);
 
@@ -269,6 +299,14 @@ TEST_CASE("LedgerTxn rollback into LedgerTxn", "[ledgertxn]")
 
             SECTION("erased in child")
             {
+                le1 = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    CONFIG_SETTING
+#endif
+                });
+                le1.lastModifiedLedgerSeq = 1;
+                key = LedgerEntryKey(le1);
+                le2 = generateLedgerEntryWithSameKey(le1);
                 LedgerTxn ltx1(app->getLedgerTxnRoot());
                 REQUIRE(ltx1.create(le1));
 
@@ -307,7 +345,11 @@ TEST_CASE("LedgerTxn round trip", "[ledgertxn]")
         UnorderedMap<LedgerKey, LedgerEntry> newBatch;
         while (newBatch.size() < NEW_ENTRIES)
         {
-            auto le = LedgerTestUtils::generateValidLedgerEntry();
+            auto le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
             auto key = LedgerEntryKey(le);
             if (entries.find(LedgerEntryKey(le)) == entries.end())
             {
@@ -355,6 +397,12 @@ TEST_CASE("LedgerTxn round trip", "[ledgertxn]")
         {
             auto iter = entries.begin();
             std::advance(iter, dist(gRandomEngine));
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+            if (iter->first.type() == CONFIG_SETTING)
+            {
+                continue;
+            }
+#endif
             eraseBatch.insert(iter->first);
         }
 
@@ -463,7 +511,11 @@ TEST_CASE("LedgerTxn rollback and commit deactivate", "[ledgertxn]")
     auto& root = app->getLedgerTxnRoot();
     auto lh = root.getHeader();
 
-    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     LedgerKey key = LedgerEntryKey(le);
 
     auto checkDeactivate = [&](std::function<void(LedgerTxn & ltx)> f) {
@@ -480,7 +532,7 @@ TEST_CASE("LedgerTxn rollback and commit deactivate", "[ledgertxn]")
         {
             LedgerTxn ltx(root, false);
             ltx.create(le);
-            auto entry = ltx.loadWithoutRecord(key);
+            auto entry = ltx.loadWithoutRecord(key, /*loadExpiredEntry=*/false);
             REQUIRE(entry);
             f(ltx);
             REQUIRE_THROWS_AS(!entry, std::runtime_error);
@@ -512,7 +564,11 @@ TEST_CASE("LedgerTxn create", "[ledgertxn]")
     VirtualClock clock;
     auto app = createTestApplication(clock, getTestConfig());
 
-    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     le.lastModifiedLedgerSeq = 1;
     LedgerKey key = LedgerEntryKey(le);
 
@@ -573,7 +629,12 @@ TEST_CASE("LedgerTxn createWithoutLoading and updateWithoutLoading",
         VirtualClock clock;
         auto app = createTestApplication(clock, getTestConfig(0, mode));
 
-        LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+        LedgerEntry le =
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
         le.lastModifiedLedgerSeq = 1;
         LedgerKey key = LedgerEntryKey(le);
 
@@ -666,7 +727,12 @@ TEST_CASE("LedgerTxn erase", "[ledgertxn]")
         VirtualClock clock;
         auto app = createTestApplication(clock, getTestConfig(0, mode));
 
-        LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+        LedgerEntry le =
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
         le.lastModifiedLedgerSeq = 1;
         LedgerKey key = LedgerEntryKey(le);
 
@@ -686,6 +752,19 @@ TEST_CASE("LedgerTxn erase", "[ledgertxn]")
             ltx1.getDelta();
             REQUIRE_THROWS_AS(ltx1.erase(key), std::runtime_error);
         }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        SECTION("fails for configuration")
+        {
+            auto configLe =
+                LedgerTestUtils::generateValidLedgerEntryOfType(CONFIG_SETTING);
+            LedgerTxn ltx1(app->getLedgerTxnRoot());
+            // The config entry should already be present in ledger in starting
+            // with vNext.
+            REQUIRE_THROWS_AS(ltx1.erase(LedgerEntryKey(configLe)),
+                              std::runtime_error);
+        }
+#endif
 
         SECTION("when key does not exist")
         {
@@ -709,6 +788,13 @@ TEST_CASE("LedgerTxn erase", "[ledgertxn]")
 
         SECTION("when key exists in grandparent, erased in parent")
         {
+            le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
+            le.lastModifiedLedgerSeq = 1;
+            key = LedgerEntryKey(le);
             LedgerTxn ltx1(app->getLedgerTxnRoot());
             REQUIRE(ltx1.create(le));
 
@@ -739,7 +825,12 @@ TEST_CASE("LedgerTxn eraseWithoutLoading", "[ledgertxn]")
         VirtualClock clock;
         auto app = createTestApplication(clock, getTestConfig(0, mode));
 
-        LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+        LedgerEntry le =
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
         le.lastModifiedLedgerSeq = 1;
         LedgerKey key = LedgerEntryKey(le);
 
@@ -763,13 +854,26 @@ TEST_CASE("LedgerTxn eraseWithoutLoading", "[ledgertxn]")
             REQUIRE_THROWS_AS(ltx1.eraseWithoutLoading(key),
                               std::runtime_error);
         }
-
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        SECTION("fails for configuration")
+        {
+            auto configLe =
+                LedgerTestUtils::generateValidLedgerEntryOfType(CONFIG_SETTING);
+            LedgerTxn ltx1(app->getLedgerTxnRoot());
+            // The config entry should already be present in ledger in starting
+            // with vNext.
+            REQUIRE_THROWS_AS(ltx1.erase(LedgerEntryKey(configLe)),
+                              std::runtime_error);
+        }
+#endif
         SECTION("when key does not exist")
         {
             LedgerTxn ltx1(app->getLedgerTxnRoot());
             REQUIRE_NOTHROW(ltx1.eraseWithoutLoading(key));
             REQUIRE_THROWS_AS(ltx1.getDelta(), std::runtime_error);
-            REQUIRE(ltx1.getNewestVersion(key).get() == nullptr);
+            REQUIRE(
+                ltx1.getNewestVersion(key, /*loadExpiredEntry=*/false).get() ==
+                nullptr);
         }
 
         SECTION("when key exists in parent")
@@ -780,11 +884,20 @@ TEST_CASE("LedgerTxn eraseWithoutLoading", "[ledgertxn]")
             LedgerTxn ltx2(ltx1);
             REQUIRE_NOTHROW(ltx2.eraseWithoutLoading(key));
             REQUIRE_THROWS_AS(ltx2.getDelta(), std::runtime_error);
-            REQUIRE(ltx2.getNewestVersion(key).get() == nullptr);
+            REQUIRE(
+                ltx2.getNewestVersion(key, /*loadExpiredEntry=*/false).get() ==
+                nullptr);
         }
 
         SECTION("when key exists in grandparent, erased in parent")
         {
+            le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            });
+            le.lastModifiedLedgerSeq = 1;
+            key = LedgerEntryKey(le);
             LedgerTxn ltx1(app->getLedgerTxnRoot());
             REQUIRE(ltx1.create(le));
 
@@ -794,7 +907,9 @@ TEST_CASE("LedgerTxn eraseWithoutLoading", "[ledgertxn]")
             LedgerTxn ltx3(ltx2);
             REQUIRE_NOTHROW(ltx3.eraseWithoutLoading(key));
             REQUIRE_THROWS_AS(ltx3.getDelta(), std::runtime_error);
-            REQUIRE(ltx3.getNewestVersion(key).get() == nullptr);
+            REQUIRE(
+                ltx3.getNewestVersion(key, /*loadExpiredEntry=*/false).get() ==
+                nullptr);
         }
     };
 
@@ -1265,143 +1380,193 @@ TEST_CASE("LedgerTxn loadHeader", "[ledgertxn]")
 #endif
 }
 
-TEST_CASE("LedgerTxn load", "[ledgertxn]")
+TEST_CASE_VERSIONS("LedgerTxn load", "[ledgertxn]")
 {
     auto runTest = [&](Config::TestDbMode mode) {
         VirtualClock clock;
         auto app = createTestApplication(clock, getTestConfig(0, mode));
 
-        LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
-        le.lastModifiedLedgerSeq = 1;
-        LedgerKey key = LedgerEntryKey(le);
-
-        SECTION("fails with children")
+        SECTION("use generated entry")
         {
-            LedgerTxn ltx1(app->getLedgerTxnRoot());
-            LedgerTxn ltx2(ltx1);
-            REQUIRE_THROWS_AS(ltx1.load(key), std::runtime_error);
-        }
+            LedgerEntry le =
+                LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    CONFIG_SETTING
+#endif
+                });
+            le.lastModifiedLedgerSeq = 1;
+            LedgerKey key = LedgerEntryKey(le);
 
-        SECTION("fails if sealed")
-        {
-            LedgerTxn ltx1(app->getLedgerTxnRoot());
-            ltx1.getDelta();
-            REQUIRE_THROWS_AS(ltx1.load(key), std::runtime_error);
-        }
+            for_versions_from(18, *app, [&] {
+                SECTION("fails with children")
+                {
+                    LedgerTxn ltx1(app->getLedgerTxnRoot());
+                    LedgerTxn ltx2(ltx1);
+                    REQUIRE_THROWS_AS(ltx1.load(key), std::runtime_error);
+                }
 
-        SECTION("when key does not exist")
-        {
-            LedgerTxn ltx1(app->getLedgerTxnRoot());
-            REQUIRE(!ltx1.load(key));
-            validate(ltx1, {});
-        }
+                SECTION("fails if sealed")
+                {
+                    LedgerTxn ltx1(app->getLedgerTxnRoot());
+                    ltx1.getDelta();
+                    REQUIRE_THROWS_AS(ltx1.load(key), std::runtime_error);
+                }
 
-        SECTION("when key exists in parent")
-        {
-            LedgerTxn ltx1(app->getLedgerTxnRoot());
-            REQUIRE(ltx1.create(le));
+                SECTION("when key does not exist")
+                {
+                    LedgerTxn ltx1(app->getLedgerTxnRoot());
+                    REQUIRE(!ltx1.load(key));
+                    validate(ltx1, {});
+                }
 
-            LedgerTxn ltx2(ltx1);
-            REQUIRE(ltx2.load(key));
-            validate(ltx2,
-                     {{key,
-                       {std::make_shared<InternalLedgerEntry const>(le),
-                        std::make_shared<InternalLedgerEntry const>(le)}}});
-        }
+                SECTION("when key exists in parent")
+                {
+                    LedgerTxn ltx1(app->getLedgerTxnRoot());
+                    REQUIRE(ltx1.create(le));
 
-        SECTION("when key exists in grandparent, erased in parent")
-        {
-            LedgerTxn ltx1(app->getLedgerTxnRoot());
-            REQUIRE(ltx1.create(le));
+                    LedgerTxn ltx2(ltx1);
+                    REQUIRE(ltx2.load(key));
+                    validate(
+                        ltx2,
+                        {{key,
+                          {std::make_shared<InternalLedgerEntry const>(le),
+                           std::make_shared<InternalLedgerEntry const>(le)}}});
+                }
 
-            LedgerTxn ltx2(ltx1);
-            REQUIRE_NOTHROW(ltx2.erase(key));
+                SECTION("when key exists in grandparent, erased in parent")
+                {
+                    key = LedgerEntryKey(le);
+                    LedgerTxn ltx1(app->getLedgerTxnRoot());
+                    REQUIRE(ltx1.create(le));
 
-            LedgerTxn ltx3(ltx2);
-            REQUIRE(!ltx3.load(key));
-            validate(ltx3, {});
-        }
+                    LedgerTxn ltx2(ltx1);
+                    REQUIRE_NOTHROW(ltx2.erase(key));
 
-        SECTION("check for init after child commits")
-        {
-            LedgerTxn ltx1(app->getLedgerTxnRoot());
-            REQUIRE(ltx1.create(le));
+                    LedgerTxn ltx3(ltx2);
+                    REQUIRE(!ltx3.load(key));
+                    validate(ltx3, {});
+                }
 
-            LedgerTxn ltx2(ltx1);
-            REQUIRE(ltx2.load(key));
-            ltx2.commit();
+                SECTION("check for init after child commits")
+                {
+                    LedgerTxn ltx1(app->getLedgerTxnRoot());
+                    REQUIRE(ltx1.create(le));
 
-            REQUIRE(ltx1.load(key));
-        }
+                    LedgerTxn ltx2(ltx1);
+                    REQUIRE(ltx2.load(key));
+                    ltx2.commit();
 
-        SECTION("create, deactivate, and load")
-        {
-            LedgerTxn ltx1(app->getLedgerTxnRoot());
-            auto ltxe = ltx1.create(le);
-            ltxe.deactivate();
+                    REQUIRE(ltx1.load(key));
+                }
 
-            REQUIRE(ltx1.load(key));
-            ltx1.commit();
-        }
+                SECTION("create, deactivate, and load")
+                {
+                    LedgerTxn ltx1(app->getLedgerTxnRoot());
+                    auto ltxe = ltx1.create(le);
+                    ltxe.deactivate();
 
-        for_all_versions(*app, [&]() {
-            SECTION("invalid keys")
+                    REQUIRE(ltx1.load(key));
+                    ltx1.commit();
+                }
+            });
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+            SECTION("Do not load expired entry")
             {
+                auto codeEntry =
+                    LedgerTestUtils::generateValidLedgerEntryWithTypes(
+                        {LedgerEntryType::CONTRACT_CODE});
+                auto dataEntry =
+                    LedgerTestUtils::generateValidLedgerEntryWithTypes(
+                        {LedgerEntryType::CONTRACT_DATA});
+                setExpirationLedger(codeEntry, 0);
+                setExpirationLedger(dataEntry, 0);
                 LedgerTxn ltx1(app->getLedgerTxnRoot());
+                REQUIRE(ltx1.create(codeEntry));
+                REQUIRE(ltx1.create(dataEntry));
+                ltx1.commit();
 
-                auto acc = txtest::getAccount("acc");
-                auto acc2 = txtest::getAccount("acc2");
+                LedgerTxn ltx2(app->getLedgerTxnRoot());
+                auto codeKey = LedgerEntryKey(codeEntry);
+                auto dataKey = LedgerEntryKey(dataEntry);
+                REQUIRE(!ltx2.load(codeKey));
+                REQUIRE(!ltx2.load(dataKey));
 
-                {
-                    auto native = txtest::makeNativeAsset();
-                    UNSCOPED_INFO("native asset on trustline key");
-                    REQUIRE_THROWS_AS(
-                        ltx1.load(trustlineKey(acc.getPublicKey(), native)),
-                        NonSociRelatedException);
-                }
+                // Check that you can still load expired entry with flag set
+                auto loadedCode =
+                    ltx2.loadWithoutRecord(codeKey, /*loadExpiredEntry=*/true);
+                REQUIRE(loadedCode);
+                REQUIRE(loadedCode.current().data == codeEntry.data);
 
-                {
-                    auto usd = txtest::makeAsset(acc, "usd");
-                    UNSCOPED_INFO("issuer on trustline key");
-                    REQUIRE_THROWS_AS(
-                        ltx1.load(trustlineKey(acc.getPublicKey(), usd)),
-                        NonSociRelatedException);
-                }
-
-                {
-                    std::string accountIDStr, issuerStr, assetCodeStr;
-                    auto invalidAssets = testutil::getInvalidAssets(acc);
-                    for (auto const& asset : invalidAssets)
-                    {
-                        auto key = trustlineKey(acc2.getPublicKey(), asset);
-
-                        REQUIRE_THROWS_AS(ltx1.load(key),
-                                          NonSociRelatedException);
-                    }
-                }
-
-                SECTION("load generated keys")
-                {
-                    for (int i = 0; i < 1000; ++i)
-                    {
-                        LedgerKey lk = autocheck::generator<LedgerKey>()(5);
-
-                        try
-                        {
-                            ltx1.load(lk);
-                        }
-                        catch (NonSociRelatedException&)
-                        {
-                            // this is fine
-                        }
-                        catch (std::exception&)
-                        {
-                            REQUIRE(false);
-                        }
-                    }
-                }
+                auto loadedData =
+                    ltx2.loadWithoutRecord(dataKey, /*loadExpiredEntry=*/true);
+                REQUIRE(loadedData);
+                REQUIRE(loadedData.current().data == dataEntry.data);
             }
-        });
+#endif
+        }
+
+        SECTION("load tests for all versions")
+        {
+            for_all_versions(*app, [&]() {
+                SECTION("invalid keys")
+                {
+                    LedgerTxn ltx1(app->getLedgerTxnRoot());
+
+                    auto acc = txtest::getAccount("acc");
+                    auto acc2 = txtest::getAccount("acc2");
+
+                    {
+                        auto native = txtest::makeNativeAsset();
+                        UNSCOPED_INFO("native asset on trustline key");
+                        REQUIRE_THROWS_AS(
+                            ltx1.load(trustlineKey(acc.getPublicKey(), native)),
+                            NonSociRelatedException);
+                    }
+
+                    {
+                        auto usd = txtest::makeAsset(acc, "usd");
+                        UNSCOPED_INFO("issuer on trustline key");
+                        REQUIRE_THROWS_AS(
+                            ltx1.load(trustlineKey(acc.getPublicKey(), usd)),
+                            NonSociRelatedException);
+                    }
+
+                    {
+                        std::string accountIDStr, issuerStr, assetCodeStr;
+                        auto invalidAssets = testutil::getInvalidAssets(acc);
+                        for (auto const& asset : invalidAssets)
+                        {
+                            auto key = trustlineKey(acc2.getPublicKey(), asset);
+
+                            REQUIRE_THROWS_AS(ltx1.load(key),
+                                              NonSociRelatedException);
+                        }
+                    }
+
+                    SECTION("load generated keys")
+                    {
+                        for (int i = 0; i < 1000; ++i)
+                        {
+                            LedgerKey lk = autocheck::generator<LedgerKey>()(5);
+
+                            try
+                            {
+                                ltx1.load(lk);
+                            }
+                            catch (NonSociRelatedException&)
+                            {
+                                // this is fine
+                            }
+                            catch (std::exception&)
+                            {
+                                REQUIRE(false);
+                            }
+                        }
+                    }
+                }
+            });
+        }
     };
 
     SECTION("default")
@@ -1422,7 +1587,11 @@ TEST_CASE("LedgerTxn loadWithoutRecord", "[ledgertxn]")
     VirtualClock clock;
     auto app = createTestApplication(clock, getTestConfig());
 
-    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     le.lastModifiedLedgerSeq = 1;
     LedgerKey key = LedgerEntryKey(le);
 
@@ -1430,20 +1599,24 @@ TEST_CASE("LedgerTxn loadWithoutRecord", "[ledgertxn]")
     {
         LedgerTxn ltx1(app->getLedgerTxnRoot());
         LedgerTxn ltx2(ltx1);
-        REQUIRE_THROWS_AS(ltx1.loadWithoutRecord(key), std::runtime_error);
+        REQUIRE_THROWS_AS(
+            ltx1.loadWithoutRecord(key, /*loadExpiredEntry=*/false),
+            std::runtime_error);
     }
 
     SECTION("fails if sealed")
     {
         LedgerTxn ltx1(app->getLedgerTxnRoot());
         ltx1.getDelta();
-        REQUIRE_THROWS_AS(ltx1.loadWithoutRecord(key), std::runtime_error);
+        REQUIRE_THROWS_AS(
+            ltx1.loadWithoutRecord(key, /*loadExpiredEntry=*/false),
+            std::runtime_error);
     }
 
     SECTION("when key does not exist")
     {
         LedgerTxn ltx1(app->getLedgerTxnRoot());
-        REQUIRE(!ltx1.loadWithoutRecord(key));
+        REQUIRE(!ltx1.loadWithoutRecord(key, /*loadExpiredEntry=*/false));
         validate(ltx1, {});
     }
 
@@ -1453,7 +1626,7 @@ TEST_CASE("LedgerTxn loadWithoutRecord", "[ledgertxn]")
         REQUIRE(ltx1.create(le));
 
         LedgerTxn ltx2(ltx1);
-        REQUIRE(ltx2.loadWithoutRecord(key));
+        REQUIRE(ltx2.loadWithoutRecord(key, /*loadExpiredEntry=*/false));
         validate(ltx2, {});
     }
 
@@ -1466,7 +1639,7 @@ TEST_CASE("LedgerTxn loadWithoutRecord", "[ledgertxn]")
         REQUIRE_NOTHROW(ltx2.erase(key));
 
         LedgerTxn ltx3(ltx2);
-        REQUIRE(!ltx3.loadWithoutRecord(key));
+        REQUIRE(!ltx3.loadWithoutRecord(key, /*loadExpiredEntry=*/false));
         validate(ltx3, {});
     }
 }
@@ -1925,8 +2098,12 @@ TEST_CASE("LedgerTxn loadBestOffer", "[ledgertxn]")
             auto app = createTestApplication(clock, getTestConfig(0, mode));
 
             LedgerTxn ltx1(app->getLedgerTxnRoot());
-            auto ltxe =
-                ltx1.create(LedgerTestUtils::generateValidLedgerEntry());
+            auto ltxe = ltx1.create(
+                LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                    CONFIG_SETTING
+#endif
+                }));
             REQUIRE_THROWS_AS(ltx1.getBestOffer(buying, selling),
                               std::runtime_error);
             REQUIRE_THROWS_AS(
@@ -2427,9 +2604,17 @@ TEST_CASE("LedgerTxnEntry and LedgerTxnHeader move assignment", "[ledgertxn]")
     auto& root = app->getLedgerTxnRoot();
     auto lh = root.getHeader();
 
-    LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le1 = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     LedgerKey key1 = LedgerEntryKey(le1);
-    LedgerEntry le2 = LedgerTestUtils::generateValidLedgerEntry();
+    LedgerEntry le2 = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
     LedgerKey key2 = LedgerEntryKey(le2);
 
     SECTION("assign self")
@@ -2443,20 +2628,25 @@ TEST_CASE("LedgerTxnEntry and LedgerTxnHeader move assignment", "[ledgertxn]")
             entry1 = std::move(entryRef);
             REQUIRE(entry1.current() == le1);
             REQUIRE_THROWS_AS(ltx.load(key1), std::runtime_error);
-            REQUIRE_THROWS_AS(ltx.loadWithoutRecord(key1), std::runtime_error);
+            REQUIRE_THROWS_AS(
+                ltx.loadWithoutRecord(key1, /*loadExpiredEntry=*/false),
+                std::runtime_error);
         }
 
         SECTION("const entry")
         {
             LedgerTxn ltx(root, false);
             ltx.create(le1);
-            auto entry1 = ltx.loadWithoutRecord(key1);
+            auto entry1 =
+                ltx.loadWithoutRecord(key1, /*loadExpiredEntry=*/false);
             // Avoid warning for explicit move-to-self
             ConstLedgerTxnEntry& entryRef = entry1;
             entry1 = std::move(entryRef);
             REQUIRE(entry1.current() == le1);
             REQUIRE_THROWS_AS(ltx.load(key1), std::runtime_error);
-            REQUIRE_THROWS_AS(ltx.loadWithoutRecord(key1), std::runtime_error);
+            REQUIRE_THROWS_AS(
+                ltx.loadWithoutRecord(key1, /*loadExpiredEntry=*/false),
+                std::runtime_error);
         }
 
         SECTION("header")
@@ -2482,7 +2672,8 @@ TEST_CASE("LedgerTxnEntry and LedgerTxnHeader move assignment", "[ledgertxn]")
             REQUIRE(entry1.current() == le2);
             REQUIRE_THROWS_AS(ltx.load(key2), std::runtime_error);
             REQUIRE(ltx.load(key1).current() == le1);
-            REQUIRE(ltx.loadWithoutRecord(key1).current() == le1);
+            REQUIRE(ltx.loadWithoutRecord(key1, /*loadExpiredEntry=*/false)
+                        .current() == le1);
         }
 
         SECTION("const entry")
@@ -2490,13 +2681,16 @@ TEST_CASE("LedgerTxnEntry and LedgerTxnHeader move assignment", "[ledgertxn]")
             LedgerTxn ltx(root, false);
             ltx.create(le1);
             ltx.create(le2);
-            auto entry1 = ltx.loadWithoutRecord(key1);
-            auto entry2 = ltx.loadWithoutRecord(key2);
+            auto entry1 =
+                ltx.loadWithoutRecord(key1, /*loadExpiredEntry=*/false);
+            auto entry2 =
+                ltx.loadWithoutRecord(key2, /*loadExpiredEntry=*/false);
             entry1 = std::move(entry2);
             REQUIRE(entry1.current() == le2);
             REQUIRE_THROWS_AS(ltx.load(key2), std::runtime_error);
             REQUIRE(ltx.load(key1).current() == le1);
-            REQUIRE(ltx.loadWithoutRecord(key1).current() == le1);
+            REQUIRE(ltx.loadWithoutRecord(key1, /*loadExpiredEntry=*/false)
+                        .current() == le1);
         }
 
         SECTION("header")
@@ -2525,11 +2719,17 @@ TEST_CASE("LedgerTxnRoot prefetch", "[ledgertxn]")
 
         auto entries = LedgerTestUtils::generateValidLedgerEntries(
             cfg.ENTRY_CACHE_SIZE + 1);
+        std::set<LedgerEntry> entrySet;
         LedgerTxn ltx(root);
         for (auto e : entries)
         {
             ltx.createWithoutLoading(e);
             keysToPrefetch.emplace(LedgerEntryKey(e));
+
+            // Insert entry into set with correct lastModifiedLedgerSeq value so
+            // we can check prefetch results later
+            e.lastModifiedLedgerSeq = 1;
+            entrySet.emplace(e);
         }
         ltx.commit();
 
@@ -2547,6 +2747,17 @@ TEST_CASE("LedgerTxnRoot prefetch", "[ledgertxn]")
             }
 
             REQUIRE(root.prefetch(smallSet) == smallSet.size());
+
+            // Check that prefetch results are actually correct
+            for (auto const& k : smallSet)
+            {
+                auto txle = ltx2.load(k);
+                REQUIRE(txle);
+                REQUIRE(entrySet.find(txle.current()) != entrySet.end());
+            }
+
+            // 100% hit rate but make it floating point
+            REQUIRE(fabs(ltx2.getPrefetchHitRate() - 1.0f) < 0.0001f);
             ltx2.commit();
         }
         SECTION("prefetch more than ENTRY_CACHE_SIZE entries")
@@ -2555,6 +2766,57 @@ TEST_CASE("LedgerTxnRoot prefetch", "[ledgertxn]")
             REQUIRE(root.prefetch(keysToPrefetch) == keysToPrefetch.size());
             ltx2.commit();
         }
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        SECTION("do not prefetch expired entries")
+        {
+            auto sorobanEntries =
+                LedgerTestUtils::generateValidUniqueLedgerEntriesWithTypes(
+                    {CONTRACT_DATA, CONTRACT_CODE}, 100);
+            UnorderedSet<LedgerKey> sorobanKeysToPrefetch;
+            UnorderedSet<LedgerKey> expiredKeys;
+
+            LedgerTxn ltx3(root);
+            for (auto e : sorobanEntries)
+            {
+                auto k = LedgerEntryKey(e);
+                sorobanKeysToPrefetch.emplace(k);
+                if (rand_flip())
+                {
+                    expiredKeys.emplace(k);
+                    setExpirationLedger(e, 0);
+                }
+                else
+                {
+                    setExpirationLedger(e, 2);
+                }
+
+                ltx3.create(e);
+            }
+            ltx3.commit();
+
+            REQUIRE(root.prefetch(sorobanKeysToPrefetch) ==
+                    sorobanKeysToPrefetch.size());
+
+            LedgerTxn ltx4(root);
+            for (auto const& key : sorobanKeysToPrefetch)
+            {
+                auto loadedEntry = ltx4.load(key);
+                if (expiredKeys.find(key) == expiredKeys.end())
+                {
+                    REQUIRE(loadedEntry);
+                }
+                else
+                {
+                    REQUIRE(!loadedEntry);
+                }
+            }
+
+            // 100% hit rate but make it floating point
+            REQUIRE(fabs(ltx4.getPrefetchHitRate() - 1.0f) < 0.0001f);
+            ltx4.commit();
+        }
+#endif
     };
 
     SECTION("default")
@@ -3393,7 +3655,8 @@ TEST_CASE("LedgerTxn in memory order book", "[ledgertxn]")
 
             LedgerTxn ltx(app->getLedgerTxnRoot());
             {
-                auto lte = ltx.loadWithoutRecord(LedgerEntryKey(le1a));
+                auto lte = ltx.loadWithoutRecord(LedgerEntryKey(le1a),
+                                                 /*loadExpiredEntry=*/false);
                 checkOrderBook(ltx, {});
             }
             checkOrderBook(ltx, {});
@@ -3405,7 +3668,8 @@ TEST_CASE("LedgerTxn in memory order book", "[ledgertxn]")
             checkOrderBook(ltx, {{assets, {le1a}}});
 
             {
-                auto lte = ltx.loadWithoutRecord(LedgerEntryKey(le1a));
+                auto lte = ltx.loadWithoutRecord(LedgerEntryKey(le1a),
+                                                 /*loadExpiredEntry=*/false);
                 checkOrderBook(ltx, {});
             }
             checkOrderBook(ltx, {{assets, {le1a}}});
@@ -3498,7 +3762,7 @@ TEST_CASE("LedgerTxn in memory order book", "[ledgertxn]")
 #endif
 }
 
-TEST_CASE("LedgerTxn bulk-load offers", "[ledgertxn]")
+TEST_CASE_VERSIONS("LedgerTxn bulk-load offers", "[ledgertxn]")
 {
     auto runTest = [&](Config::TestDbMode mode) {
         VirtualClock clock;
@@ -3557,8 +3821,12 @@ TEST_CASE("Access deactivated entry", "[ledgertxn]")
             ltx.commit();
         }
 
-        LedgerKey missingEntryKey =
-            LedgerEntryKey(LedgerTestUtils::generateValidLedgerEntry());
+        LedgerKey missingEntryKey = LedgerEntryKey(
+            LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+                CONFIG_SETTING
+#endif
+            }));
 
         LedgerTxn ltx1(app->getLedgerTxnRoot());
 
@@ -3579,10 +3847,12 @@ TEST_CASE("Access deactivated entry", "[ledgertxn]")
 
         SECTION("loadWithoutRecord")
         {
-            auto entry = ltx1.loadWithoutRecord(lk1);
+            auto entry =
+                ltx1.loadWithoutRecord(lk1, /*loadExpiredEntry=*/false);
             REQUIRE(entry);
 
-            auto missingEntry = ltx1.loadWithoutRecord(missingEntryKey);
+            auto missingEntry = ltx1.loadWithoutRecord(
+                missingEntryKey, /*loadExpiredEntry=*/false);
             REQUIRE(!missingEntry);
 
             // this will deactivate entry
@@ -3622,7 +3892,7 @@ TEST_CASE("Access deactivated entry", "[ledgertxn]")
         SECTION("loadWithoutRecord and move assign")
         {
             ConstLedgerTxnEntry entry;
-            entry = ltx1.loadWithoutRecord(lk1);
+            entry = ltx1.loadWithoutRecord(lk1, /*loadExpiredEntry=*/false);
             REQUIRE(entry);
 
             ConstLedgerTxnEntry ltxe2;
@@ -3631,7 +3901,8 @@ TEST_CASE("Access deactivated entry", "[ledgertxn]")
         }
         SECTION("loadWithoutRecord and move construct")
         {
-            auto entry = ltx1.loadWithoutRecord(lk1);
+            auto entry =
+                ltx1.loadWithoutRecord(lk1, /*loadExpiredEntry=*/false);
             REQUIRE(entry);
 
             ConstLedgerTxnEntry ltxe2(std::move(entry));
@@ -3966,7 +4237,8 @@ testPoolShareTrustLinesByAccountAndAsset(
     }
 }
 
-TEST_CASE("LedgerTxn loadPoolShareTrustLinesByAccountAndAsset", "[ledgertxn]")
+TEST_CASE_VERSIONS("LedgerTxn loadPoolShareTrustLinesByAccountAndAsset",
+                   "[ledgertxn]")
 {
     auto a1 = LedgerTestUtils::generateValidAccountEntry().accountID;
     auto a2 = LedgerTestUtils::generateValidAccountEntry().accountID;
@@ -4196,5 +4468,101 @@ TEST_CASE("InMemoryLedgerTxn getPoolShareTrustLinesByAccountAndAsset",
     for (auto const& kv : poolShareTrustlines)
     {
         REQUIRE(kv.first.trustLine().accountID == a1.getPublicKey());
+    }
+}
+
+TEST_CASE_VERSIONS("InMemoryLedgerTxn close multiple ledgers with merges",
+                   "[ledgertxn]")
+{
+    VirtualClock clock;
+    Config cfg = getTestConfig();
+    cfg.MODE_USES_IN_MEMORY_LEDGER = true;
+
+    auto app = createTestApplication(clock, cfg);
+
+    auto root = TestAccount::createRoot(*app);
+    auto const& lm = app->getLedgerManager();
+    auto a1 = root.create("a1", lm.getLastMinBalance(1));
+    auto b1 = root.create("b1", lm.getLastMinBalance(1));
+
+    for_versions_from(19, *app, [&] {
+        auto tx1 = txtest::transactionFrameFromOps(
+            app->getNetworkID(), root, {a1.op(txtest::accountMerge(root))},
+            {a1});
+        auto tx2 = txtest::transactionFrameFromOps(
+            app->getNetworkID(), root, {b1.op(txtest::accountMerge(root))},
+            {b1});
+        txtest::closeLedger(*app, {tx1});
+        txtest::closeLedger(*app, {tx2});
+    });
+}
+
+TEST_CASE("InMemoryLedgerTxn filtering", "[ledgertxn]")
+{
+    VirtualClock clock;
+    Config cfg = getTestConfig();
+    cfg.MODE_USES_IN_MEMORY_LEDGER = true;
+
+    auto app = createTestApplication(clock, cfg);
+    auto root = TestAccount::createRoot(*app);
+    auto a1 = root.create("a1", app->getLedgerManager().getLastMinBalance(1));
+
+    InternalLedgerEntry entry(InternalLedgerEntryType::MAX_SEQ_NUM_TO_APPLY);
+    entry.maxSeqNumToApplyEntry().sourceAccount = root;
+    entry.maxSeqNumToApplyEntry().maxSeqNum = 1;
+
+    InternalLedgerEntry entry2(InternalLedgerEntryType::MAX_SEQ_NUM_TO_APPLY);
+    entry2.maxSeqNumToApplyEntry().sourceAccount = a1;
+    entry2.maxSeqNumToApplyEntry().maxSeqNum = 1;
+
+    LedgerEntry le = LedgerTestUtils::generateValidLedgerEntryWithExclusions({
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+        CONFIG_SETTING
+#endif
+    });
+
+    LedgerTxn ltx(app->getLedgerTxnRoot());
+
+    SECTION("1 entry")
+    {
+        ltx.create(entry);
+        ltx.commit();
+
+        // MAX_SEQ_NUM_TO_APPLY was filtered out on commit to InMemoryLedgerTxn
+        LedgerTxn ltx2(app->getLedgerTxnRoot());
+        REQUIRE(!ltx2.load(entry.toKey()));
+    }
+
+    SECTION("two entries")
+    {
+        ltx.create(entry);
+        ltx.create(entry2);
+        ltx.commit();
+
+        LedgerTxn ltx2(app->getLedgerTxnRoot());
+        REQUIRE(!ltx2.load(entry.toKey()));
+        REQUIRE(!ltx2.load(entry2.toKey()));
+    }
+
+    SECTION("three entries, with one LEDGER_ENTRY")
+    {
+        ltx.create(entry);
+        ltx.create(le);
+        ltx.create(entry2);
+        ltx.commit();
+
+        LedgerTxn ltx1(app->getLedgerTxnRoot());
+        REQUIRE(!ltx1.load(entry.toKey()));
+        REQUIRE(!ltx1.load(entry2.toKey()));
+        REQUIRE(ltx1.load(LedgerEntryKey(le)));
+    }
+
+    SECTION("one LEDGER_ENTRY")
+    {
+        ltx.create(le);
+        ltx.commit();
+
+        LedgerTxn ltx2(app->getLedgerTxnRoot());
+        REQUIRE(ltx2.load(LedgerEntryKey(le)));
     }
 }

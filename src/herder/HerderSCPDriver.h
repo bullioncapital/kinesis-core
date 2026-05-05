@@ -6,8 +6,10 @@
 
 #include "herder/Herder.h"
 #include "herder/TxSetFrame.h"
+#include "herder/TxSetUtils.h"
 #include "medida/timer.h"
 #include "scp/SCPDriver.h"
+#include "util/RandomEvictionCache.h"
 #include "xdr/Stellar-ledger.h"
 #include <optional>
 
@@ -73,6 +75,8 @@ class HerderSCPDriver : public SCPDriver
                     std::chrono::milliseconds timeout,
                     std::function<void()> cb) override;
 
+    void stopTimer(uint64 slotIndex, int timerID) override;
+
     // hashing support
     Hash getHashOf(std::vector<xdr::opaque_vec<>> const& vals) const override;
 
@@ -85,7 +89,8 @@ class HerderSCPDriver : public SCPDriver
     // Submit a value to consider for slotIndex
     // previousValue is the value from slotIndex-1
     void nominate(uint64_t slotIndex, StellarValue const& value,
-                  TxSetFramePtr proposedSet, StellarValue const& previousValue);
+                  TxSetFrameConstPtr proposedSet,
+                  StellarValue const& previousValue);
 
     SCPQuorumSetPtr getQSet(Hash const& qSetHash) override;
 
@@ -118,7 +123,7 @@ class HerderSCPDriver : public SCPDriver
     ValueWrapperPtr wrapValue(Value const& sv) override;
 
     // clean up older slots
-    void purgeSlots(uint64_t maxSlotIndex);
+    void purgeSlots(uint64_t maxSlotIndex, uint64 slotToKeep);
 
     double getExternalizeLag(NodeID const& id) const;
 
@@ -159,6 +164,8 @@ class HerderSCPDriver : public SCPDriver
     medida::Histogram& mNominateTimeout;
     // Prepare timeouts per ledger
     medida::Histogram& mPrepareTimeout;
+    // Unique values referenced per ledger
+    medida::Histogram& mUniqueValues;
 
     // Externalize lag tracking for nodes in qset
     UnorderedMap<NodeID, medida::Timer> mQSetLag;
@@ -189,12 +196,24 @@ class HerderSCPDriver : public SCPDriver
     // timers used by SCP
     // indexed by slotIndex, timerID
     std::map<uint64_t, std::map<int, std::unique_ptr<VirtualTimer>>> mSCPTimers;
+    // For caching TxSet validity. Consist of {lcl.hash, txSetHash,
+    // lowerBoundCloseTimeOffset, upperBoundCloseTimeOffset}
+    using TxSetValidityKey = std::tuple<Hash, Hash, uint64_t, uint64_t>;
+
+    class TxSetValidityKeyHash
+    {
+      public:
+        size_t operator()(TxSetValidityKey const& key) const;
+    };
+    // validity of txSet
+    mutable RandomEvictionCache<TxSetValidityKey, bool, TxSetValidityKeyHash>
+        mTxSetValidCache;
 
     SCPDriver::ValidationLevel validateValueHelper(uint64_t slotIndex,
                                                    StellarValue const& sv,
                                                    bool nomination) const;
 
-    void logQuorumInformation(uint64_t index);
+    void logQuorumInformationAndUpdateMetrics(uint64_t index);
 
     void clearSCPExecutionEvents();
 
@@ -206,5 +225,8 @@ class HerderSCPDriver : public SCPDriver
                          std::string const& logStr,
                          std::chrono::nanoseconds threshold,
                          uint64_t slotIndex);
+
+    bool checkAndCacheTxSetValid(TxSetFrameConstPtr TxSet,
+                                 uint64_t closeTimeOffset) const;
 };
 }

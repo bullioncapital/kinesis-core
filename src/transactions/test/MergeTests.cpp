@@ -32,13 +32,9 @@ using namespace stellar::txtest;
 // Merging with outstanding 0 balance trust lines
 // Merging with outstanding offers
 // Merge when you have outstanding data entries
-TEST_CASE("merge", "[tx][merge]")
+TEST_CASE_VERSIONS("merge", "[tx][merge]")
 {
     Config cfg(getTestConfig());
-
-    // Do our setup in version 1 so that for_all_versions below does not
-    // try to downgrade us from >1 to 1.
-    cfg.USE_CONFIG_FOR_GENESIS = false;
 
     VirtualClock clock;
     auto app = createTestApplication(clock, cfg);
@@ -58,9 +54,6 @@ TEST_CASE("merge", "[tx][merge]")
     auto a1 = root.create("A", 2 * minBalance);
     auto b1 = root.create("B", minBalance);
     auto gateway = root.create("gate", minBalance);
-
-    // close ledger to allow a1, b1 and gateway to be merged in the next ledger
-    closeLedgerOn(*app, 2, 1, 1, 2016);
 
     SECTION("merge into self")
     {
@@ -171,7 +164,7 @@ TEST_CASE("merge", "[tx][merge]")
             REQUIRE(!doesAccountExist(*app, b1));
             // a1 gets recreated with a sequence number based on the current
             // ledger
-            REQUIRE(a1.loadSequenceNumber() == 0x300000000ull);
+            REQUIRE(a1.loadSequenceNumber() == 0x500000000ull);
         });
     }
 
@@ -498,7 +491,7 @@ TEST_CASE("merge", "[tx][merge]")
                 auto tx2 = a1.tx({payment(root, 100)});
                 auto a1Balance = a1.getBalance();
                 auto b1Balance = b1.getBalance();
-                auto r = closeLedgerOn(*app, 3, 1, 1, 2017, {tx1, tx2},
+                auto r = closeLedgerOn(*app, 1, 1, 2017, {tx1, tx2},
                                        /* strictOrder */ true);
                 checkTx(0, r, txSUCCESS);
                 checkTx(1, r, txNO_ACCOUNT);
@@ -548,7 +541,6 @@ TEST_CASE("merge", "[tx][merge]")
     {
         auto mergeFrom = root.create(
             "merge-from", app->getLedgerManager().getLastMinBalance(0) + txfee);
-        closeLedgerOn(*app, 3, 1, 1, 2017);
         for_versions_to(8, *app, [&] {
             REQUIRE_THROWS_AS(mergeFrom.merge(root), ex_txINSUFFICIENT_BALANCE);
         });
@@ -561,7 +553,6 @@ TEST_CASE("merge", "[tx][merge]")
         auto mergeFrom = root.create(
             "merge-from",
             app->getLedgerManager().getLastMinBalance(0) + txfee + 1);
-        closeLedgerOn(*app, 3, 1, 1, 2017);
         for_versions_to(8, *app, [&] {
             REQUIRE_THROWS_AS(mergeFrom.merge(root), ex_txINSUFFICIENT_BALANCE);
         });
@@ -574,7 +565,6 @@ TEST_CASE("merge", "[tx][merge]")
         auto mergeFrom = root.create(
             "merge-from",
             app->getLedgerManager().getLastMinBalance(0) + 2 * txfee - 1);
-        closeLedgerOn(*app, 3, 1, 1, 2017);
         for_versions_to(8, *app, [&] {
             REQUIRE_THROWS_AS(mergeFrom.merge(root), ex_txINSUFFICIENT_BALANCE);
         });
@@ -587,7 +577,6 @@ TEST_CASE("merge", "[tx][merge]")
         auto mergeFrom = root.create(
             "merge-from",
             app->getLedgerManager().getLastMinBalance(0) + 2 * txfee);
-        closeLedgerOn(*app, 3, 1, 1, 2017);
         for_all_versions(*app, [&] { mergeFrom.merge(root); });
     }
 
@@ -597,7 +586,10 @@ TEST_CASE("merge", "[tx][merge]")
             SequenceNumber curStartSeqNum;
             {
                 LedgerTxn ltx(app->getLedgerTxnRoot());
-                ++ltx.loadHeader().current().ledgerSeq;
+
+                // every operation will result in a ledger close, so take the
+                // next bumpSequence into account
+                ltx.loadHeader().current().ledgerSeq += 2;
                 curStartSeqNum = getStartingSequenceNumber(ltx.loadHeader());
             }
             auto maxSeqNum = curStartSeqNum - 1;
@@ -620,6 +612,71 @@ TEST_CASE("merge", "[tx][merge]")
                 REQUIRE(!applyCheck(txFrame, *app));
                 REQUIRE(txFrame->getResult()
                             .result.results()[0]
+                            .tr()
+                            .accountMergeResult()
+                            .code() == ACCOUNT_MERGE_SEQNUM_TOO_FAR);
+            }
+        });
+    }
+
+    SECTION("merge too far due to MAX_SEQ_NUM_TO_APPLY")
+    {
+        for_versions_from(19, *app, [&]() {
+            SequenceNumber curStartSeqNum;
+            {
+                LedgerTxn ltx(app->getLedgerTxnRoot());
+                ltx.loadHeader().current().ledgerSeq += 1;
+                curStartSeqNum = getStartingSequenceNumber(ltx.loadHeader());
+            }
+
+            PreconditionsV2 cond;
+            cond.minSeqNum.activate() = 0;
+
+            auto txMinSeqNumSrc = transactionFromOperationsV1(
+                *app, a1, curStartSeqNum + 1, {payment(a1.getPublicKey(), 1)},
+                100, cond);
+
+            SECTION("merge using different account")
+            {
+                auto tx1 = transactionFrameFromOps(
+                    app->getNetworkID(), root, {a1.op(accountMerge(b1))}, {a1});
+
+                auto r = closeLedger(*app, {tx1, txMinSeqNumSrc}, true);
+
+                REQUIRE(r[0].first.result.result.results()[0]
+                            .tr()
+                            .accountMergeResult()
+                            .code() == ACCOUNT_MERGE_SEQNUM_TOO_FAR);
+
+                checkTx(1, r, txSUCCESS);
+            }
+            SECTION("merge source account")
+            {
+                auto tx1 =
+                    transactionFrameFromOps(app->getNetworkID(), gateway,
+                                            {a1.op(accountMerge(b1))}, {a1});
+                auto r = closeLedger(*app, {tx1, txMinSeqNumSrc}, true);
+
+                REQUIRE(r[0].first.result.result.results()[0]
+                            .tr()
+                            .accountMergeResult()
+                            .code() == ACCOUNT_MERGE_SEQNUM_TOO_FAR);
+
+                checkTx(1, r, txSUCCESS);
+            }
+            SECTION("merge without minSeqNum")
+            {
+                auto tx1 = transactionFrameFromOps(
+                    app->getNetworkID(), root,
+                    {a1.op(bumpSequence(curStartSeqNum))}, {a1});
+                auto tx2 =
+                    transactionFrameFromOps(app->getNetworkID(), gateway,
+                                            {a1.op(accountMerge(b1))}, {a1});
+
+                auto r = closeLedger(*app, {tx1, tx2}, true);
+
+                checkTx(0, r, txSUCCESS);
+                REQUIRE(r[1].first.result.result.results()[0]
                             .tr()
                             .accountMergeResult()
                             .code() == ACCOUNT_MERGE_SEQNUM_TOO_FAR);
@@ -652,7 +709,7 @@ TEST_CASE("merge", "[tx][merge]")
                 return market.addOffer(
                     acc1, {cur1, native, Price{1, 1}, INT64_MAX - 2 * minBal});
             });
-            closeLedgerOn(*app, 3, 1, 1, 2017);
+
             REQUIRE_THROWS_AS(acc2.merge(acc1), ex_ACCOUNT_MERGE_DEST_FULL);
             root.pay(acc2, txfee - 1);
             acc2.merge(acc1);
@@ -687,8 +744,9 @@ TEST_CASE("merge", "[tx][merge]")
 
                 {
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(tx->apply(*app, ltx, txm));
 
                     checkSponsorship(ltx, dest, signer.key, 2,
@@ -752,8 +810,9 @@ TEST_CASE("merge", "[tx][merge]")
 
                 {
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(tx->apply(*app, ltx, txm));
 
                     checkSponsorship(ltx, key.getPublicKey(), 1,
@@ -813,10 +872,6 @@ TEST_CASE("merge", "[tx][merge]")
 
             SECTION("is sponsor error")
             {
-                // close ledger to increase ledger seq num so we don't hit
-                // ACCOUNT_MERGE_SEQNUM_TOO_FAR
-                closeLedgerOn(*app, 3, 1, 1, 2016);
-
                 SECTION("is sponsoring future reserves")
                 {
                     auto tx = transactionFrameFromOps(
@@ -827,8 +882,9 @@ TEST_CASE("merge", "[tx][merge]")
                         {b1});
 
                     LedgerTxn ltx(app->getLedgerTxnRoot());
-                    TransactionMeta txm(2);
-                    REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                    TransactionMetaFrame txm(
+                        ltx.loadHeader().current().ledgerVersion);
+                    REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                     REQUIRE(!tx->apply(*app, ltx, txm));
                     REQUIRE(tx->getResult()
                                 .result.results()[1]
@@ -849,8 +905,9 @@ TEST_CASE("merge", "[tx][merge]")
 
                     {
                         LedgerTxn ltx(app->getLedgerTxnRoot());
-                        TransactionMeta txm(2);
-                        REQUIRE(tx->checkValid(ltx, 0, 0, 0));
+                        TransactionMetaFrame txm(
+                            ltx.loadHeader().current().ledgerVersion);
+                        REQUIRE(tx->checkValid(*app, ltx, 0, 0, 0));
                         REQUIRE(tx->apply(*app, ltx, txm));
 
                         checkSponsorship(ltx, sponsoringAcc, 0, nullptr, 0, 2,

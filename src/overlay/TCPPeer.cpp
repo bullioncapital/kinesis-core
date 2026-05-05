@@ -34,8 +34,15 @@ using namespace std;
 
 TCPPeer::TCPPeer(Application& app, Peer::PeerRole role,
                  std::shared_ptr<TCPPeer::SocketType> socket)
-    : Peer(app, role), mSocket(socket)
+    : Peer(app, role)
+    , mSocket(socket)
+    , mLiveInboundPeersCounter(
+          app.getOverlayManager().getLiveInboundPeersCounter())
 {
+    if (mRole == REMOTE_CALLED_US)
+    {
+        (*mLiveInboundPeersCounter)++;
+    }
 }
 
 TCPPeer::pointer
@@ -54,17 +61,21 @@ TCPPeer::initiate(Application& app, PeerBareAddress const& address)
     socket->next_layer().async_connect(
         endpoint, [result](asio::error_code const& error) {
             asio::error_code ec;
+            asio::error_code lingerEc;
             if (!error)
             {
                 asio::ip::tcp::no_delay nodelay(true);
+                asio::ip::tcp::socket::linger linger(false, 0);
                 result->mSocket->next_layer().set_option(nodelay, ec);
+                result->mSocket->next_layer().set_option(linger, lingerEc);
             }
             else
             {
                 ec = error;
             }
 
-            result->connectHandler(ec);
+            auto finalEc = ec ? ec : lingerEc;
+            result->connectHandler(finalEc);
         });
     return result;
 }
@@ -73,22 +84,36 @@ TCPPeer::pointer
 TCPPeer::accept(Application& app, shared_ptr<TCPPeer::SocketType> socket)
 {
     assertThreadIsMain();
+
+    // First check if there's enough space to accept peer
+    // If not, do not even create a peer instance as to not trigger any
+    // additional reads and memory allocations
+    if (!app.getOverlayManager().haveSpaceForConnection(TCPPeer::getIP(socket)))
+    {
+        return nullptr;
+    }
+
     shared_ptr<TCPPeer> result;
     asio::error_code ec;
+    asio::error_code lingerEc;
 
     asio::ip::tcp::no_delay nodelay(true);
+    asio::ip::tcp::socket::linger linger(false, 0);
     socket->next_layer().set_option(nodelay, ec);
+    socket->next_layer().set_option(linger, lingerEc);
 
-    if (!ec)
+    if (!ec && !lingerEc)
     {
         CLOG_DEBUG(Overlay, "TCPPeer:accept");
         result = make_shared<TCPPeer>(app, REMOTE_CALLED_US, socket);
+        result->mAddress = PeerBareAddress{result->getIP(), 0};
         result->startRecurrentTimer();
         result->startRead();
     }
     else
     {
-        CLOG_DEBUG(Overlay, "TCPPeer:accept error {}", ec.message());
+        CLOG_DEBUG(Overlay, "TCPPeer:accept error {}",
+                   ec ? ec.message() : lingerEc.message());
     }
 
     return result;
@@ -97,7 +122,11 @@ TCPPeer::accept(Application& app, shared_ptr<TCPPeer::SocketType> socket)
 TCPPeer::~TCPPeer()
 {
     assertThreadIsMain();
-    mRecurringTimer.cancel();
+    Peer::shutdown();
+    if (mRole == REMOTE_CALLED_US)
+    {
+        (*mLiveInboundPeersCounter)--;
+    }
     if (mSocket)
     {
         // Ignore: this indicates an attempt to cancel events
@@ -116,10 +145,16 @@ TCPPeer::~TCPPeer()
 std::string
 TCPPeer::getIP() const
 {
+    return getIP(mSocket);
+}
+
+std::string
+TCPPeer::getIP(std::shared_ptr<SocketType> socket)
+{
     std::string result;
 
     asio::error_code ec;
-    auto ep = mSocket->next_layer().remote_endpoint(ec);
+    auto ep = socket->next_layer().remote_endpoint(ec);
     if (ec)
     {
         CLOG_ERROR(Overlay, "Could not determine remote endpoint: {}",
@@ -268,6 +303,7 @@ TCPPeer::messageSender()
     CLOG_DEBUG(Overlay, "messageSender {} - b:{} n:{}/{}", toString(),
                expected_length, mWriteBuffers.size(), mWriteQueue.size());
     getOverlayMetrics().mAsyncWrite.Mark();
+    mPeerMetrics.mAsyncWrite++;
     auto self = static_pointer_cast<TCPPeer>(shared_from_this());
     asio::async_write(*(mSocket.get()), mWriteBuffers,
                       [self, expected_length](asio::error_code const& ec,
@@ -293,7 +329,8 @@ TCPPeer::messageSender()
                           while (!self->mWriteBuffers.empty())
                           {
                               i->mCompletedTime = now;
-                              i->recordWriteTiming(self->getOverlayMetrics());
+                              i->recordWriteTiming(self->getOverlayMetrics(),
+                                                   self->mPeerMetrics);
                               ++i;
                               self->mWriteBuffers.pop_back();
                           }
@@ -311,7 +348,8 @@ TCPPeer::messageSender()
 }
 
 void
-TCPPeer::TimestampedMessage::recordWriteTiming(OverlayMetrics& metrics)
+TCPPeer::TimestampedMessage::recordWriteTiming(OverlayMetrics& metrics,
+                                               PeerMetrics& peerMetrics)
 {
     auto qdelay = std::chrono::duration_cast<std::chrono::nanoseconds>(
         mIssuedTime - mEnqueuedTime);
@@ -319,6 +357,8 @@ TCPPeer::TimestampedMessage::recordWriteTiming(OverlayMetrics& metrics)
         mCompletedTime - mIssuedTime);
     metrics.mMessageDelayInWriteQueueTimer.Update(qdelay);
     metrics.mMessageDelayInAsyncWriteTimer.Update(wdelay);
+    peerMetrics.mMessageDelayInWriteQueueTimer.Update(qdelay);
+    peerMetrics.mMessageDelayInAsyncWriteTimer.Update(wdelay);
 }
 
 void
@@ -426,7 +466,7 @@ TCPPeer::scheduleRead()
         return;
     }
 
-    releaseAssert(hasReadingCapacity());
+    releaseAssert(canRead());
 
     assertThreadIsMain();
     if (shouldAbort())
@@ -444,7 +484,7 @@ TCPPeer::startRead()
 {
     ZoneScoped;
     assertThreadIsMain();
-    releaseAssert(hasReadingCapacity());
+    releaseAssert(canRead());
     if (shouldAbort())
     {
         return;
@@ -498,7 +538,7 @@ TCPPeer::startRead()
                 }
                 noteFullyReadBody(length);
                 recvMessage();
-                if (!hasReadingCapacity())
+                if (!canRead())
                 {
                     // Break and wait until more capacity frees up
                     CLOG_DEBUG(Overlay, "Throttle reading from peer {}!",
@@ -515,7 +555,7 @@ TCPPeer::startRead()
         else
         {
             // No throttling - we just read a header, so we must have capacity
-            releaseAssert(hasReadingCapacity());
+            releaseAssert(canRead());
 
             // We read a header synchronously, but don't have enough data in the
             // buffered_stream to read the body synchronously. Pretend we just
@@ -533,6 +573,7 @@ TCPPeer::startRead()
         // header (message length), issue an async_read and hope that the
         // buffering pulls in much more than just the 4 bytes we ask for here.
         getOverlayMetrics().mAsyncRead.Mark();
+        mPeerMetrics.mAsyncRead++;
         auto self = static_pointer_cast<TCPPeer>(shared_from_this());
         asio::async_read(*(mSocket.get()), asio::buffer(mIncomingHeader),
                          [self](asio::error_code ec, std::size_t length) {
@@ -642,7 +683,7 @@ TCPPeer::readBodyHandler(asio::error_code const& error,
         // sequence happens after the first read of a single large input-buffer
         // worth of input. Even when we weren't preempted, we still bounce off
         // the per-peer scheduler queue here, to balance input across peers.
-        if (!hasReadingCapacity())
+        if (!canRead())
         {
             // No more capacity after processing this message
             CLOG_DEBUG(Overlay,
@@ -661,7 +702,7 @@ TCPPeer::recvMessage()
 {
     ZoneScoped;
     assertThreadIsMain();
-    releaseAssert(hasReadingCapacity());
+    releaseAssert(canRead());
 
     try
     {
@@ -674,13 +715,14 @@ TCPPeer::recvMessage()
     }
     catch (xdr::xdr_runtime_error& e)
     {
-        CLOG_ERROR(Overlay, "recvMessage got a corrupt xdr: {}", e.what());
+        CLOG_ERROR(Overlay, "{} - recvMessage got a corrupt xdr: {}",
+                   toString(), e.what());
         sendErrorAndDrop(ERR_DATA, "received corrupt XDR",
                          Peer::DropMode::IGNORE_WRITE_QUEUE);
     }
     catch (CryptoError const& e)
     {
-        CLOG_ERROR(Overlay, "Crypto error: {}", e.what());
+        CLOG_ERROR(Overlay, "{} - Crypto error: {}", toString(), e.what());
         sendErrorAndDrop(ERR_DATA, "crypto error",
                          Peer::DropMode::IGNORE_WRITE_QUEUE);
     }
@@ -696,22 +738,18 @@ TCPPeer::drop(std::string const& reason, DropDirection dropDirection,
         return;
     }
 
-    std::string connectionType =
-        isFlowControlled() ? "flow-controlled" : "not flow-controlled";
     if (mState != GOT_AUTH)
     {
-        CLOG_DEBUG(Overlay, "TCPPeer::drop {} {} in state {} we called:{}",
-                   connectionType, toString(), mState, mRole);
+        CLOG_DEBUG(Overlay, "TCPPeer::drop {} in state {} we called:{}",
+                   toString(), format_as(mState), format_as(mRole));
     }
     else if (dropDirection == Peer::DropDirection::WE_DROPPED_REMOTE)
     {
-        CLOG_INFO(Overlay, "Dropping {} peer {}, reason {}", connectionType,
-                  toString(), reason);
+        CLOG_INFO(Overlay, "Dropping peer {}, reason {}", toString(), reason);
     }
     else
     {
-        CLOG_INFO(Overlay, "{} peer {} dropped us, reason {}", connectionType,
-                  toString(), reason);
+        CLOG_INFO(Overlay, "peer {} dropped us, reason {}", toString(), reason);
     }
 
     mState = CLOSING;
